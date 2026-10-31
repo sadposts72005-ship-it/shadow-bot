@@ -16,12 +16,16 @@ import {
     getSubBotsReport,
     cleanPhoneNumber,
     loadSubBotsRegistry,
-    updateSubBotName
+    updateSubBotName,
+    updateSubBotCallName,
+    activeSubBots
 } from './core/subbot.js';
 
 // 💤 خريطة حفظ حالة وتوقيت النوم المعزولة لكل بوت (سواء الأساسي أو الفرعي)
 const botSleepMap = new Map();
 const botWakeTimeMap = new Map();
+// 🤫 خريطة كتم الصوت المعزولة (اسكت / اتكلم) لكل بوت
+const botMuteMap = new Map();
 
 const botCounter = {};
 const lastBotTime = {};
@@ -237,11 +241,15 @@ export async function handleAllMessages(mek, currentConn) {
             mek.key.fromMe
         );
 
-        // صاحب البوت الفرعي هو الحج الأساسي على بوته فقط
+        // صاحب البوت الفرعي هو الحج الأساسي على بوته فقط (فحص شامل بالرقم وLID ومعرف JID وسجل المشرفين)
         const isSubBotAdmin = Boolean(
             subBotConfig &&
-            subBotConfig.adminPhone &&
-            (cleanSender === subBotConfig.adminPhone || localDB.lidMap?.[cleanSender] === subBotConfig.adminPhone)
+            (
+                (subBotConfig.adminPhone && (cleanSender === subBotConfig.adminPhone || localDB.lidMap?.[cleanSender] === subBotConfig.adminPhone)) ||
+                (subBotConfig.adminLid && (cleanSender === subBotConfig.adminLid || localDB.lidMap?.[cleanSender] === subBotConfig.adminLid)) ||
+                (subBotConfig.adminJid && sender === subBotConfig.adminJid) ||
+                (subBotConfig.adminNumbers && subBotConfig.adminNumbers.includes(cleanSender))
+            )
         );
 
         // الحج الرئيسي لهذا البوت بالتحديد
@@ -249,13 +257,64 @@ export async function handleAllMessages(mek, currentConn) {
         const isMainHajj = isBotOwner || isUserInList(sender, localDB.mainHajjUsers);
         const isAssistantHajj = !isMainHajj && isUserInList(sender, localDB.hajjUsers);
         const isHajj = isMainHajj || isAssistantHajj;
+        
+        const botCallName = subBotConfig?.callName || currentConn.callName || '';
+        const normalizedCallName = normalizeArabic((botCallName || '').toLowerCase().trim());
+        const currentLowerName = (botName || 'شادو').toLowerCase().trim();
+        const normalizedBotName = normalizeArabic(currentLowerName);
+
         mek.isSuperAdmin = isBotOwner;
         mek.botName = botName;
+        mek.callName = botCallName;
         mek.isSubBotAdmin = isSubBotAdmin;
         mek.isBotOwner = isBotOwner;
         currentConn.botName = botName;
+        currentConn.callName = botCallName;
         currentConn.isSubBot = Boolean(subBotConfig);
         currentConn.subBotConfig = subBotConfig;
+
+        // 🤫 1. فحص وضع كتم الصوت التام للبوت (اسكت / اتكلم) المطبق من الحج شادو
+        const currentBotMuted = botMuteMap.get(myNumber) || false;
+        if (currentBotMuted) {
+            // البوت صامت 100% ولا يرد على أي شخص ولا ينفذ أي أمر نهائياً
+            // الاستثناء الحصري: الحج شادو فقط يرسل أمر فك الكتم (اتكلم [اسم البوت] أو اتكلم [اسم النداء] أو اتكلم الكل)
+            const isUnmute = isAbsoluteOwner && (
+                normalizedBody === `اتكلم ${normalizedBotName}` ||
+                normalizedBody === `اتكلم يا ${normalizedBotName}` ||
+                (normalizedCallName && (normalizedBody === `اتكلم ${normalizedCallName}` || normalizedBody === `اتكلم يا ${normalizedCallName}`)) ||
+                normalizedBody === 'اتكلم الكل' ||
+                normalizedBody === 'اتكلمو'
+            );
+
+            if (isUnmute) {
+                botMuteMap.set(myNumber, false);
+                await delay(1500);
+                await currentConn.sendMessage(from, { react: { text: '🗣️', key: mek.key } }).catch(() => {});
+                await delay(1500);
+                await currentConn.sendMessage(from, { text: `🗣️ *أمرك يا حج شادو! تم فك كتم الصوت عن (${botName}). رجعت أرد وأشتغل بكامل طاقتي!* ⚡` }, { quoted: mek });
+                return;
+            }
+
+            // صمت تام ولا يرد نهائياً!
+            return;
+        }
+
+        // 🤫 2. أمر كتم الصوت للحج شادو حصرياً (اسكت [اسم البوت] / اسكت [اسم النداء] / اسكت الكل)
+        if (isAbsoluteOwner && (normalizedBody.startsWith('اسكت') || normalizedBody.startsWith('اخرس'))) {
+            const isMuteAll = normalizedBody === 'اسكت الكل' || normalizedBody === 'اسكتو' || normalizedBody === 'اخرسو';
+            const isNamedMute = normalizedBody === `اسكت ${normalizedBotName}` || 
+                                normalizedBody === `اسكت يا ${normalizedBotName}` ||
+                                (normalizedCallName && (normalizedBody === `اسكت ${normalizedCallName}` || normalizedBody === `اسكت يا ${normalizedCallName}`));
+
+            if (isMuteAll || isNamedMute) {
+                botMuteMap.set(myNumber, true);
+                await delay(1500);
+                await currentConn.sendMessage(from, { react: { text: '🤫', key: mek.key } }).catch(() => {});
+                await delay(1500);
+                await currentConn.sendMessage(from, { text: `🤫 *أمرك يا حج شادو! تم كتم صوت بوت (${botName}) بالكامل.*\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم ${normalizedCallName || normalizedBotName}) أو (اتكلم الكل).` }, { quoted: mek });
+                return;
+            }
+        }
 
         // 💤 فحص وضع الخمول المعزول (Sleep Mode) الخاص بهذا البوت فقط
         const currentBotSleep = botSleepMap.get(myNumber) || false;
@@ -297,67 +356,75 @@ export async function handleAllMessages(mek, currentConn) {
         };
 
         // =========================================================================
-        // 💤 [أوامر النوم والاستيقاظ المعزولة لكل بوت وباسمه]
+        // 💤 [أوامر النوم والاستيقاظ المعزولة لكل بوت وباسمه واسم ندائه]
         // =========================================================================
-        const currentLowerName = (botName || 'شادو').toLowerCase().trim();
-        const normalizedBotName = normalizeArabic(currentLowerName);
-
         const isGeneralSleep = ['نام', 'وضع الخمول', 'ايقاف مؤقت', 'خمول'].includes(normalizedBody);
         const isNamedSleep = normalizedBody === `نام ${normalizedBotName}` || 
                              normalizedBody === `نام يا ${normalizedBotName}` ||
-                             normalizedBody === `خمول ${normalizedBotName}`;
+                             normalizedBody === `خمول ${normalizedBotName}` ||
+                             (normalizedCallName && (
+                                 normalizedBody === `نام ${normalizedCallName}` ||
+                                 normalizedBody === `نام يا ${normalizedCallName}` ||
+                                 normalizedBody === `خمول ${normalizedCallName}`
+                             )) ||
+                             (isAbsoluteOwner && (normalizedBody === 'نام الكل' || normalizedBody === 'نامو'));
 
         const isGeneralWake = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم'].includes(normalizedBody);
         const isNamedWake = normalizedBody === `اصحي ${normalizedBotName}` || 
                             normalizedBody === `اصحي يا ${normalizedBotName}` ||
                             normalizedBody === `تشغيل ${normalizedBotName}` ||
-                            normalizedBody === `قوم ${normalizedBotName}`;
+                            normalizedBody === `قوم ${normalizedBotName}` ||
+                            (normalizedCallName && (
+                                normalizedBody === `اصحي ${normalizedCallName}` ||
+                                normalizedBody === `اصحي يا ${normalizedCallName}` ||
+                                normalizedBody === `تشغيل ${normalizedCallName}` ||
+                                normalizedBody === `قوم ${normalizedCallName}`
+                            )) ||
+                            (isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو'));
 
         if (isGeneralSleep || isNamedSleep) {
-            // لو الأمر محدد بالاسم لبوت تاني في نفس الجروب، هذا البوت يتجاهل
-            if (!isNamedSleep && normalizedBody.startsWith('نام ') && !normalizedBody.includes(normalizedBotName)) {
+            // لو الأمر محدد بالاسم لبوت تاني في نفس الجروب، هذا البوت يتجاهل بصمت
+            if (!isNamedSleep && normalizedBody.startsWith('نام ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
                 return;
             }
 
             if (!isBotOwner) {
-                await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: `❌ أمر نوم واستيقاظ (${botName}) مخصص حصرياً لمالك هذا البوت فقط! 👑🚫` }, { quoted: mek });
-                });
                 return;
             }
 
             const isAlreadySleeping = botSleepMap.get(myNumber) || false;
             if (isAlreadySleeping) {
-                await respondWithStrictTiming('💤', async () => {
-                    await currentConn.sendMessage(from, { text: `⚠️ وضع الخمول مفعل بالفعل يا حج وبوتك (${botName}) نائم حالياً! 💤` }, { quoted: mek });
-                });
+                if (isNamedSleep) {
+                    await respondWithStrictTiming('💤', async () => {
+                        await currentConn.sendMessage(from, { text: `⚠️ وضع الخمول مفعل بالفعل يا حج وبوتك (${botName}) نائم حالياً! 💤` }, { quoted: mek });
+                    });
+                }
                 return;
             }
 
             botSleepMap.set(myNumber, true);
             await respondWithStrictTiming('💤', async () => {
-                await currentConn.sendMessage(from, { text: `💤 *تم تفعيل وضع الخمول لبوت (${botName}) بنجاح!* \nالبوت الآن صامت تماماً ولن يستجيب لأي شخص نهائياً غيرك حتى ترسل له أمر (اصحي) أو (اصحي ${botName}). 🌙` }, { quoted: mek });
+                await currentConn.sendMessage(from, { text: `💤 *تم تفعيل وضع الخمول لبوت (${botName}) بنجاح!* \nالبوت الآن صامت تماماً ولن يستجيب لأي شخص نهائياً غيرك حتى ترسل له أمر (اصحي) أو (اصحي ${normalizedCallName || normalizedBotName}). 🌙` }, { quoted: mek });
             });
             return;
         }
 
         if (isGeneralWake || isNamedWake) {
-            if (!isNamedWake && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName)) {
+            if (!isNamedWake && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
                 return;
             }
 
             if (!isBotOwner) {
-                await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: `❌ أمر استيقاظ (${botName}) مخصص حصرياً لمالك هذا البوت فقط! 👑🚫` }, { quoted: mek });
-                });
                 return;
             }
 
             const isAlreadySleeping = botSleepMap.get(myNumber) || false;
             if (!isAlreadySleeping) {
-                await respondWithStrictTiming('⚡', async () => {
-                    await currentConn.sendMessage(from, { text: `⚠️ بوتك (${botName}) شغال ومستيقظ بالفعل يا حج وجاهز لأي أوامر! ⚡` }, { quoted: mek });
-                });
+                if (isNamedWake) {
+                    await respondWithStrictTiming('⚡', async () => {
+                        await currentConn.sendMessage(from, { text: `⚠️ بوتك (${botName}) شغال ومستيقظ بالفعل يا حج وجاهز لأي أوامر! ⚡` }, { quoted: mek });
+                    });
+                }
                 return;
             }
 
@@ -392,12 +459,12 @@ export async function handleAllMessages(mek, currentConn) {
                     return;
                 }
 
-                // الخطوة 1: اختيار اسم البوت
+                // الخطوة 1: اختيار اسم البوت الرسمي
                 if (currentInstall.step === 1) {
                     const chosenName = body.trim().replace(/[*_~`]/g, '').slice(0, 30);
                     if (!chosenName || chosenName.length < 2) {
                         await respondWithStrictTiming('⚠️', async () => {
-                            await currentConn.sendMessage(from, { text: '⚠️ برجاء كتابة اسم واضح لبوتك (مثال: البرنس / الصقر / شادو 2):' }, { quoted: mek });
+                            await currentConn.sendMessage(from, { text: '⚠️ برجاء كتابة اسم رسمي واضح لبوتك (مثال: إمبراطور الظلام / شادو 2 / الصقر الملكي):' }, { quoted: mek });
                         });
                         return;
                     }
@@ -407,46 +474,47 @@ export async function handleAllMessages(mek, currentConn) {
                     installState.set(cleanSender, currentInstall);
 
                     const step2Text = 
-                        `✅ *تم اختيار اسم بوتك:* « ${chosenName} » 🏷️\n\n` +
-                        `💡 *لو عايز تعدل الاسم في أي وقت، اكتب: (تعديل <الاسم_الجديد>)*\n\n` +
-                        `2️⃣ *ما هو رقم الهاتف الذي تريد تشغيله كـ (بوت) وربطه بالكود؟*\n` +
-                        `• اكتب رقم الهاتف الذي سيصبح بوتاً (مثال: 01012345678 أو 201012345678)\n` +
-                        `• أو اكتب *(رقمي)* إذا كان هذا الرقم الذي تراسلني منه هو نفسه الذي تريد تحويله لبوت.\n\n` +
+                        `✅ *الاسم الرسمي للبوت:* « ${chosenName} » 🏷️\n\n` +
+                        `2️⃣ *ما هو اسم النداء السهل الذي ستنادي به البوت للتحكم به وتوجيه الأوامر له؟*\n` +
+                        `• اكتب اسماً سهلاً بدون ألقاب أو زخرفة (مثال: إمبراطور / سوسو / فهد / الصقر)\n` +
+                        `• هذا الاسم هو الذي ستتحكم من خلاله في البوت وتوجه له الأوامر وتنده عليه به!\n\n` +
                         `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
-                    await respondWithStrictTiming('📱', async () => {
+                    await respondWithStrictTiming('🗣️', async () => {
                         await currentConn.sendMessage(from, { text: step2Text }, { quoted: mek });
                     });
                     return;
                 }
 
-                // الخطوة 2: رقم هاتف البوت
+                // الخطوة 2: اختيار اسم النداء السهل
                 if (currentInstall.step === 2) {
-                    if (normalizedBody.startsWith('تعديل ') || normalizedBody.startsWith('تعديل الاسم ') || normalizedBody === 'تعديل') {
-                        const newName = body.replace(/^(تعديل الاسم|تعديل)\s*/i, '').trim().replace(/[*_~`]/g, '').slice(0, 30);
-                        if (!newName || newName.length < 2) {
-                            await respondWithStrictTiming('⚠️', async () => {
-                                await currentConn.sendMessage(from, { text: '⚠️ اكتب الاسم الجديد بعد كلمة تعديل، مثال:\n(تعديل البرنس)' }, { quoted: mek });
-                            });
-                            return;
-                        }
-
-                        currentInstall.botName = newName;
-                        installState.set(cleanSender, currentInstall);
-
-                        const updatedText = 
-                            `✅ *تم تعديل وتحديث اسم بوتك بنجاح إلى:* « ${newName} » 🏷️\n\n` +
-                            `📱 *أرسل الآن رقم الهاتف الذي تريد تشغيله كبوت:*\n` +
-                            `• اكتب الرقم (مثال: 01012345678 أو 201012345678)\n` +
-                            `• أو اكتب *(رقمي)* لاستخدام رقمك الحالي.\n\n` +
-                            `❌ للإلغاء اكتب: (الغاء)`;
-
-                        await respondWithStrictTiming('✏️', async () => {
-                            await currentConn.sendMessage(from, { text: updatedText }, { quoted: mek });
+                    const chosenCall = body.trim().replace(/[*_~`]/g, '').slice(0, 20);
+                    if (!chosenCall || chosenCall.length < 2) {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { text: '⚠️ برجاء كتابة اسم نداء سهل ومختصر (مثال: إمبراطور / سوسو / فهد):' }, { quoted: mek });
                         });
                         return;
                     }
 
+                    currentInstall.step = 3;
+                    currentInstall.callName = chosenCall;
+                    installState.set(cleanSender, currentInstall);
+
+                    const step3Text = 
+                        `✅ *تم اعتماد اسم النداء:* « ${chosenCall} » 🗣️\n\n` +
+                        `3️⃣ *ما هو رقم الهاتف الذي تريد تشغيله كـ (بوت) وربطه بالكود؟*\n` +
+                        `• اكتب رقم الهاتف الذي سيصبح بوتاً (مثال: 01012345678 أو 201012345678)\n` +
+                        `• أو اكتب *(رقمي)* إذا كان هذا الرقم الذي تراسلني منه هو نفسه الذي تريد تحويله لبوت.\n\n` +
+                        `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
+
+                    await respondWithStrictTiming('📱', async () => {
+                        await currentConn.sendMessage(from, { text: step3Text }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // الخطوة 3: رقم هاتف البوت
+                if (currentInstall.step === 3) {
                     let targetBotPhone = '';
                     if (['رقمي', 'نفسه', 'نفس الرقم', 'نفس رقمي'].includes(normalizedBody)) {
                         let resolved = cleanSender;
@@ -473,54 +541,80 @@ export async function handleAllMessages(mek, currentConn) {
                         return;
                     }
 
-                    currentInstall.step = 3;
+                    currentInstall.step = 4;
                     currentInstall.targetPhone = targetBotPhone;
                     installState.set(cleanSender, currentInstall);
 
-                    const step3Text = 
+                    const step4Text = 
                         `✅ *تم تحديد رقم البوت:* « +${targetBotPhone} » 📱\n\n` +
-                        `3️⃣ *من هو الحج الأساسي (المالك والمتحكم الكامل بالبوت)؟*\n` +
+                        `4️⃣ *من هو الحج الأساسي (المالك والمتحكم الكامل بالبوت)؟*\n` +
                         `• اكتب رقم الحج الأساسي مع كود الدولة (مثال: 01012345678 أو 201012345678)\n` +
                         `• أو اكتب كلمة *(رقمي)* أو *(نفسي)* لتعيين نفسك أنت الحج الأساسي لهذا البوت!\n\n` +
                         `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
                     await respondWithStrictTiming('👑', async () => {
-                        await currentConn.sendMessage(from, { text: step3Text }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: step4Text }, { quoted: mek });
                     });
                     return;
                 }
 
-                // الخطوة 3: رقم الحج الأساسي وإطلاق كود الربط
-                if (currentInstall.step === 3) {
+                // الخطوة 4: رقم الحج الأساسي والتعرف على LID وإطلاق كود الربط
+                if (currentInstall.step === 4) {
                     let adminPhone = '';
+                    let adminLid = '';
+
                     if (['رقمي', 'نفسي', 'نفسه', 'انا', 'أنا', 'نفس الرقم'].includes(normalizedBody)) {
-                        let resolved = cleanSender;
                         if (sender.endsWith('@lid') || cleanSender.length > 13) {
-                            resolved = localDB.lidMap?.[cleanSender] || '';
+                            adminLid = cleanSender;
+                            adminPhone = localDB.lidMap?.[cleanSender] || '';
+                        } else {
+                            adminPhone = cleanSender;
+                            adminLid = localDB.lidMap?.[cleanSender] || '';
                         }
-                        adminPhone = cleanPhoneNumber(resolved);
                     } else {
                         adminPhone = cleanPhoneNumber(body);
+                        adminLid = localDB.lidMap?.[adminPhone] || '';
                     }
 
                     if (!adminPhone || adminPhone.length < 10) {
                         await respondWithStrictTiming('⚠️', async () => {
-                            await currentConn.sendMessage(from, { text: '❌ رقم الحج الأساسي غير صالح!\nبرجاء كتابة الرقم بشكل صحيح (مثال: 01012345678 أو 201012345678)\nأو اكتب (رقمي) لتعيين رقمك أنت كحج أساسي:' }, { quoted: mek });
+                            await currentConn.sendMessage(from, { 
+                                text: '❌ رقم الحج الأساسي غير صالح أو غير مكتمل!\nبرجاء كتابة الرقم بشكل صحيح بالأرقام (مثال: 01012345678 أو 201012345678)\nأو اكتب (رقمي) لتعيين رقمك الحالي:' 
+                            }, { quoted: mek });
                         });
                         return;
                     }
 
+                    // استخراج الـ LID من واتساب تلقائياً للتحقق من هوية الحج بأي وضع اتصال
+                    try {
+                        const waCheck = await currentConn.onWhatsApp(`${adminPhone}@s.whatsapp.net`);
+                        if (waCheck && waCheck[0]?.lid) {
+                            adminLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                        }
+                    } catch (_) {}
+
+                    if (!adminLid && (sender.endsWith('@lid') || cleanSender.length > 13)) {
+                        adminLid = cleanSender;
+                    }
+
+                    if (adminPhone && adminLid) {
+                        localDB.lidMap[adminPhone] = adminLid;
+                        localDB.lidMap[adminLid] = adminPhone;
+                        saveLocalDB(localDB);
+                    }
+
                     const finalBotName = currentInstall.botName || 'بوت فرعي';
+                    const finalCallName = currentInstall.callName || finalBotName;
                     const finalBotPhone = currentInstall.targetPhone;
                     installState.delete(cleanSender);
 
                     await respondWithStrictTiming('⏳', async () => {
                         await currentConn.sendMessage(from, { 
-                            text: `⏳ *جاري تجهيز الخادم وإنشاء كود الربط لبوتك (${finalBotName})...*\n📱 رقم البوت: +${finalBotPhone}\n👑 الحج الأساسي: +${adminPhone}\nبرجاء الانتظار بضع ثوانٍ ⚡` 
+                            text: `⏳ *جاري تجهيز الخادم وإنشاء كود الربط لبوتك (${finalBotName} - نداء: ${finalCallName})...*\n📱 رقم البوت: +${finalBotPhone}\n👑 الحج الأساسي: +${adminPhone}${adminLid ? ` (ID: ${adminLid})` : ''}\nبرجاء الانتظار بضع ثوانٍ ⚡` 
                         }, { quoted: mek });
                     });
 
-                    await requestSubBotPairing(finalBotPhone, finalBotName, adminPhone, currentConn, from, mek);
+                    await requestSubBotPairing(finalBotPhone, finalBotName, finalCallName, adminPhone, adminLid, currentConn, from, mek);
                     return;
                 }
             }
@@ -541,8 +635,8 @@ export async function handleAllMessages(mek, currentConn) {
                     `✨ *مرحباً بك في نظام تنصيب البوتات الفرعية (Sub-Bot)!* 🤖\n\n` +
                     `يمكنك ربط وتشغيل نسخة كاملة من البوت برقم هاتف خاص بك مجاناً!\n` +
                     `👑 ستكون أنت *الحج الأساسي* على بوتك وتتحكم فيه بالكامل.\n\n` +
-                    `1️⃣ *ما هو الاسم الذي تريده لبوتك؟*\n` +
-                    `(اكتب الاسم فقط في رسالة، مثال: البرنس / الصقر / المحارب)\n\n` +
+                    `1️⃣ *ما هو الاسم الرسمي الذي تريده لبوتك؟*\n` +
+                    `(اكتب الاسم فقط في رسالة، مثال: إمبراطور الظلام / شادو 2 / الصقر الملكي)\n\n` +
                     `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
                 installState.set(cleanSender, { step: 1, createdAt: Date.now() });
@@ -559,8 +653,8 @@ export async function handleAllMessages(mek, currentConn) {
                 `✨ *مرحباً بك في نظام تنصيب البوتات الفرعية (Sub-Bot)!* 🤖\n\n` +
                 `يمكنك ربط وتشغيل نسخة كاملة من البوت برقم هاتف خاص بك مجاناً!\n` +
                 `👑 ستكون أنت *الحج الأساسي* على بوتك وتتحكم فيه بالكامل، مع احتفاظ الحج شادو بالإشراف العام.\n\n` +
-                `1️⃣ *ما هو الاسم الذي تريده لبوتك؟*\n` +
-                `(اكتب الاسم فقط في رسالة، مثال: البرنس / الصقر / المحارب)\n\n` +
+                `1️⃣ *ما هو الاسم الرسمي الذي تريده لبوتك؟*\n` +
+                `(اكتب الاسم فقط في رسالة، مثال: إمبراطور الظلام / شادو 2 / الصقر الملكي)\n\n` +
                 `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
             await respondWithStrictTiming('🤖', async () => {

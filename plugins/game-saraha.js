@@ -612,7 +612,6 @@ function getCustomQuestions() {
 }
 
 const sarahaGames = {};
-global.sarahaGames = sarahaGames;
 
 function normalizeText(text) {
     if (!text) return '';
@@ -633,6 +632,7 @@ function getPushName(mek, conn, jid) {
 
 // دالة معالجة وفرز نتائج التصويت النهائي
 async function handleVoteResolution(id, conn, v) {
+    if (!conn.sarahaGames) conn.sarahaGames = {};
     let totalYes = v.yesVotes.length;
     let totalNo = v.noVotes.length;
     let candNum = v.candidate.split('@')[0];
@@ -642,21 +642,23 @@ async function handleVoteResolution(id, conn, v) {
         `👎 رافضين (لا): ${totalNo}\n\n`;
 
     if (totalYes > totalNo) {
-        global.sarahaGames[id].players.push(v.candidate);
-        global.sarahaGames[id].names[v.candidate] = v.candidateName;
+        if (conn.sarahaGames[id]) {
+            conn.sarahaGames[id].players.push(v.candidate);
+            conn.sarahaGames[id].names[v.candidate] = v.candidateName;
+            conn.sarahaGames[id].voting = null;
+        }
         finalMsg += `🎉 *بناءً على رأي الأغلبية:* تم قبول انضمامك يا @${candNum}! هتنزل معاهم في سحب الأسئلة الجاية. 🔥`;
         await delay(2000); // ⏱️ ريالكت التغيير إلى ثانيتين
         await conn.sendMessage(id, { react: { text: '🤫', key: { remoteJid: id, id: v.msgId, fromMe: false } } }).catch(() => {});
         await delay(2000); // ⏱️ تأخير إرسال الرسالة إلى ثانيتين بعد الريالكت
         await conn.sendMessage(id, { text: finalMsg, mentions: [v.candidate] });
-        global.sarahaGames[id].voting = null;
     } else if (totalNo > totalYes) {
         finalMsg += `❌ *بناءً على رأي الأغلبية:* تم رفض طلب انضمام اللاعب لجلسة اللعب الحالية، حظ أوفر الجولة القادمة!`;
         await delay(2000); // ⏱️ ريالكت التغيير إلى ثانيتين
         await conn.sendMessage(id, { react: { text: '🤫', key: { remoteJid: id, id: v.msgId, fromMe: false } } }).catch(() => {});
         await delay(2000); // ⏱️ تأخير إرسال الرسالة إلى ثانيتين بعد الريالكت
         await conn.sendMessage(id, { text: finalMsg, mentions: [v.candidate] });
-        global.sarahaGames[id].voting = null;
+        if (conn.sarahaGames[id]) conn.sarahaGames[id].voting = null;
     } else {
         if (!v.isTiePhase) {
             v.isTiePhase = true;
@@ -669,18 +671,22 @@ async function handleVoteResolution(id, conn, v) {
             await delay(2000); // ⏱️ تأخير إرسال الرسالة إلى ثانيتين بعد الريالكت
             await conn.sendMessage(id, { text: tieMsg });
 
-            global.sarahaGames[id].voteTimeout = setTimeout(async () => {
-                if (global.sarahaGames[id] && global.sarahaGames[id].voting) {
-                    await handleVoteResolution(id, conn, global.sarahaGames[id].voting);
-                }
-            }, 60 * 1000);
+            if (conn.sarahaGames[id]) {
+                conn.sarahaGames[id].voteTimeout = setTimeout(async () => {
+                    if (conn.sarahaGames[id] && conn.sarahaGames[id].voting) {
+                        await handleVoteResolution(id, conn, conn.sarahaGames[id].voting);
+                    }
+                }, 60 * 1000);
+            }
         } else {
             finalMsg += `🚨 *انتهت دقيقة فرصة التغيير وما زال التعادل مستمراً!* البوت سيقوم بسحب القرعة الحسم الآن... 🎲\n\n`;
             let botChoice = Math.random() < 0.5 ? 'yes' : 'no';
 
             if (botChoice === 'yes') {
-                global.sarahaGames[id].players.push(v.candidate);
-                global.sarahaGames[id].names[v.candidate] = v.candidateName;
+                if (conn.sarahaGames[id]) {
+                    conn.sarahaGames[id].players.push(v.candidate);
+                    conn.sarahaGames[id].names[v.candidate] = v.candidateName;
+                }
                 finalMsg += `🎲 *القرعة اختارت: [ نعم ]*!\n🎉 محظوظ! تم قبول دخولك الجيم يا @${candNum} بواسطة قرعة البوت الحرة! ❤️`;
             } else {
                 finalMsg += `🎲 *القرعة اختارت: [ لا ]*!\n❌ للأسف قرعة البوت لم تكن في صالحك، تم رفض طلب انضمامك نهائياً لهذه الجولة!`;
@@ -689,7 +695,7 @@ async function handleVoteResolution(id, conn, v) {
             await conn.sendMessage(id, { react: { text: '🤫', key: { remoteJid: id, id: v.msgId, fromMe: false } } }).catch(() => {});
             await delay(2000); // ⏱️ تأخير إرسال الرسالة إلى ثانيتين بعد الريالكت
             await conn.sendMessage(id, { text: finalMsg, mentions: [v.candidate] });
-            global.sarahaGames[id].voting = null;
+            if (conn.sarahaGames[id]) conn.sarahaGames[id].voting = null;
         }
     }
 }
@@ -709,7 +715,8 @@ const gameSaraha = async (mek, { conn }) => {
         let cleanBody = body.trim();
         let normalizedBody = normalizeText(cleanBody);
 
-        let game = sarahaGames[id];
+        if (!conn.sarahaGames) conn.sarahaGames = {};
+        let game = conn.sarahaGames[id];
 
         // ✨ دالة تأثير الريأكشن والتأخير الموحدة المعدلة [🤫]
         const triggerEffects = async () => {
@@ -862,11 +869,11 @@ const gameSaraha = async (mek, { conn }) => {
         }
 
         if (normalizedBody === 'قف صراحه' || normalizedBody === 'ايقاف صراحه' || normalizedBody === 'انهاء صراحه') {
-            if (sarahaGames[id]) {
-                if (sarahaGames[id].lobbyTimeout) clearTimeout(sarahaGames[id].lobbyTimeout);
-                if (sarahaGames[id].turnTimeout) clearTimeout(sarahaGames[id].turnTimeout);
-                if (sarahaGames[id].voteTimeout) clearTimeout(sarahaGames[id].voteTimeout);
-                delete sarahaGames[id];
+            if (conn.sarahaGames[id]) {
+                if (conn.sarahaGames[id].lobbyTimeout) clearTimeout(conn.sarahaGames[id].lobbyTimeout);
+                if (conn.sarahaGames[id].turnTimeout) clearTimeout(conn.sarahaGames[id].turnTimeout);
+                if (conn.sarahaGames[id].voteTimeout) clearTimeout(conn.sarahaGames[id].voteTimeout);
+                delete conn.sarahaGames[id];
                 await triggerEffects();
                 await conn.sendMessage(rawId, { text: '🛑 تم إيقاف لعبة الصراحة وإلغاء الجلسة الحالية بنجاح.' }, { quoted: mek });
                 return true;
@@ -895,7 +902,7 @@ const gameSaraha = async (mek, { conn }) => {
 
             if (game.status === 'playing' && game.players.length < 1) {
                 if (game.turnTimeout) clearTimeout(game.turnTimeout);
-                delete sarahaGames[id];
+                delete conn.sarahaGames[id];
                 await conn.sendMessage(rawId, { text: '🛑 تم إلغاء الجيم تلقائياً لعدم وجود لاعبين كافيين للاستمرار.' });
                 return true;
             }
@@ -909,12 +916,12 @@ const gameSaraha = async (mek, { conn }) => {
         }
 
         if (normalizedBody === 'صراحه' || normalizedBody === 'صراحة' || normalizedBody === 'لعبة الصراحة' || normalizedBody === 'لعبة صراحه') {
-            if (sarahaGames[id]) {
+            if (conn.sarahaGames[id]) {
                 await triggerEffects();
                 await conn.sendMessage(rawId, { text: '⚠️ فيه جيم صراحة شغال بالفعل في الجروب حالياً!' }, { quoted: mek });
                 return true;
             }
-            sarahaGames[id] = {
+            conn.sarahaGames[id] = {
                 status: 'lobby',
                 players: [],
                 names: {}, 
@@ -928,9 +935,9 @@ const gameSaraha = async (mek, { conn }) => {
                 voting: null
             };
 
-            sarahaGames[id].lobbyTimeout = setTimeout(async () => {
-                if (sarahaGames[id] && sarahaGames[id].status === 'lobby') {
-                    delete sarahaGames[id];
+            conn.sarahaGames[id].lobbyTimeout = setTimeout(async () => {
+                if (conn.sarahaGames[id] && conn.sarahaGames[id].status === 'lobby') {
+                    delete conn.sarahaGames[id];
                     await conn.sendMessage(rawId, { text: '⏰ مرّت 5 دقائق دون بدء اللعبة، تم إلغاء غرفة الصراحة تلقائياً.' });
                 }
             }, 5 * 60 * 1000);
@@ -1007,8 +1014,8 @@ const gameSaraha = async (mek, { conn }) => {
             await conn.sendMessage(rawId, { text: voteMsg, mentions: [sender] }, { quoted: mek });
 
             game.voteTimeout = setTimeout(async () => {
-                if (sarahaGames[id] && sarahaGames[id].voting) {
-                    await handleVoteResolution(id, conn, sarahaGames[id].voting);
+                if (conn.sarahaGames[id] && conn.sarahaGames[id].voting) {
+                    await handleVoteResolution(id, conn, conn.sarahaGames[id].voting);
                 }
             }, 2 * 60 * 1000);
             return true;
@@ -1071,7 +1078,8 @@ const gameSaraha = async (mek, { conn }) => {
 };
 
 async function sendNextQuestion(id, conn, mek) {                            
-    let game = global.sarahaGames[id];                                   
+    if (!conn.sarahaGames) conn.sarahaGames = {};
+    let game = conn.sarahaGames[id];                                   
     if (!game || game.players.length === 0) return;                
     
     if (game.askedPlayers.length === game.players.length) { game.askedPlayers = []; }                                                 
@@ -1107,7 +1115,7 @@ async function sendNextQuestion(id, conn, mek) {
     game.lastQuestionMessageId = String(sentMsg?.key?.id || sentMsg?.id || sentMsg || '');
                                                                        
     game.turnTimeout = setTimeout(async () => {
-        if (global.sarahaGames[id] && global.sarahaGames[id].currentTurn === randomPlayerJid) {                                                       
+        if (conn.sarahaGames && conn.sarahaGames[id] && conn.sarahaGames[id].currentTurn === randomPlayerJid) {                                                       
             await conn.sendMessage(id, { text: `⏱️ انتهت الدقيقتين ولم يقم @${randomPlayerJid.split('@')[0]} بالإجابة! جاري التخطي...`, mentions: [randomPlayerJid] });
             await sendNextQuestion(id, conn, mek);                              
         }
@@ -1118,8 +1126,7 @@ const handler = async (m, extra) => {
     let activeConn = extra?.conn || extra?.client || extra?.sock || extra;
     
     if (!activeConn || typeof activeConn.sendMessage !== 'function') {
-        if (global.conn && typeof global.conn.sendMessage === 'function') activeConn = global.conn;
-        else if (m.conn && typeof m.conn.sendMessage === 'function') activeConn = m.conn;
+        if (m.conn && typeof m.conn.sendMessage === 'function') activeConn = m.conn;
     }
 
     return await gameSaraha(m, { conn: activeConn });

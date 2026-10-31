@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
+import { loadSubBotsRegistry } from '../core/subbot.js';
 
 const dbPath = path.join(process.cwd(), 'scramble_db.json');
 
@@ -962,18 +963,110 @@ const datelsHandler = {
             // =========================================================================
             // 🚪 4️⃣ [مغادرة الجروب - لمالك البوت أو الحج شادو الأصلي]
             // =========================================================================
-            if (isGroup && (normalizedBody === 'خروج' || normalizedBody === 'غادر' || normalizedBody === 'اخرج' || normalizedBody === 'غادر الجروب')) {
+            const callName = currentConn.callName || currentConn.subBotConfig?.callName || '';
+            const normalizedCallName = normalizeArabic((callName || '').toLowerCase().trim());
+
+            const isLeaveMatch = isGroup && (
+                normalizedBody === 'خروج' || 
+                normalizedBody === 'غادر' || 
+                normalizedBody === 'اخرج' || 
+                normalizedBody === 'غادر الجروب' ||
+                normalizedBody.startsWith('اخرج ') ||
+                normalizedBody.startsWith('غادر ') ||
+                normalizedBody.startsWith('خروج ')
+            );
+
+            if (isLeaveMatch) {
+                // استخراج الاسم المحدد إن وُجد (مثلاً: اخرج شادو، اخرج البرنس)
+                let specifiedName = '';
+                if (normalizedBody.startsWith('اخرج ')) specifiedName = normalizedBody.replace(/^اخرج\s+/, '').trim();
+                else if (normalizedBody.startsWith('غادر ')) specifiedName = normalizedBody.replace(/^غادر\s+/, '').trim();
+                else if (normalizedBody.startsWith('خروج ')) specifiedName = normalizedBody.replace(/^خروج\s+/, '').trim();
+
+                // إذا كتب الأمر شخص ليس مالك هذا البوت وليس الحج شادو: صمت تام لتفادي السبام
                 if (!isBotOwner) {
-                    await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: `❌ أمر مغادرة الجروب مخصص حصرياً لمالك هذا البوت (${botName})! 👑🚫` }, { quoted: mek });
                     return true;
                 }
-                await handleCommandTiming('👋');
-                await currentConn.sendMessage(from, { text: `👋 *بأمر من الحج المالك.. جاري مغادرة بوت (${botName}) للمجموعة الآن! في رعاية الله.* 🤖✨` }, { quoted: mek });
-                setTimeout(async () => {
-                    try { await currentConn.groupLeave(from); } catch (e) {}
-                }, DELAYS.actionExecute);
-                return true;
+
+                // لو المُرسل هو مالك البوت الفرعي (isSubBotAdmin وليس شادو):
+                if (isSubBotAdmin && !isAbsoluteOwner) {
+                    // مالك البوت الفرعي يتحكم فقط ببوته الخاص
+                    if (specifiedName && specifiedName !== normalizedBotName && specifiedName !== normalizedCallName) {
+                        return true;
+                    }
+                    await handleCommandTiming('👋');
+                    await currentConn.sendMessage(from, { text: `👋 *بأمر من الحج المالك.. جاري مغادرة بوت (${botName}) للمجموعة الآن! في رعاية الله.* 🤖✨` }, { quoted: mek });
+                    setTimeout(async () => {
+                        try { await currentConn.groupLeave(from); } catch (e) {}
+                    }, DELAYS.actionExecute);
+                    return true;
+                }
+
+                // لو المُرسل هو الحج الأصلي شادو (isAbsoluteOwner):
+                if (isAbsoluteOwner) {
+                    if (specifiedName) {
+                        // شادو حدد اسم بوت معين (مثلاً: اخرج شادو أو اخرج سوسو)
+                        const matchesThisBot = specifiedName === normalizedBotName || (normalizedCallName && specifiedName === normalizedCallName) || specifiedName === 'الكل';
+                        if (!matchesThisBot) {
+                            // هذا البوت ليس هو المطلوب، يصمت تماماً
+                            return true;
+                        }
+                        await handleCommandTiming('👋');
+                        await currentConn.sendMessage(from, { text: `👋 *أمرك يا حج شادو.. جاري مغادرة بوت (${botName}) للمجموعة فوراً! في رعاية الله.* 🤖✨` }, { quoted: mek });
+                        setTimeout(async () => {
+                            try { await currentConn.groupLeave(from); } catch (e) {}
+                        }, DELAYS.actionExecute);
+                        return true;
+                    } else {
+                        // شادو كتب "اخرج" بدون تحديد اسم
+                        // فحص البوتات النشطة في الجروب
+                        let botsInRoom = [];
+                        try {
+                            if (groupMetadata && groupMetadata.participants) {
+                                const partNums = groupMetadata.participants.map(p => p.id.split('@')[0].split(':')[0]);
+                                const mainPhone = '201129249396';
+                                if (partNums.includes(mainPhone) || partNums.includes(myBotNum)) {
+                                    botsInRoom.push({ name: 'شادو (البوت الرئيسي)', call: 'شادو', num: mainPhone });
+                                }
+                                const registry = loadSubBotsRegistry();
+                                for (let p in registry) {
+                                    if (partNums.includes(p)) {
+                                        botsInRoom.push({ 
+                                            name: registry[p].botName || 'بوت فرعي', 
+                                            call: registry[p].callName || registry[p].botName || p, 
+                                            num: p 
+                                        });
+                                    }
+                                }
+                            }
+                        } catch (_) {}
+
+                        // لو هناك أكثر من بوت في الجروب: يسأل شادو أي بوت يريد إخراجه
+                        const isPrimaryResponder = !currentConn.isSubBot || myBotNum === '201129249396';
+                        if (botsInRoom.length > 1) {
+                            if (isPrimaryResponder) {
+                                await handleCommandTiming('❓');
+                                let listBots = botsInRoom.map((b, i) => `${i + 1}️⃣ *${b.name}* (اسم النداء: ${b.call})`).join('\n');
+                                const askMsg = 
+                                    `❓ *عايز تخرج أنهو بوت يا حج شادو؟* 🤖🚪\n\n` +
+                                    `📍 *البوتات الموجودة في الروم:* \n${listBots}\n\n` +
+                                    `💡 *لتحديد البوت المطلوب، اكتب:*\n*(اخرج [اسم البوت])* مثال:\n` +
+                                    `• \`اخرج شادو\`\n` +
+                                    `• \`اخرج [اسم النداء]\``;
+                                await currentConn.sendMessage(from, { text: askMsg }, { quoted: mek });
+                            }
+                            return true;
+                        }
+
+                        // إذا كان بوت واحد فقط في الروم: يخرج فوراً
+                        await handleCommandTiming('👋');
+                        await currentConn.sendMessage(from, { text: `👋 *أمرك يا حج شادو.. جاري مغادرة بوت (${botName}) للمجموعة الآن! في رعاية الله.* 🤖✨` }, { quoted: mek });
+                        setTimeout(async () => {
+                            try { await currentConn.groupLeave(from); } catch (e) {}
+                        }, DELAYS.actionExecute);
+                        return true;
+                    }
+                }
             }
 
             // =========================================================================

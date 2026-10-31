@@ -102,6 +102,9 @@ async function createSubBotSocket(phone, sessionDir) {
     sock.scramble = {};
     sock.gameSolo = {};
     sock.game = {};
+    sock.bakasa = {};
+    sock.sarahaGames = {};
+    sock.pmUsers = new Set();
 
     return { sock, state, saveCreds };
 }
@@ -127,6 +130,9 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
     try {
         const { sock, saveCreds } = await createSubBotSocket(cleanPhone, sessionDir);
+        sock.botName = cfg.botName || 'بوت فرعي';
+        sock.callName = cfg.callName || cfg.botName || 'فرعي';
+        sock.subBotConfig = cfg;
         let subBotStartTime = Math.floor(Date.now() / 1000);
 
         sock.ev.on('creds.update', saveCreds);
@@ -201,9 +207,11 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 /**
  * طلب ربط بوت فرعي واستخراج كود الاقتران عبر واتساب
  */
-export async function requestSubBotPairing(targetPhone, botName, adminPhone, mainConn, notifyJid, quotedMek) {
+export async function requestSubBotPairing(targetPhone, botName, callName, adminPhone, adminLid, mainConn, notifyJid, quotedMek) {
     const cleanPhone = cleanPhoneNumber(targetPhone);
     const cleanAdmin = cleanPhoneNumber(adminPhone);
+    const cleanLid = adminLid ? String(adminLid).replace(/[^0-9]/g, '') : '';
+    const finalCallName = (callName || botName || 'فرعي').trim();
 
     if (!cleanPhone || cleanPhone.length < 10) {
         await mainConn.sendMessage(notifyJid, { text: '❌ رقم الهاتف غير صالح. برجاء كتابة رقم صحيح (مثال: 01012345678 أو 201012345678).' }, { quoted: quotedMek });
@@ -236,6 +244,8 @@ export async function requestSubBotPairing(targetPhone, botName, adminPhone, mai
     async function startPairingEngine() {
         try {
             const { sock, saveCreds } = await createSubBotSocket(cleanPhone, sessionDir);
+            sock.botName = botName;
+            sock.callName = finalCallName;
             let subBotStartTime = Math.floor(Date.now() / 1000);
 
             sock.ev.on('creds.update', saveCreds);
@@ -254,9 +264,10 @@ export async function requestSubBotPairing(targetPhone, botName, adminPhone, mai
 
                                 const pairMsg = 
                                     `╭━━━〔 🤖 *كود تنصيب بوت فرعي* 〕━━━╮\n` +
-                                    `┃ 🏷️ *اسم البوت:* ${botName}\n` +
+                                    `┃ 🏷️ *اسم البوت الرسمي:* ${botName}\n` +
+                                    `┃ 🗣️ *اسم النداء السهل:* ${finalCallName}\n` +
                                     `┃ 📱 *رقم البوت:* +${cleanPhone}\n` +
-                                    `┃ 👑 *الحج الأساسي:* +${cleanAdmin}\n` +
+                                    `┃ 👑 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (LID: ${cleanLid})` : ''}\n` +
                                     `┃ 🔑 *كود الاقتران:* *${code}*\n` +
                                     `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
                                     `📌 *طريقة الربط بالهاتف:* \n` +
@@ -282,13 +293,22 @@ export async function requestSubBotPairing(targetPhone, botName, adminPhone, mai
                     sock.subBotStartTime = subBotStartTime;
                     console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
 
+                    const adminNumbersList = [cleanAdmin, cleanLid].filter(Boolean);
                     const cfgData = {
                         phone: cleanPhone,
                         botName: botName,
+                        callName: finalCallName,
                         adminPhone: cleanAdmin,
+                        adminLid: cleanLid || '',
+                        adminJid: cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '',
+                        adminNumbers: adminNumbersList,
                         installedAt: new Date().toISOString(),
-                        status: 'active'
+                        status: 'active',
+                        sleep: false,
+                        muted: false
                     };
+
+                    sock.subBotConfig = cfgData;
 
                     fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfgData, null, 2), 'utf8');
 
@@ -299,20 +319,22 @@ export async function requestSubBotPairing(targetPhone, botName, adminPhone, mai
                     activeSubBots.set(cleanPhone, { sock, cfg: cfgData, startTime: subBotStartTime });
 
                     const successMsg = 
-                        `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName}) بنجاح!* 🚀\n\n` +
+                        `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName} - نداء: ${finalCallName}) بنجاح!* 🚀\n\n` +
                         `👑 أنت الآن الحج الأساسي على هذا البوت (+${cleanPhone}).\n` +
+                        `🗣️ تقدر تنده عليه باسمه (${finalCallName}) وتتحكم فيه بشكل كامل!\n` +
                         `💬 البوت شغال الآن ويرد على الأوامر في الخاص والجروبات.\n` +
                         `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
-                        `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، كل اللي عليك تكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه وإيقافه فوراً.`;
+                        `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
 
                     await mainConn.sendMessage(notifyJid, { text: successMsg }, { quoted: quotedMek });
 
                     const masterPhone = '201129249396@s.whatsapp.net';
                     const ownerNotice = 
                         `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
-                        `🏷️ *اسم البوت:* ${botName}\n` +
+                        `🏷️ *الاسم الرسمي:* ${botName}\n` +
+                        `🗣️ *اسم النداء:* ${finalCallName}\n` +
                         `📱 *رقم البوت:* +${cleanPhone}\n` +
-                        `👤 *المُنصّب:* +${cleanAdmin}\n` +
+                        `👤 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (ID: ${cleanLid})` : ''}\n` +
                         `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
                         `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
 
@@ -517,6 +539,38 @@ export function updateSubBotName(phone, newName) {
 }
 
 /**
+ * تحديث اسم النداء للبوت الفرعي
+ */
+export function updateSubBotCallName(phone, newCallName) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    if (!cleanPhone || !newCallName) return false;
+
+    const registry = loadSubBotsRegistry();
+    if (registry[cleanPhone]) {
+        registry[cleanPhone].callName = newCallName;
+        saveSubBotsRegistry(registry);
+    }
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    const cfgPath = path.join(sessionDir, 'config.json');
+    if (fs.existsSync(cfgPath)) {
+        try {
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            cfg.callName = newCallName;
+            fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+        } catch (_) {}
+    }
+
+    const active = activeSubBots.get(cleanPhone);
+    if (active) {
+        active.cfg.callName = newCallName;
+        if (active.sock) active.sock.callName = newCallName;
+    }
+
+    return true;
+}
+
+/**
  * جلب تقرير كامل عن حالة جميع البوتات الفرعية للمالك
  */
 export function getSubBotsReport() {
@@ -536,9 +590,9 @@ export function getSubBotsReport() {
 
         list.push(
             `━━━━━━━━━━━━━━━━━━━━\n` +
-            `*${idx + 1}️⃣ ${item.botName || 'بوت فرعي'}*\n` +
+            `*${idx + 1}️⃣ ${item.botName || 'بوت فرعي'}* (نداء: ${item.callName || item.botName || 'فرعي'})\n` +
             `📱 *رقم البوت:* +${item.phone}\n` +
-            `👑 *الحج الأساسي:* +${item.adminPhone || 'غير محدد'}\n` +
+            `👑 *الحج الأساسي:* +${item.adminPhone || 'غير محدد'}${item.adminLid ? ` (ID: ${item.adminLid})` : ''}\n` +
             `🟢 *الحالة:* ${isRunning ? '⚡ شغال الآن' : (item.status === 'stopped' ? '🛑 متوقف' : '⚠️ غير متصل')}\n` +
             `📅 *تاريخ التنصيب:* ${item.installedAt ? new Date(item.installedAt).toLocaleDateString('ar-EG') : 'غير مسجل'}`
         );

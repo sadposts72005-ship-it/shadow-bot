@@ -1,7 +1,5 @@
 import { modifyUserPoints, getUserPoints, getCleanNumber, cleanUserJid } from '../core/points.js';
 
-if (!global.bakasa) global.bakasa = {};
-
 // 📦 قاعدة بيانات الكلمات (500 كلمة مقسمة على 10 أقسام)
 const categories = {
     "1": { name: "ملابس وإكسسوارات", keywords: ["ملابس", "اكسسوارات", "إكسسوارات", "لبس", "هدوم"], words: ["قميص", "بنطلون", "فستان", "جاكيت", "تيشيرت", "جوارب", "حذاء", "قبعة", "وشاح", "قفازات", "حزام", "ربطة عنق", "تنورة", "عباءة", "بدلة", "معطف", "نظارة", "ساعة", "خاتم", "سوار", "قرط", "قلادة", "محفظة", "حقيبة", "مظلة", "بيجامة", "شورت", "بلوفر", "صندل", "شبشب", "كاب", "طرحة", "خمار", "بشت", "عقال", "شماغ", "كوفية", "بروش", "كبك", "مشبك", "سلسلة", "خلخال", "تاج", "محبس", "مناديل", "قميص نوم", "ملابس رياضية", "جاكيت جلد", "سترة", "بذلة رسمية"] },
@@ -43,14 +41,13 @@ const generateCategoryOptions = (correctWord, categoryKey) => {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-if (!global.pmUsers) global.pmUsers = new Set();
-
 const before = async function (mek, currentConn) {
     let from = mek.key.remoteJid;
+    if (!currentConn.pmUsers) currentConn.pmUsers = new Set();
     if (!from.endsWith('@g.us')) {
         let sender = from;
         if (sender.includes(':')) sender = sender.split(':')[0] + '@s.whatsapp.net';
-        global.pmUsers.add(sender);
+        currentConn.pmUsers.add(sender);
     }
     return false;
 };
@@ -94,9 +91,10 @@ const handler = async (mek, currentConn) => {
     let args = normalized.split(/\s+/);
     let firstWord = args[0] || '';
 
-    if (!global.bakasa) global.bakasa = {};
-    if (!global.bakasa[from]) {
-        global.bakasa[from] = {
+    if (!currentConn.bakasa) currentConn.bakasa = {};
+    if (!currentConn.pmUsers) currentConn.pmUsers = new Set();
+    if (!currentConn.bakasa[from]) {
+        currentConn.bakasa[from] = {
             status: 'off',
             category: 'all',
             players: [],
@@ -109,10 +107,37 @@ const handler = async (mek, currentConn) => {
             options: []
         };
     }
-    let game = global.bakasa[from];
+    let game = currentConn.bakasa[from];
 
-    // تحديد الأمر والفرع
+    // تحديد ما إذا كانت الرسالة موجهة لبوت معين بالاسم أو اسم النداء
+    const botNameNorm = (currentConn.botName || 'شادو').toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
+    const callNameNorm = (currentConn.callName || currentConn.subBotConfig?.callName || '').toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي');
+
+    // فحص ما إذا كان الأمر يبدأ بـ بكاسة أو موجه للبوت
     let isExplicitBakasa = firstWord === 'بكاسه' || firstWord === 'بكاسة';
+    if (!isExplicitBakasa && (firstWord === botNameNorm || (callNameNorm && firstWord === callNameNorm))) {
+        if (args[1] === 'بكاسه' || args[1] === 'بكاسة') {
+            isExplicitBakasa = true;
+            args.splice(0, 1);
+            firstWord = args[0] || '';
+        }
+    }
+
+    // إذا اللعبة مطفية على هذا البوت، نتجاهل تماماً أي أوامر داخلية (خروج، تصويت، انضمام، الخ) إلا إذا كان أمر فتح جديد
+    if (game.status === 'off' && !isExplicitBakasa) {
+        return;
+    }
+
+    // إذا تم تحديد اسم بوت في أمر الفتح (مثل: بكاسة شادو أو بكاسة سوسو)، يتأكد البوت أنه هو المعني
+    if (isExplicitBakasa && args[1] && (args[1] !== 'شرح' && args[1] !== 'فتح' && args[1] !== 'الغاء' && args[1] !== 'إلغاء' && !matchCategory(args.slice(1).join(' ')))) {
+        const targetName = args[1];
+        const isMe = targetName === botNameNorm || (callNameNorm && targetName === callNameNorm);
+        if (!isMe && (targetName === 'شادو' || targetName.length >= 2)) {
+            // الأمر موجه لبوت آخر بالاسم، هذا البوت لا يتدخل
+            return;
+        }
+    }
+
     let subCommand = isExplicitBakasa ? (args[1] || '') : firstWord;
 
     // --- 0. شرح اللعبة ---
@@ -241,7 +266,7 @@ const handler = async (mek, currentConn) => {
         }
 
         // 🔍 التحقق من أن كل اللاعبين راسلوا البوت بالخاص (شرط النقطة)
-        let missingPM = game.players.filter(p => !global.pmUsers.has(p));
+        let missingPM = game.players.filter(p => !currentConn.pmUsers.has(p));
         if (missingPM.length > 0) {
             let mentions = missingPM.map(p => `@${p.split('@')[0]}`).join(' ');
             let missingText = `⚠️ *مش هنقدر نبدأ اللعبة دلوقتي!* \n\nاللاعبين دول مبعتوش نقطة للبوت على الخاص:\n${mentions}\n\n👉 ادخلوا ابعتوا للبوت أي رسالة أو نقطة ( . ) على الخاص الأول، وبعدها اكتبوا *ابدأ* تاني!`;
