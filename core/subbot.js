@@ -1,0 +1,553 @@
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import pino from 'pino';
+import fs from 'fs';
+import path from 'path';
+import { handleAllMessages } from '../handler.js';
+import { getMsgTimestamp } from './points.js';
+
+const REGISTRY_FILE = path.join(process.cwd(), 'sub_bots.json');
+const SUB_BOTS_DIR = path.join(process.cwd(), 'sessions', 'sub_bots');
+
+// حفظ السوكيتات النشطة في الذاكرة
+export const activeSubBots = new Map();
+// تتبع الرسائل المرسلة من البوتات الفرعية لتجنب اللوب
+const subBotSentMsgIds = new Set();
+
+/**
+ * تحميل سجل البوتات الفرعية من ملف sub_bots.json
+ */
+export function loadSubBotsRegistry() {
+    try {
+        if (fs.existsSync(REGISTRY_FILE)) {
+            return JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+        }
+    } catch (e) {
+        console.error('❌ خطأ في قراءة سجل البوتات الفرعية:', e?.message || e);
+    }
+    return {};
+}
+
+/**
+ * حفظ سجل البوتات الفرعية
+ */
+export function saveSubBotsRegistry(data) {
+    try {
+        fs.writeFileSync(REGISTRY_FILE, JSON.stringify(data, null, 2), 'utf8');
+        return true;
+    } catch (e) {
+        console.error('❌ خطأ في حفظ سجل البوتات الفرعية:', e?.message || e);
+        return false;
+    }
+}
+
+/**
+ * تنظيف رقم الهاتف وإبقاؤه أرقاماً فقط مع تحويل الأرقام المحلية للدولية
+ */
+export function cleanPhoneNumber(phone) {
+    if (!phone) return '';
+    let clean = String(phone).replace(/[^0-9]/g, '');
+    if (clean.startsWith('00')) clean = clean.substring(2);
+    // تحويل أرقام مصر المحلية 010/011/012/015 المكونة من 11 رقماً تلقائياً إلى 201...
+    if (clean.startsWith('01') && clean.length === 11) {
+        clean = '20' + clean.substring(1);
+    }
+    return clean;
+}
+
+/**
+ * إعداد سوكيت بوت فرعي مع تطبيق معايير الأمان ومكافحة الحظر
+ */
+async function createSubBotSocket(phone, sessionDir) {
+    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    const { version } = await fetchLatestBaileysVersion();
+
+    const sock = makeWASocket({
+        version,
+        logger: pino({ level: 'silent', enabled: false }),
+        printQRInTerminal: false,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent', enabled: false }))
+        },
+        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        syncPhonenumber: true,
+        markOnlineOnConnect: true,
+        generateHighQualityLinkPreview: true,
+        syncFullHistory: false,
+        fireInitQueries: false,
+        shouldSyncHistoryMessage: () => false,
+        defaultQueryTimeoutMs: undefined,
+        getMessage: async () => ({ conversation: '' })
+    });
+
+    // تتبع وتفادي تكرار ردود البوت على رسائله
+    const originalSendMessage = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (...args) => {
+        try {
+            const res = await originalSendMessage(...args);
+            if (res?.key?.id) {
+                subBotSentMsgIds.add(res.key.id);
+                setTimeout(() => subBotSentMsgIds.delete(res.key.id), 120000);
+            }
+            return res;
+        } catch (e) {
+            console.error(`❌ خطأ إرسال رسالة في البوت الفرعي (+${phone}):`, e?.message || e);
+            throw e;
+        }
+    };
+
+    // تأمين الكاشات المستقلة للبوت الفرعي
+    sock.football = {};
+    sock.obito = {};
+    sock.scramble = {};
+    sock.gameSolo = {};
+    sock.game = {};
+
+    return { sock, state, saveCreds };
+}
+
+/**
+ * بدء تشغيل بوت فرعي مسجل ومربوط مسبقاً
+ */
+export async function bootSubBot(phone, cfg, mainConn = null) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    if (!cleanPhone) return false;
+
+    // إذا كان شغالاً بالفعل نتخطى
+    if (activeSubBots.has(cleanPhone)) {
+        return true;
+    }
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    const credsPath = path.join(sessionDir, 'creds.json');
+    if (!fs.existsSync(credsPath)) {
+        console.log(`⚠️ جلسة البوت الفرعي (+${cleanPhone}) غير مكتملة، تم تجاهلها.`);
+        return false;
+    }
+
+    try {
+        const { sock, saveCreds } = await createSubBotSocket(cleanPhone, sessionDir);
+        let subBotStartTime = Math.floor(Date.now() / 1000);
+
+        sock.ev.on('creds.update', saveCreds);
+
+        // ربط مستمع الرسائل بالـ Handler
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type !== 'notify') return;
+            for (const m of messages) {
+                try {
+                    if (!m.message) continue;
+                    const msgTime = getMsgTimestamp(m);
+                    if (msgTime > 0 && msgTime < (subBotStartTime - 2)) continue;
+                    if (m.key.id && subBotSentMsgIds.has(m.key.id)) continue;
+                    const from = m.key.remoteJid;
+                    if (!from) continue;
+
+                    await handleAllMessages(m, sock);
+                } catch (msgErr) {
+                    console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, msgErr?.message || msgErr);
+                }
+            }
+        });
+
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect } = update;
+
+            if (connection === 'open') {
+                subBotStartTime = Math.floor(Date.now() / 1000);
+                sock.subBotStartTime = subBotStartTime;
+                console.log(`🤖 [Sub-Bot] البوت الفرعي (${cfg.botName || cleanPhone}) متصل وشغال الآن! (+${cleanPhone})`);
+                activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
+            }
+
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                activeSubBots.delete(cleanPhone);
+
+                console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
+
+                if (statusCode === DisconnectReason.loggedOut) {
+                    console.log(`🚫 [Sub-Bot] تم تسجيل الخروج للبوت الفرعي (+${cleanPhone}).`);
+                    const registry = loadSubBotsRegistry();
+                    if (registry[cleanPhone]) {
+                        registry[cleanPhone].status = 'logged_out';
+                        saveSubBotsRegistry(registry);
+                    }
+                    try {
+                        if (fs.existsSync(sessionDir)) {
+                            fs.rmSync(sessionDir, { recursive: true, force: true });
+                        }
+                    } catch (_) {}
+                } else if (shouldReconnect) {
+                    const registry = loadSubBotsRegistry();
+                    if (registry[cleanPhone]?.status === 'active') {
+                        setTimeout(() => {
+                            bootSubBot(cleanPhone, cfg, mainConn).catch(e => console.error(e));
+                        }, 5000);
+                    }
+                }
+            }
+        });
+
+        activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
+        return true;
+    } catch (err) {
+        console.error(`❌ فشل تشغيل البوت الفرعي (+${cleanPhone}):`, err?.message || err);
+        return false;
+    }
+}
+
+/**
+ * طلب ربط بوت فرعي واستخراج كود الاقتران عبر واتساب
+ */
+export async function requestSubBotPairing(targetPhone, botName, adminPhone, mainConn, notifyJid, quotedMek) {
+    const cleanPhone = cleanPhoneNumber(targetPhone);
+    const cleanAdmin = cleanPhoneNumber(adminPhone);
+
+    if (!cleanPhone || cleanPhone.length < 10) {
+        await mainConn.sendMessage(notifyJid, { text: '❌ رقم الهاتف غير صالح. برجاء كتابة رقم صحيح (مثال: 01012345678 أو 201012345678).' }, { quoted: quotedMek });
+        return false;
+    }
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    const credsPath = path.join(sessionDir, 'creds.json');
+
+    // تنظيف أي جلسة غير مكتملة أو معلقة سابقة لضمان توليد مفاتيح ربط جديدة نقية
+    if (fs.existsSync(sessionDir) && !activeSubBots.has(cleanPhone)) {
+        try {
+            if (fs.existsSync(credsPath)) {
+                const credsData = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+                if (!credsData.registered) {
+                    fs.rmSync(sessionDir, { recursive: true, force: true });
+                }
+            } else {
+                fs.rmSync(sessionDir, { recursive: true, force: true });
+            }
+        } catch (_) {
+            try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch (_) {}
+        }
+    }
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    let pairingCodeSent = false;
+    let isConnected = false;
+
+    async function startPairingEngine() {
+        try {
+            const { sock, saveCreds } = await createSubBotSocket(cleanPhone, sessionDir);
+            let subBotStartTime = Math.floor(Date.now() / 1000);
+
+            sock.ev.on('creds.update', saveCreds);
+
+            sock.ev.on('connection.update', async (update) => {
+                const { connection, lastDisconnect } = update;
+
+                // 🔑 طلب كود الاقتران عند الاتصال إذا لم يكن الجهاز مسجلاً
+                if (!sock.authState.creds.registered && !pairingCodeSent) {
+                    pairingCodeSent = true;
+                    setTimeout(async () => {
+                        try {
+                            if (!sock.authState.creds.registered) {
+                                let code = await sock.requestPairingCode(cleanPhone);
+                                code = code?.match(/.{1,4}/g)?.join("-") || code;
+
+                                const pairMsg = 
+                                    `╭━━━〔 🤖 *كود تنصيب بوت فرعي* 〕━━━╮\n` +
+                                    `┃ 🏷️ *اسم البوت:* ${botName}\n` +
+                                    `┃ 📱 *رقم البوت:* +${cleanPhone}\n` +
+                                    `┃ 👑 *الحج الأساسي:* +${cleanAdmin}\n` +
+                                    `┃ 🔑 *كود الاقتران:* *${code}*\n` +
+                                    `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                                    `📌 *طريقة الربط بالهاتف:* \n` +
+                                    `1️⃣ افتح واتساب من الهاتف صاحب الرقم (+${cleanPhone}).\n` +
+                                    `2️⃣ اضغط على الثلاث نقاط (⋮) ⬅️ *الأجهزة المرتبطة*.\n` +
+                                    `3️⃣ اضغط *ربط جهاز*.\n` +
+                                    `4️⃣ اضغط *الربط باستخدام رقم الهاتف بدلاً من ذلك*.\n` +
+                                    `5️⃣ أدخل الكود أعلاه: *${code}*\n\n` +
+                                    `⏳ *الكود صالح لدقيقتين فقط.* بمجرد الربط سيبدأ البوت العمل فوراً!`;
+
+                                await mainConn.sendMessage(notifyJid, { text: pairMsg }, { quoted: quotedMek });
+                            }
+                        } catch (codeErr) {
+                            console.error('❌ خطأ في استخراج كود الاقتران:', codeErr?.message || codeErr);
+                            pairingCodeSent = false;
+                        }
+                    }, 3500);
+                }
+
+                if (connection === 'open') {
+                    isConnected = true;
+                    subBotStartTime = Math.floor(Date.now() / 1000);
+                    sock.subBotStartTime = subBotStartTime;
+                    console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
+
+                    const cfgData = {
+                        phone: cleanPhone,
+                        botName: botName,
+                        adminPhone: cleanAdmin,
+                        installedAt: new Date().toISOString(),
+                        status: 'active'
+                    };
+
+                    fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfgData, null, 2), 'utf8');
+
+                    const registry = loadSubBotsRegistry();
+                    registry[cleanPhone] = cfgData;
+                    saveSubBotsRegistry(registry);
+
+                    activeSubBots.set(cleanPhone, { sock, cfg: cfgData, startTime: subBotStartTime });
+
+                    const successMsg = 
+                        `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName}) بنجاح!* 🚀\n\n` +
+                        `👑 أنت الآن الحج الأساسي على هذا البوت (+${cleanPhone}).\n` +
+                        `💬 البوت شغال الآن ويرد على الأوامر في الخاص والجروبات.\n` +
+                        `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
+                        `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، كل اللي عليك تكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه وإيقافه فوراً.`;
+
+                    await mainConn.sendMessage(notifyJid, { text: successMsg }, { quoted: quotedMek });
+
+                    const masterPhone = '201129249396@s.whatsapp.net';
+                    const ownerNotice = 
+                        `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
+                        `🏷️ *اسم البوت:* ${botName}\n` +
+                        `📱 *رقم البوت:* +${cleanPhone}\n` +
+                        `👤 *المُنصّب:* +${cleanAdmin}\n` +
+                        `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
+                        `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
+
+                    try {
+                        await mainConn.sendMessage(masterPhone, { text: ownerNotice });
+                    } catch (_) {}
+                }
+
+                if (connection === 'close') {
+                    const statusCode = lastDisconnect?.error?.output?.statusCode;
+                    console.log(`⚠️ [Sub-Bot Pairing] انقطع اتصال السوكيت للرقم (+${cleanPhone}) بكود: ${statusCode}`);
+                    activeSubBots.delete(cleanPhone);
+
+                    if (statusCode === DisconnectReason.loggedOut) {
+                        console.log(`🚫 [Sub-Bot Pairing] تم تسجيل الخروج (+${cleanPhone}).`);
+                        try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch (_) {}
+                    } else if (!isConnected) {
+                        // ⚡ الأهم: إعادة الاتصال فوراً لاستكمال المصافحة (Handshake) بعد إدخال الكود (خصوصاً خطأ 515 و 428)
+                        console.log(`🔄 [Sub-Bot Pairing] إعادة الاتصال التلقائي لاستكمال الاقتران (+${cleanPhone})...`);
+                        setTimeout(() => {
+                            startPairingEngine().catch(e => console.error('Retry pairing error:', e));
+                        }, 2500);
+                    } else {
+                        // إذا كان متصلاً وانقطع لاحقاً
+                        const registry = loadSubBotsRegistry();
+                        if (registry[cleanPhone]?.status === 'active') {
+                            setTimeout(() => {
+                                bootSubBot(cleanPhone, registry[cleanPhone], mainConn).catch(e => console.error(e));
+                            }, 4000);
+                        }
+                    }
+                }
+            });
+
+            // ربط مستمع الرسائل
+            sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                if (type !== 'notify') return;
+                for (const m of messages) {
+                    try {
+                        if (!m.message) continue;
+                        const msgTime = getMsgTimestamp(m);
+                        if (msgTime > 0 && msgTime < (subBotStartTime - 2)) continue;
+                        if (m.key.id && subBotSentMsgIds.has(m.key.id)) continue;
+                        const from = m.key.remoteJid;
+                        if (!from) continue;
+
+                        await handleAllMessages(m, sock);
+                    } catch (err) {
+                        console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, err?.message || err);
+                    }
+                }
+            });
+
+            return sock;
+        } catch (e) {
+            console.error('❌ خطأ في محرك الاقتران:', e);
+            throw e;
+        }
+    }
+
+    return await startPairingEngine();
+}
+
+/**
+ * تشغيل واسترجاع جميع البوتات الفرعية المسجلة عند إقلاع البوت الرئيسي
+ * يتم تشغيلها بتأخير زمني مجدول (Staggered) لتفادي استهلاك الذاكرة أو حظر السيرفرات
+ */
+export async function initAllSubBots(mainConn) {
+    const registry = loadSubBotsRegistry();
+    const phones = Object.keys(registry);
+
+    if (phones.length === 0) {
+        console.log('ℹ️ [Sub-Bots] لا توجد بوتات فرعية مسجلة حالياً.');
+        return;
+    }
+
+    console.log(`🔄 [Sub-Bots] جاري استرجاع وتشغيل ${phones.length} بوت فرعي مسجل...`);
+
+    let delaySec = 3;
+    for (const phone of phones) {
+        const cfg = registry[phone];
+        if (cfg && cfg.status === 'active') {
+            setTimeout(async () => {
+                try {
+                    await bootSubBot(phone, cfg, mainConn);
+                } catch (err) {
+                    console.error(`❌ تعذر تشغيل البوت الفرعي (+${phone}):`, err?.message || err);
+                }
+            }, delaySec * 1000);
+            delaySec += 4; // تأخير 4 ثوانٍ بين كل بوت فرعي والآخر للأمان التام
+        }
+    }
+}
+
+/**
+ * إيقاف بوت فرعي عن العمل عن بُعد
+ */
+export async function stopSubBot(phone) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    const registry = loadSubBotsRegistry();
+
+    if (!registry[cleanPhone]) {
+        return { success: false, message: `⚠️ البوت الفرعي (+${cleanPhone}) غير موجود بالسجل!` };
+    }
+
+    const active = activeSubBots.get(cleanPhone);
+    if (active && active.sock) {
+        try {
+            active.sock.end(new Error('Manual shutdown by master owner'));
+        } catch (_) {}
+    }
+    activeSubBots.delete(cleanPhone);
+
+    registry[cleanPhone].status = 'stopped';
+    saveSubBotsRegistry(registry);
+
+    return { success: true, message: `🛑 تم إيقاف البوت الفرعي (+${cleanPhone}) بنجاح!` };
+}
+
+/**
+ * إعادة تشغيل بوت فرعي موقوف
+ */
+export async function startSubBotRemote(phone, mainConn) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    const registry = loadSubBotsRegistry();
+
+    if (!registry[cleanPhone]) {
+        return { success: false, message: `⚠️ البوت الفرعي (+${cleanPhone}) غير موجود بالسجل!` };
+    }
+
+    registry[cleanPhone].status = 'active';
+    saveSubBotsRegistry(registry);
+
+    const started = await bootSubBot(cleanPhone, registry[cleanPhone], mainConn);
+    if (started) {
+        return { success: true, message: `⚡ تم تشغيل البوت الفرعي (+${cleanPhone}) بنجاح!` };
+    } else {
+        return { success: false, message: `❌ فشل إعادة تشغيل البوت (+${cleanPhone}). تأكد من وجود ملفات الجلسة.` };
+    }
+}
+
+/**
+ * حذف بوت فرعي وملفاته نهائياً
+ */
+export async function deleteSubBotRemote(phone) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    const registry = loadSubBotsRegistry();
+
+    const active = activeSubBots.get(cleanPhone);
+    if (active && active.sock) {
+        try {
+            active.sock.end(new Error('Sub-bot uninstalled'));
+        } catch (_) {}
+    }
+    activeSubBots.delete(cleanPhone);
+
+    if (registry[cleanPhone]) {
+        delete registry[cleanPhone];
+        saveSubBotsRegistry(registry);
+    }
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    try {
+        if (fs.existsSync(sessionDir)) {
+            fs.rmSync(sessionDir, { recursive: true, force: true });
+        }
+    } catch (_) {}
+
+    return { success: true, message: `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته بالكامل بنجاح!` };
+}
+
+/**
+ * تحديث اسم البوت الفرعي
+ */
+export function updateSubBotName(phone, newName) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    if (!cleanPhone || !newName) return false;
+
+    const registry = loadSubBotsRegistry();
+    if (registry[cleanPhone]) {
+        registry[cleanPhone].botName = newName;
+        saveSubBotsRegistry(registry);
+    }
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    const cfgPath = path.join(sessionDir, 'config.json');
+    if (fs.existsSync(cfgPath)) {
+        try {
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            cfg.botName = newName;
+            fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+        } catch (_) {}
+    }
+
+    const active = activeSubBots.get(cleanPhone);
+    if (active) {
+        active.cfg.botName = newName;
+        if (active.sock) active.sock.botName = newName;
+    }
+
+    return true;
+}
+
+/**
+ * جلب تقرير كامل عن حالة جميع البوتات الفرعية للمالك
+ */
+export function getSubBotsReport() {
+    const registry = loadSubBotsRegistry();
+    const phones = Object.keys(registry);
+    const total = phones.length;
+
+    let activeCount = 0;
+    let stoppedCount = 0;
+    const list = [];
+
+    phones.forEach((phone, idx) => {
+        const item = registry[phone];
+        const isRunning = activeSubBots.has(phone);
+        if (isRunning) activeCount++;
+        else stoppedCount++;
+
+        list.push(
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `*${idx + 1}️⃣ ${item.botName || 'بوت فرعي'}*\n` +
+            `📱 *رقم البوت:* +${item.phone}\n` +
+            `👑 *الحج الأساسي:* +${item.adminPhone || 'غير محدد'}\n` +
+            `🟢 *الحالة:* ${isRunning ? '⚡ شغال الآن' : (item.status === 'stopped' ? '🛑 متوقف' : '⚠️ غير متصل')}\n` +
+            `📅 *تاريخ التنصيب:* ${item.installedAt ? new Date(item.installedAt).toLocaleDateString('ar-EG') : 'غير مسجل'}`
+        );
+    });
+
+    return {
+        total,
+        activeCount,
+        stoppedCount,
+        listText: list.length > 0 ? list.join('\n') : 'لا توجد بوتات فرعية مسجلة حالياً.'
+    };
+}
