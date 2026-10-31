@@ -140,11 +140,25 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
         // ربط مستمع الرسائل بالـ Handler
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
+            const nowSec = Math.floor(Date.now() / 1000);
+            const activeStart = sock.subBotStartTime || subBotStartTime || nowSec;
+
             for (const m of messages) {
                 try {
                     if (!m.message) continue;
+
+                    // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة وصلت أثناء انقطاع أو إغلاق البوت
                     const msgTime = getMsgTimestamp(m);
-                    if (msgTime > 0 && msgTime < (subBotStartTime - 2)) continue;
+                    if (msgTime > 0) {
+                        if (msgTime < (activeStart - 2) || msgTime < (nowSec - 30)) {
+                            continue;
+                        }
+                    } else {
+                        if ((nowSec - activeStart) < 45) {
+                            continue;
+                        }
+                    }
+
                     if (m.key.id && subBotSentMsgIds.has(m.key.id)) continue;
                     const from = m.key.remoteJid;
                     if (!from) continue;
@@ -372,11 +386,25 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             // ربط مستمع الرسائل
             sock.ev.on('messages.upsert', async ({ messages, type }) => {
                 if (type !== 'notify') return;
+                const nowSec = Math.floor(Date.now() / 1000);
+                const activeStart = sock.subBotStartTime || subBotStartTime || nowSec;
+
                 for (const m of messages) {
                     try {
                         if (!m.message) continue;
+
+                        // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة
                         const msgTime = getMsgTimestamp(m);
-                        if (msgTime > 0 && msgTime < (subBotStartTime - 2)) continue;
+                        if (msgTime > 0) {
+                            if (msgTime < (activeStart - 2) || msgTime < (nowSec - 30)) {
+                                continue;
+                            }
+                        } else {
+                            if ((nowSec - activeStart) < 45) {
+                                continue;
+                            }
+                        }
+
                         if (m.key.id && subBotSentMsgIds.has(m.key.id)) continue;
                         const from = m.key.remoteJid;
                         if (!from) continue;

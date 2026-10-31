@@ -46,12 +46,30 @@ global.botStartTime = Math.floor(Date.now() / 1000);
 
 export function getMsgTimestamp(m) {
     if (!m) return 0;
-    const ts = m.messageTimestamp;
-    if (typeof ts === 'number') return ts;
-    if (typeof ts === 'string') return parseInt(ts, 10) || 0;
-    if (ts && typeof ts.toNumber === 'function') return ts.toNumber();
-    if (ts && typeof ts.low === 'number') return ts.low;
-    return 0;
+    let ts = m.messageTimestamp;
+    if (ts === undefined || ts === null) {
+        ts = m.key?.timestamp || m.message?.messageContextInfo?.deviceListMetadata?.senderTimestamp;
+    }
+    if (ts === undefined || ts === null) return 0;
+
+    let num = 0;
+    if (typeof ts === 'number') {
+        num = ts;
+    } else if (typeof ts === 'string') {
+        num = parseInt(ts, 10) || 0;
+    } else if (typeof ts === 'object') {
+        if (typeof ts.toNumber === 'function') {
+            num = ts.toNumber();
+        } else if (typeof ts.low === 'number') {
+            const high = typeof ts.high === 'number' ? ts.high : 0;
+            num = (high * 4294967296) + (ts.low >>> 0);
+        }
+    }
+
+    if (num > 1e11) {
+        num = Math.floor(num / 1000);
+    }
+    return num;
 }
 
 async function startShadowBot() {
@@ -192,12 +210,26 @@ async function startShadowBot() {
             if (chatUpdate.type !== 'notify') return;
             if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
 
+            const nowSec = Math.floor(Date.now() / 1000);
+            const activeStart = global.botStartTime || nowSec;
+
             for (const m of chatUpdate.messages) {
                 if (!m || !m.message) continue;
 
-                // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة أُرسلت قبل تشغيل البوت الحالي
+                // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة:
+                // 1. إذا كان توقيت الرسالة قبل لحظة تشغيل البوت الحالي
+                // 2. أو إذا كان عمر الرسالة أقدم من 30 ثانية من الآن
+                // 3. أو إذا لم نتمكن من قراءة توقيت الرسالة أثناء أول 45 ثانية من فتح الاتصال (فترة المزامنة)
                 const msgTime = getMsgTimestamp(m);
-                if (msgTime > 0 && msgTime < (global.botStartTime - 2)) continue;
+                if (msgTime > 0) {
+                    if (msgTime < (activeStart - 2) || msgTime < (nowSec - 30)) {
+                        continue;
+                    }
+                } else {
+                    if ((nowSec - activeStart) < 45) {
+                        continue;
+                    }
+                }
 
                 // تجاهل الرسائل الصادرة برمجياً من البوت نفسه فقط
                 if (m.key.id && botSentMsgIds.has(m.key.id)) continue;

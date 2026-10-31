@@ -113,10 +113,29 @@ export function getUserPoints(jid) {
 
 export function getMsgTimestamp(m) {
     if (!m) return 0;
-    const ts = m.messageTimestamp;
-    if (typeof ts === 'number') return ts;
-    if (typeof ts === 'string') return parseInt(ts, 10) || 0;
-    if (ts && typeof ts.toNumber === 'function') return ts.toNumber();
-    if (ts && typeof ts.low === 'number') return ts.low;
-    return 0;
+    let ts = m.messageTimestamp;
+    if (ts === undefined || ts === null) {
+        ts = m.key?.timestamp || m.message?.messageContextInfo?.deviceListMetadata?.senderTimestamp;
+    }
+    if (ts === undefined || ts === null) return 0;
+
+    let num = 0;
+    if (typeof ts === 'number') {
+        num = ts;
+    } else if (typeof ts === 'string') {
+        num = parseInt(ts, 10) || 0;
+    } else if (typeof ts === 'object') {
+        if (typeof ts.toNumber === 'function') {
+            num = ts.toNumber();
+        } else if (typeof ts.low === 'number') {
+            const high = typeof ts.high === 'number' ? ts.high : 0;
+            num = (high * 4294967296) + (ts.low >>> 0);
+        }
+    }
+
+    // إذا كان التوقيت بالملي ثانية (13 رقم)، نحوله للثواني (10 أرقام)
+    if (num > 1e11) {
+        num = Math.floor(num / 1000);
+    }
+    return num;
 }
