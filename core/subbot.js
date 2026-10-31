@@ -535,6 +535,29 @@ export async function deleteSubBotRemote(phone) {
 }
 
 /**
+ * مسح وحذف جميع البوتات الفرعية وجلساتها وسجلاتها بالكامل
+ */
+export async function clearAllSubBots() {
+    for (const [phone, item] of activeSubBots.entries()) {
+        if (item && item.sock) {
+            try {
+                item.sock.end(new Error('All sub-bots cleared by master owner'));
+            } catch (_) {}
+        }
+    }
+    activeSubBots.clear();
+    saveSubBotsRegistry({});
+
+    try {
+        if (fs.existsSync(SUB_BOTS_DIR)) {
+            fs.rmSync(SUB_BOTS_DIR, { recursive: true, force: true });
+        }
+    } catch (_) {}
+
+    return { success: true, message: '🗑️ تم إيقاف وحذف جميع البوتات الفرعية وملفاتها وسجلاتها بالكامل بنجاح!' };
+}
+
+/**
  * تحديث اسم البوت الفرعي
  */
 export function updateSubBotName(phone, newName) {

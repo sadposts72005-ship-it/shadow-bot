@@ -13,6 +13,7 @@ import {
     stopSubBot, 
     startSubBotRemote, 
     deleteSubBotRemote, 
+    clearAllSubBots,
     getSubBotsReport,
     cleanPhoneNumber,
     loadSubBotsRegistry,
@@ -747,6 +748,22 @@ export async function handleAllMessages(mek, currentConn) {
             }
             const res = await startSubBotRemote(targetPhone, currentConn);
             await respondWithStrictTiming('⚡', async () => {
+                await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
+            });
+            return;
+        }
+
+        // 🗑️ أمر تصفير وحذف جميع البوتات الفرعية وملفاتها نهائياً (للحج شادو الأصلي حصرياً)
+        if (['مسح كل البوتات الفرعية', 'مسح كل البوتات الفرعيه', 'تصفير البوتات الفرعية', 'تصفير البوتات الفرعيه', 'حذف كل البوتات', 'تصفير التنصيب', 'مسح البوتات'].includes(normalizedBody)) {
+            if (!isAbsoluteOwner) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+
+            const res = await clearAllSubBots();
+            await respondWithStrictTiming('🗑️', async () => {
                 await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
             });
             return;

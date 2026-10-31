@@ -208,19 +208,26 @@ const handler = async (mek, currentConn) => {
     }
 
     // --- 2. الانضمام للعبة ---
-    if (subCommand === 'انضمام' || bodyText === '.' || (isExplicitBakasa && subCommand === 'انضم')) {
+    if (subCommand === 'انضمام' || (bodyText === '.' && game.status === 'waiting') || (isExplicitBakasa && subCommand === 'انضم')) {
         if (game.status === 'playing' || game.status === 'voting' || game.status === 'guessing') {
-            if (game.players.includes(sender)) return currentConn.sendMessage(from, { text: '🙋‍♂️ إنت بتلعب في الدور الحالي بالفعل!' }, { quoted: mek });
-            if (game.nextPlayers.includes(sender)) return currentConn.sendMessage(from, { text: '⏳ إنت مسجل في قائمة الانتظار بالفعل وهتدخل الدور الجاي!' }, { quoted: mek });
-            game.nextPlayers.push(sender);
-            return currentConn.sendMessage(from, { text: '⏳ الجيم شغال حالياً! تم تسجيلك في قائمة الانتظار وهتدخل الجيم الجاي لما يكتبوا *بكاسة كمل*.' }, { quoted: mek });
+            if (isExplicitBakasa || subCommand === 'انضمام') {
+                if (game.players.includes(sender)) return currentConn.sendMessage(from, { text: '🙋‍♂️ إنت بتلعب في الدور الحالي بالفعل!' }, { quoted: mek });
+                if (game.nextPlayers.includes(sender)) return currentConn.sendMessage(from, { text: '⏳ إنت مسجل في قائمة الانتظار بالفعل وهتدخل الدور الجاي!' }, { quoted: mek });
+                game.nextPlayers.push(sender);
+                return currentConn.sendMessage(from, { text: '⏳ الجيم شغال حالياً! تم تسجيلك في قائمة الانتظار وهتدخل الجيم الجاي لما يكتبوا *بكاسة كمل*.' }, { quoted: mek });
+            }
+            return;
         }
 
         if (game.status === 'waiting' || game.status === 'choosing_category') {
             if (game.status === 'choosing_category') {
                 game.status = 'waiting';
             }
-            if (game.players.includes(sender)) return currentConn.sendMessage(from, { text: '🙋‍♂️ إنت منضم بالفعل للعبة!' }, { quoted: mek });
+            if (game.players.includes(sender)) {
+                // إذا كان اللاعب منضماً بالفعل وكتب نقطة، لا نرد عليه لمنع السبام
+                if (bodyText === '.') return;
+                return currentConn.sendMessage(from, { text: '🙋‍♂️ إنت منضم بالفعل للعبة!' }, { quoted: mek });
+            }
             game.players.push(sender);
             return currentConn.sendMessage(from, { text: `✅ انضميت للعبة بنجاح! عدد اللاعبين الحالي: *${game.players.length}* 👥\n\n📩 *تنبيه:* ابعت للبوت نقطة (.) في الخاص دلوقتي لو ممراسلتوش قبل كده عشان يعرف يبعتلك دورك!` }, { quoted: mek });
         }
