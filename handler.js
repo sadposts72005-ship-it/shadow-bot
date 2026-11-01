@@ -219,10 +219,10 @@ export async function handleAllMessages(mek, currentConn) {
         
         // 🔓 جلب النص بأعلى مرونة لفك تشفير كافة أنواع الرسائل
         const body = extractMessageBody(mek);
-        const textLower = body.toLowerCase().trim();
+        let textLower = body.toLowerCase().trim();
         if (!textLower) return;
 
-        const normalizedBody = normalizeArabic(textLower);
+        let normalizedBody = normalizeArabic(textLower);
         mek.text = textLower;
         
         // 👑 المالك المطلق (الحج شادو الحقيقي الأصلي)
@@ -295,6 +295,16 @@ export async function handleAllMessages(mek, currentConn) {
         currentConn.isSubBot = Boolean(subBotConfig);
         currentConn.subBotConfig = subBotConfig;
 
+        // ⏱️ دالة التوقيت الصارمة للحماية من حظر واتساب (محاكاة حركة بشرية)
+        const respondWithStrictTiming = async (reactChar, actionFunction) => {
+            await delay(2500);
+            try {
+                if (reactChar) await currentConn.sendMessage(from, { react: { text: reactChar, key: mek.key } });
+            } catch (e) {}
+            await delay(3000);
+            await actionFunction();
+        };
+
         // 🤫 1. فحص وضع كتم الصوت التام للبوت (اسكت / اتكلم) المطبق من الحج شادو
         const currentBotMuted = botMuteMap.get(myNumber) || false;
         if (currentBotMuted) {
@@ -338,14 +348,48 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
-        // 💤 فحص وضع الخمول المعزول (Sleep Mode) الخاص بهذا البوت فقط
-        const currentBotSleep = botSleepMap.get(myNumber) || false;
-        if (currentBotSleep && !isBotOwner) {
+        // 💤 3. فحص وضع الخمول المعزول في هذا الشات/الجروب بالتحديد (Group-Scoped Sleep Mode)
+        const sleepKey = `${myNumber}_${from}`;
+        const isCurrentRoomSleeping = botSleepMap.get(sleepKey) || false;
+
+        if (isCurrentRoomSleeping) {
+            // البوت نائم تماماً في هذا الجروب فقط، لا يستجيب لأي شخص أو أي رسالة نهائياً (حتى لمالكه)
+            // الاستثناء الحصري: أمر الاستيقاظ (اصحي) من مالك البوت أو الحج شادو
+            const isNamedWake = (
+                normalizedBody === `اصحي ${normalizedBotName}` || 
+                normalizedBody === `اصحي يا ${normalizedBotName}` ||
+                normalizedBody === `تشغيل ${normalizedBotName}` ||
+                normalizedBody === `قوم ${normalizedBotName}` ||
+                (normalizedCallName && (
+                    normalizedBody === `اصحي ${normalizedCallName}` ||
+                    normalizedBody === `اصحي يا ${normalizedCallName}` ||
+                    normalizedBody === `تشغيل ${normalizedCallName}` ||
+                    normalizedBody === `قوم ${normalizedCallName}`
+                )) ||
+                (isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو'))
+            );
+            const isGeneralWake = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم'].includes(normalizedBody);
+
+            if (isBotOwner && (isGeneralWake || isNamedWake)) {
+                // لو الأمر محدد لبوت ثاني في نفس الروم: يتجاهل
+                if (!isNamedWake && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
+                    return;
+                }
+
+                botSleepMap.delete(sleepKey);
+                botWakeTimeMap.set(sleepKey, Math.floor(Date.now() / 1000));
+                await respondWithStrictTiming('⚡', async () => {
+                    await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في هذا الجروب وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
+                });
+                return;
+            }
+
+            // صامت تماماً في هذا الجروب ولا يرد على أي شيء!
             return;
         }
 
-        // ⏰ فحص توقيت الاستيقاظ: تجاهل أي رسائل أُرسلت أثناء فترة نوم البوت بعد استيقاظه
-        const lastWakeTime = botWakeTimeMap.get(myNumber);
+        // ⏰ فحص توقيت الاستيقاظ لهذا الجروب: تجاهل أي رسائل أُرسلت أثناء فترة نوم البوت بعد استيقاظه
+        const lastWakeTime = botWakeTimeMap.get(sleepKey);
         if (lastWakeTime && !isBotOwner) {
             const mTime = getMsgTimestamp(mek);
             if (mTime > 0 && mTime < lastWakeTime) {
@@ -356,56 +400,95 @@ export async function handleAllMessages(mek, currentConn) {
         // 🚫 فحص حظر المستخدم
         if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return;
 
-        // 🛡️ تشغيل ملف الإدارة للخاص والجروبات (ادخل، نام، اصحي، الإدارة)
-        let handledByAdmin = false;
-        if (datelsHandler && typeof datelsHandler.before === 'function') {
-            handledByAdmin = await datelsHandler.before(mek, currentConn);
-        } else if (datelsHandler?.default && typeof datelsHandler.default.before === 'function') {
-            handledByAdmin = await datelsHandler.default.before(mek, currentConn);
+        // =========================================================================
+        // 🤖 [اسم المناداة والنداء وتوجيه الأوامر للبوت المستهدف]
+        // =========================================================================
+        const subBotsRegistry = loadSubBotsRegistry();
+        const otherBotNames = [];
+        const otherCallNames = [];
+        for (const [p, info] of Object.entries(subBotsRegistry)) {
+            if (p !== myNumber) {
+                if (info.botName) otherBotNames.push(normalizeArabic(info.botName.toLowerCase().trim()));
+                if (info.callName) otherCallNames.push(normalizeArabic(info.callName.toLowerCase().trim()));
+            }
         }
-        if (handledByAdmin) return;
-        
-        const now = Date.now();
+        if (currentConn.isSubBot) {
+            otherBotNames.push('شادو');
+            otherCallNames.push('شادو');
+        }
 
-        // ⏱️ دالة التوقيت الصارمة للحماية من حظر واتساب (محاكاة حركة بشرية)
-        const respondWithStrictTiming = async (reactChar, actionFunction) => {
-            await delay(2500);
-            try {
-                if (reactChar) await currentConn.sendMessage(from, { react: { text: reactChar, key: mek.key } });
-            } catch (e) {}
-            await delay(3000);
-            await actionFunction();
-        };
+        // 1️⃣ فحص هل الرسالة مجرد نداء بالاسم فقط (رد التحية والمساعدة)
+        const isCallingMyName = (
+            (normalizedCallName && (normalizedBody === normalizedCallName || normalizedBody === `يا ${normalizedCallName}`)) ||
+            normalizedBody === normalizedBotName || 
+            normalizedBody === `يا ${normalizedBotName}` ||
+            (!currentConn.isSubBot && (normalizedBody === 'شادو' || normalizedBody === 'يا شادو' || normalizedBody === 'بوت' || normalizedBody === 'يا بوت'))
+        );
+
+        if (isCallingMyName) {
+            await respondWithStrictTiming('✨', async () => {
+                await currentConn.sendMessage(from, { text: `تحت امرك يا فنان اتفضل يا حبيبي اامر❤️` }, { quoted: mek });
+            });
+            return;
+        }
+
+        // 2️⃣ فحص هل الرسالة تبدأ باسم نداء هذا البوت ومتبوعة بأمر (مثلاً: زيزو بنك / يا زيزو منيو / الرعد روليت 500)
+        let matchedPrefix = null;
+        const myPrefixes = [];
+        if (normalizedCallName) {
+            myPrefixes.push(`يا ${normalizedCallName} `, `${normalizedCallName} `);
+        }
+        myPrefixes.push(`يا ${normalizedBotName} `, `${normalizedBotName} `);
+        if (!currentConn.isSubBot) {
+            myPrefixes.push('يا شادو ', 'شادو ');
+        }
+
+        for (const pfx of myPrefixes) {
+            if (normalizedBody.startsWith(pfx)) {
+                matchedPrefix = pfx;
+                break;
+            }
+        }
+
+        if (matchedPrefix) {
+            // تم نداء هذا البوت بالتحديد: نقوم بقص اسم النداء لتمرير الأمر مباشرة للبوت
+            normalizedBody = normalizedBody.slice(matchedPrefix.length).trim();
+            textLower = textLower.slice(matchedPrefix.length).trim();
+            mek.text = textLower;
+        } else {
+            // 3️⃣ فحص هل الرسالة موجهة صراحةً لبوت آخر في نفس الروم/النظام؟
+            const isCallingOtherBot = otherCallNames.concat(otherBotNames).filter(Boolean).some(otherName => {
+                return (
+                    normalizedBody === otherName ||
+                    normalizedBody === `يا ${otherName}` ||
+                    normalizedBody.startsWith(otherName + ' ') ||
+                    normalizedBody.startsWith(`يا ${otherName} `)
+                );
+            });
+
+            if (isCallingOtherBot) {
+                // الرسالة موجهة صراحةً لبوت آخر: هذا البوت يتجاهلها بصمت حتى يرد البوت المطلوب فقط!
+                return;
+            }
+        }
 
         // =========================================================================
-        // 💤 [أوامر النوم والاستيقاظ المعزولة لكل بوت وباسمه واسم ندائه]
+        // 💤 [أوامر النوم والاستيقاظ المعزولة لهذا الجروب فقط]
         // =========================================================================
         const isGeneralSleep = ['نام', 'وضع الخمول', 'ايقاف مؤقت', 'خمول'].includes(normalizedBody);
-        const isNamedSleep = normalizedBody === `نام ${normalizedBotName}` || 
-                             normalizedBody === `نام يا ${normalizedBotName}` ||
-                             normalizedBody === `خمول ${normalizedBotName}` ||
-                             (normalizedCallName && (
-                                 normalizedBody === `نام ${normalizedCallName}` ||
-                                 normalizedBody === `نام يا ${normalizedCallName}` ||
-                                 normalizedBody === `خمول ${normalizedCallName}`
-                             )) ||
-                             (isAbsoluteOwner && (normalizedBody === 'نام الكل' || normalizedBody === 'نامو'));
-
-        const isGeneralWake = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم'].includes(normalizedBody);
-        const isNamedWake = normalizedBody === `اصحي ${normalizedBotName}` || 
-                            normalizedBody === `اصحي يا ${normalizedBotName}` ||
-                            normalizedBody === `تشغيل ${normalizedBotName}` ||
-                            normalizedBody === `قوم ${normalizedBotName}` ||
-                            (normalizedCallName && (
-                                normalizedBody === `اصحي ${normalizedCallName}` ||
-                                normalizedBody === `اصحي يا ${normalizedCallName}` ||
-                                normalizedBody === `تشغيل ${normalizedCallName}` ||
-                                normalizedBody === `قوم ${normalizedCallName}`
-                            )) ||
-                            (isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو'));
+        const isNamedSleep = (
+            normalizedBody === `نام ${normalizedBotName}` || 
+            normalizedBody === `نام يا ${normalizedBotName}` ||
+            normalizedBody === `خمول ${normalizedBotName}` ||
+            (normalizedCallName && (
+                normalizedBody === `نام ${normalizedCallName}` ||
+                normalizedBody === `نام يا ${normalizedCallName}` ||
+                normalizedBody === `خمول ${normalizedCallName}`
+            )) ||
+            (isAbsoluteOwner && (normalizedBody === 'نام الكل' || normalizedBody === 'نامو'))
+        );
 
         if (isGeneralSleep || isNamedSleep) {
-            // لو الأمر محدد بالاسم لبوت تاني في نفس الجروب، هذا البوت يتجاهل بصمت
             if (!isNamedSleep && normalizedBody.startsWith('نام ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
                 return;
             }
@@ -414,22 +497,31 @@ export async function handleAllMessages(mek, currentConn) {
                 return;
             }
 
-            const isAlreadySleeping = botSleepMap.get(myNumber) || false;
-            if (isAlreadySleeping) {
-                if (isNamedSleep) {
-                    await respondWithStrictTiming('💤', async () => {
-                        await currentConn.sendMessage(from, { text: `⚠️ وضع الخمول مفعل بالفعل يا حج وبوتك (${botName}) نائم حالياً! 💤` }, { quoted: mek });
-                    });
-                }
-                return;
-            }
-
-            botSleepMap.set(myNumber, true);
+            botSleepMap.set(sleepKey, true);
             await respondWithStrictTiming('💤', async () => {
-                await currentConn.sendMessage(from, { text: `💤 *تم تفعيل وضع الخمول لبوت (${botName}) بنجاح!* \nالبوت الآن صامت تماماً ولن يستجيب لأي شخص نهائياً غيرك حتى ترسل له أمر (اصحي) أو (اصحي ${normalizedCallName || normalizedBotName}). 🌙` }, { quoted: mek });
+                await currentConn.sendMessage(from, { 
+                    text: `💤 *تم تفعيل وضع الخمول لبوت (${botName}) في هذا الجروب فقط!* 🌙\n` +
+                          `البوت الآن صامت تماماً في هذه المجموعة ولن يستجيب لأي رسائل نهائياً (حتى لك شخصياً) حتى ترسل له أمر (اصحي) هنا.\n` +
+                          `✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي المجموعات!_` 
+                }, { quoted: mek });
             });
             return;
         }
+
+        const isGeneralWake = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم'].includes(normalizedBody);
+        const isNamedWake = (
+            normalizedBody === `اصحي ${normalizedBotName}` || 
+            normalizedBody === `اصحي يا ${normalizedBotName}` ||
+            normalizedBody === `تشغيل ${normalizedBotName}` ||
+            normalizedBody === `قوم ${normalizedBotName}` ||
+            (normalizedCallName && (
+                normalizedBody === `اصحي ${normalizedCallName}` ||
+                normalizedBody === `اصحي يا ${normalizedCallName}` ||
+                normalizedBody === `تشغيل ${normalizedCallName}` ||
+                normalizedBody === `قوم ${normalizedCallName}`
+            )) ||
+            (isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو'))
+        );
 
         if (isGeneralWake || isNamedWake) {
             if (!isNamedWake && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
@@ -440,23 +532,136 @@ export async function handleAllMessages(mek, currentConn) {
                 return;
             }
 
-            const isAlreadySleeping = botSleepMap.get(myNumber) || false;
-            if (!isAlreadySleeping) {
-                if (isNamedWake) {
-                    await respondWithStrictTiming('⚡', async () => {
-                        await currentConn.sendMessage(from, { text: `⚠️ بوتك (${botName}) شغال ومستيقظ بالفعل يا حج وجاهز لأي أوامر! ⚡` }, { quoted: mek });
-                    });
-                }
-                return;
+            const wasSleeping = botSleepMap.get(sleepKey) || false;
+            if (wasSleeping) {
+                botSleepMap.delete(sleepKey);
+                botWakeTimeMap.set(sleepKey, Math.floor(Date.now() / 1000));
             }
 
-            botSleepMap.set(myNumber, false);
-            botWakeTimeMap.set(myNumber, Math.floor(Date.now() / 1000));
             await respondWithStrictTiming('⚡', async () => {
-                await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
+                await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في هذا الجروب وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
             });
             return;
         }
+
+        // =========================================================================
+        // 🚪 [أمر خروج البوت من الجروب (اخرج [الاسم] / اخرج / غادر)]
+        // =========================================================================
+        if (isRealGroup) {
+            let specifiedLeaveName = '';
+            let isLeaveCmd = false;
+            const leaveRegex1 = /^(?:اخرج|غادر|خروج)(?:\s+(?:يا\s+)?(.+))?$/i;
+            const leaveRegex2 = /^(?:يا\s+)?(.+?)\s+(?:اخرج|غادر|خروج)$/i;
+
+            let matchL1 = normalizedBody.match(leaveRegex1);
+            let matchL2 = normalizedBody.match(leaveRegex2);
+
+            if (matchL1) {
+                isLeaveCmd = true;
+                if (matchL1[1]) specifiedLeaveName = normalizeArabic(matchL1[1].replace(/^يا\s+/, '').trim().toLowerCase());
+            } else if (matchL2) {
+                isLeaveCmd = true;
+                if (matchL2[1]) specifiedLeaveName = normalizeArabic(matchL2[1].replace(/^يا\s+/, '').trim().toLowerCase());
+            }
+
+            if (isLeaveCmd) {
+                if (!isBotOwner) return;
+
+                const matchesThisBot = (
+                    specifiedLeaveName === normalizedBotName || 
+                    (normalizedCallName && specifiedLeaveName === normalizedCallName) || 
+                    specifiedLeaveName === 'الكل' ||
+                    (!currentConn.isSubBot && (specifiedLeaveName === 'شادو' || specifiedLeaveName === 'الرئيسي'))
+                );
+
+                // مالك البوت الفرعي
+                if (isSubBotAdmin && !isAbsoluteOwner) {
+                    if (specifiedLeaveName && !matchesThisBot) return;
+
+                    await respondWithStrictTiming('👋', async () => {
+                        await currentConn.sendMessage(from, { text: `👋 *بأمر من الحج المالك.. جاري مغادرة بوت (${botName}) للمجموعة الآن! في رعاية الله.* 🤖✨` }, { quoted: mek });
+                    });
+                    setTimeout(async () => {
+                        try { await currentConn.groupLeave(from); } catch (e) {}
+                    }, 2000);
+                    return;
+                }
+
+                // الحج شادو الأصلي
+                if (isAbsoluteOwner) {
+                    if (specifiedLeaveName) {
+                        if (!matchesThisBot) return;
+
+                        await respondWithStrictTiming('👋', async () => {
+                            await currentConn.sendMessage(from, { text: `👋 *أمرك يا حج شادو.. جاري مغادرة بوت (${botName}) للمجموعة فوراً! في رعاية الله.* 🤖✨` }, { quoted: mek });
+                        });
+                        setTimeout(async () => {
+                            try { await currentConn.groupLeave(from); } catch (e) {}
+                        }, 2000);
+                        return;
+                    } else {
+                        let botsInRoom = [];
+                        try {
+                            const groupMeta = await currentConn.groupMetadata(from).catch(() => null);
+                            if (groupMeta && groupMeta.participants) {
+                                const partNums = groupMeta.participants.map(p => p.id.split('@')[0].split(':')[0]);
+                                const mainPhone = '201129249396';
+                                if (partNums.includes(mainPhone) || partNums.includes(myNumber)) {
+                                    botsInRoom.push({ name: 'شادو (البوت الرئيسي)', call: 'شادو', num: mainPhone });
+                                }
+                                const registry = loadSubBotsRegistry();
+                                for (let p in registry) {
+                                    if (partNums.includes(p) && p !== mainPhone) {
+                                        botsInRoom.push({ 
+                                            name: registry[p].botName || 'بوت فرعي', 
+                                            call: registry[p].callName || registry[p].botName || p, 
+                                            num: p 
+                                        });
+                                    }
+                                }
+                            }
+                        } catch (_) {}
+
+                        if (botsInRoom.length > 1) {
+                            const isPrimary = !currentConn.isSubBot || myNumber === '201129249396';
+                            if (isPrimary) {
+                                await respondWithStrictTiming('❓', async () => {
+                                    let listBots = botsInRoom.map((b, i) => `${i + 1}️⃣ *${b.name}* (اسم النداء: \`${b.call}\`)`).join('\n');
+                                    const askMsg = 
+                                        `❓ *عايز تخرج أنهو بوت يا حج شادو؟* 🤖🚪\n\n` +
+                                        `📍 *البوتات الموجودة في الروم:* \n${listBots}\n\n` +
+                                        `💡 *لتحديد البوت المطلوب، اكتب:*\n*(اخرج [اسم البوت أو اسم النداء])*\nمثال:\n` +
+                                        `• \`اخرج شادو\`\n` +
+                                        `• \`اخرج ${botsInRoom[1]?.call || 'اسم النداء'}\``;
+                                    await currentConn.sendMessage(from, { text: askMsg }, { quoted: mek });
+                                });
+                            }
+                            return;
+                        }
+
+                        // بوت واحد فقط في الروم
+                        await respondWithStrictTiming('👋', async () => {
+                            await currentConn.sendMessage(from, { text: `👋 *أمرك يا حج شادو.. جاري مغادرة بوت (${botName}) للمجموعة الآن! في رعاية الله.* 🤖✨` }, { quoted: mek });
+                        });
+                        setTimeout(async () => {
+                            try { await currentConn.groupLeave(from); } catch (e) {}
+                        }, 2000);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 🛡️ تشغيل ملف الإدارة للخاص والجروبات
+        let handledByAdmin = false;
+        if (datelsHandler && typeof datelsHandler.before === 'function') {
+            handledByAdmin = await datelsHandler.before(mek, currentConn);
+        } else if (datelsHandler?.default && typeof datelsHandler.default.before === 'function') {
+            handledByAdmin = await datelsHandler.default.before(mek, currentConn);
+        }
+        if (handledByAdmin) return;
+        
+        const now = Date.now();
 
         // =========================================================================
         // 🤖 [نظام التنصيب التفاعلي للبوتات الفرعية (Sub-Bots / JadiBot)]
@@ -1674,7 +1879,7 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        if (normalizedBody === botName.toLowerCase() || normalizedBody.startsWith(botName.toLowerCase() + ' ')) {
+        if (normalizedBody === botName.toLowerCase() || (normalizedCallName && normalizedBody === normalizedCallName)) {
             await respondWithStrictTiming('✨', async () => {
                 await currentConn.sendMessage(from, { text: 'تحت امرك يا فنان اتفضل يا حبيبي اامر❤️' }, { quoted: mek });
             });

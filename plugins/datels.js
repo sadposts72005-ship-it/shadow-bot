@@ -966,32 +966,42 @@ const datelsHandler = {
             const callName = currentConn.callName || currentConn.subBotConfig?.callName || '';
             const normalizedCallName = normalizeArabic((callName || '').toLowerCase().trim());
 
-            const isLeaveMatch = isGroup && (
-                normalizedBody === 'خروج' || 
-                normalizedBody === 'غادر' || 
-                normalizedBody === 'اخرج' || 
-                normalizedBody === 'غادر الجروب' ||
-                normalizedBody.startsWith('اخرج ') ||
-                normalizedBody.startsWith('غادر ') ||
-                normalizedBody.startsWith('خروج ')
-            );
+            let specifiedName = '';
+            let isLeaveMatch = false;
+
+            if (isGroup) {
+                const leaveRegex1 = /^(?:اخرج|غادر|خروج)(?:\s+(?:يا\s+)?(.+))?$/i;
+                const leaveRegex2 = /^(?:يا\s+)?(.+?)\s+(?:اخرج|غادر|خروج)$/i;
+
+                let matchL1 = normalizedBody.match(leaveRegex1);
+                let matchL2 = normalizedBody.match(leaveRegex2);
+
+                if (matchL1) {
+                    isLeaveMatch = true;
+                    if (matchL1[1]) specifiedName = normalizeArabic(matchL1[1].replace(/^يا\s+/, '').trim().toLowerCase());
+                } else if (matchL2) {
+                    isLeaveMatch = true;
+                    if (matchL2[1]) specifiedName = normalizeArabic(matchL2[1].replace(/^يا\s+/, '').trim().toLowerCase());
+                }
+            }
 
             if (isLeaveMatch) {
-                // استخراج الاسم المحدد إن وُجد (مثلاً: اخرج شادو، اخرج البرنس)
-                let specifiedName = '';
-                if (normalizedBody.startsWith('اخرج ')) specifiedName = normalizedBody.replace(/^اخرج\s+/, '').trim();
-                else if (normalizedBody.startsWith('غادر ')) specifiedName = normalizedBody.replace(/^غادر\s+/, '').trim();
-                else if (normalizedBody.startsWith('خروج ')) specifiedName = normalizedBody.replace(/^خروج\s+/, '').trim();
-
                 // إذا كتب الأمر شخص ليس مالك هذا البوت وليس الحج شادو: صمت تام لتفادي السبام
                 if (!isBotOwner) {
                     return true;
                 }
 
+                const matchesThisBot = (
+                    specifiedName === normalizedBotName || 
+                    (normalizedCallName && specifiedName === normalizedCallName) || 
+                    specifiedName === 'الكل' ||
+                    (!currentConn.isSubBot && (specifiedName === 'شادو' || specifiedName === 'الرئيسي'))
+                );
+
                 // لو المُرسل هو مالك البوت الفرعي (isSubBotAdmin وليس شادو):
                 if (isSubBotAdmin && !isAbsoluteOwner) {
                     // مالك البوت الفرعي يتحكم فقط ببوته الخاص
-                    if (specifiedName && specifiedName !== normalizedBotName && specifiedName !== normalizedCallName) {
+                    if (specifiedName && !matchesThisBot) {
                         return true;
                     }
                     await handleCommandTiming('👋');
@@ -1005,8 +1015,7 @@ const datelsHandler = {
                 // لو المُرسل هو الحج الأصلي شادو (isAbsoluteOwner):
                 if (isAbsoluteOwner) {
                     if (specifiedName) {
-                        // شادو حدد اسم بوت معين (مثلاً: اخرج شادو أو اخرج سوسو)
-                        const matchesThisBot = specifiedName === normalizedBotName || (normalizedCallName && specifiedName === normalizedCallName) || specifiedName === 'الكل';
+                        // شادو حدد اسم بوت معين (مثلاً: اخرج شادو أو اخرج زيزو أو اخرج يا زيزو)
                         if (!matchesThisBot) {
                             // هذا البوت ليس هو المطلوب، يصمت تماماً
                             return true;

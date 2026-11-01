@@ -26,10 +26,24 @@ export default {
             return true;
         }
 
-        // 🤖 4. نداء البوت (معدل ليقبل اسم البوت الحالي ديناميكياً)
-        const currentName = (botName || currentConn.botName || 'شادو').toLowerCase();
-        if (normalizedBody === 'شادو' || normalizedBody === 'بوت' || normalizedBody === currentName) {
-            await currentConn.sendMessage(from, { text: `تحت أمرك يا فنان أنا ${botName || currentConn.botName || 'شادو'} اتفضل أأمرني ❤️` }, { quoted: mek });
+        // 🤖 4. نداء البوت (معدل ليقبل اسم المناداة والاسم الرسمي ديناميكياً)
+        const currentName = (botName || currentConn.botName || 'شادو').toLowerCase().trim();
+        const callName = (currentConn.callName || currentConn.subBotConfig?.callName || '').toLowerCase().trim();
+        const normCall = callName;
+        const normName = currentName;
+
+        const isCallingThisBot = (
+            normalizedBody === 'شادو' || 
+            normalizedBody === 'يا شادو' ||
+            normalizedBody === 'بوت' || 
+            normalizedBody === 'يا بوت' ||
+            normalizedBody === normName || 
+            normalizedBody === 'يا ' + normName ||
+            (normCall && (normalizedBody === normCall || normalizedBody === 'يا ' + normCall))
+        );
+
+        if (isCallingThisBot) {
+            await currentConn.sendMessage(from, { text: `تحت امرك يا فنان اتفضل يا حبيبي اامر❤️` }, { quoted: mek });
             return true;
         }
 
