@@ -33,15 +33,18 @@ export default {
         const normName = currentName;
 
         const isCallingThisBot = (
-            normalizedBody === 'شادو' || 
-            normalizedBody === 'يا شادو' ||
-            normalizedBody === normName || 
-            normalizedBody === 'يا ' + normName ||
-            (normCall && (normalizedBody === normCall || normalizedBody === 'يا ' + normCall))
+            (normalizedBody !== 'بوت' && normalizedBody !== 'يا بوت') &&
+            (
+                (!currentConn.isSubBot && (normalizedBody === 'شادو' || normalizedBody === 'يا شادو')) ||
+                (normName && normName !== 'بوت' && (normalizedBody === normName || normalizedBody === 'يا ' + normName)) ||
+                (normCall && normCall !== 'بوت' && (normalizedBody === normCall || normalizedBody === 'يا ' + normCall))
+            )
         );
 
         if (isCallingThisBot) {
-            await currentConn.sendMessage(from, { text: `تحت امرك يا فنان اتفضل يا حبيبي اامر❤️` }, { quoted: mek });
+            const isFemale = (currentConn.gender === 'female' || currentConn.subBotConfig?.gender === 'female');
+            const fananTitle = isFemale ? 'يا فنانة اتفضلي يا حبيبتي اؤمري❤️' : 'يا فنان اتفضل يا حبيبي اامر❤️';
+            await currentConn.sendMessage(from, { text: `تحت امرك ${fananTitle}` }, { quoted: mek });
             return true;
         }
 
@@ -51,11 +54,25 @@ export default {
             return true;
         }
 
-        // 🤬 6. فلتر الشتايم وبدء التحقيق
-        if (textLower.includes('كسمك') || textLower.includes('خول') || textLower.includes('عرص') || textLower.includes('متناك') || textLower.includes('بضان')) {
-            state[sender] = 'waiting_for_shatema_clarification';
-            await currentConn.sendMessage(from, { text: 'انا ولا مين؟ 🤨' }, { quoted: mek });
-            return true;
+        // 🤬 6. فلتر الشتايم والردود (محترم vs قليل الأدب)
+        const isBad = (currentConn.personality === 'bad' || currentConn.subBotConfig?.personality === 'bad');
+        if (textLower.includes('كسمك') || textLower.includes('خول') || textLower.includes('عرص') || textLower.includes('متناك') || textLower.includes('بضان') || textLower.includes('شرموط') || textLower.includes('منيوك') || textLower.includes('قحبة')) {
+            if (isBad) {
+                const savageReplies = [
+                    'كسمك انت يابن المتناكة 🖕🔥',
+                    'غور يا كسمك من هنا يلا بدل ما افشخك 🤬🖕',
+                    'امك عارفة انك خول كده في الشاتات؟ 🖕😂',
+                    'ملكش دعوة بيا يا عيل بضان يلا طير 🖕😏',
+                    'شكلك عايز تتهان وتاخد على قفاك يا ابن الشرموطة 🖕🔥'
+                ];
+                const reply = savageReplies[Math.floor(Math.random() * savageReplies.length)];
+                await currentConn.sendMessage(from, { text: reply }, { quoted: mek });
+                return true;
+            } else {
+                state[sender] = 'waiting_for_shatema_clarification';
+                await currentConn.sendMessage(from, { text: 'انا ولا مين؟ 🤨' }, { quoted: mek });
+                return true;
+            }
         }
 
         return false;

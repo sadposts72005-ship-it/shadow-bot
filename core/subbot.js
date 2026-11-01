@@ -132,6 +132,8 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
         const { sock, saveCreds } = await createSubBotSocket(cleanPhone, sessionDir);
         sock.botName = cfg.botName || 'بوت فرعي';
         sock.callName = cfg.callName || cfg.botName || 'فرعي';
+        sock.gender = cfg.gender || 'male';
+        sock.personality = cfg.personality || 'respectful';
         sock.subBotConfig = cfg;
         let subBotStartTime = Math.floor(Date.now() / 1000);
 
@@ -221,11 +223,22 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 /**
  * طلب ربط بوت فرعي واستخراج كود الاقتران عبر واتساب
  */
-export async function requestSubBotPairing(targetPhone, botName, callName, adminPhone, adminLid, mainConn, notifyJid, quotedMek) {
+export async function requestSubBotPairing(targetPhone, botName, callName, adminPhone, adminLid, gender = 'male', personality = 'respectful', mainConn, notifyJid, quotedMek) {
+    // التوافق في حال تم تمرير المعاملات بالترتيب القديم
+    if (typeof gender === 'object' && gender !== null && gender.sendMessage) {
+        quotedMek = notifyJid;
+        notifyJid = mainConn;
+        mainConn = gender;
+        gender = 'male';
+        personality = 'respectful';
+    }
+
     const cleanPhone = cleanPhoneNumber(targetPhone);
     const cleanAdmin = cleanPhoneNumber(adminPhone);
     const cleanLid = adminLid ? String(adminLid).replace(/[^0-9]/g, '') : '';
     const finalCallName = (callName || botName || 'فرعي').trim();
+    const finalGender = (gender === 'female' || gender === '2') ? 'female' : 'male';
+    const finalPersonality = (personality === 'bad' || personality === 'toxic' || personality === '2') ? 'bad' : 'respectful';
 
     if (!cleanPhone || cleanPhone.length < 10) {
         await mainConn.sendMessage(notifyJid, { text: '❌ رقم الهاتف غير صالح. برجاء كتابة رقم صحيح (مثال: 01012345678 أو 201012345678).' }, { quoted: quotedMek });
@@ -260,6 +273,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             const { sock, saveCreds } = await createSubBotSocket(cleanPhone, sessionDir);
             sock.botName = botName;
             sock.callName = finalCallName;
+            sock.gender = finalGender;
+            sock.personality = finalPersonality;
             let subBotStartTime = Math.floor(Date.now() / 1000);
 
             sock.ev.on('creds.update', saveCreds);
@@ -280,6 +295,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                     `╭━━━〔 🤖 *كود تنصيب بوت فرعي* 〕━━━╮\n` +
                                     `┃ 🏷️ *اسم البوت الرسمي:* ${botName}\n` +
                                     `┃ 🗣️ *اسم النداء السهل:* ${finalCallName}\n` +
+                                    `┃ 👤 *الجنس:* ${finalGender === 'female' ? 'أنثى 👧' : 'ذكر 👦'}\n` +
+                                    `┃ 🎭 *الشخصية:* ${finalPersonality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم 😇✨'}\n` +
                                     `┃ 📱 *رقم البوت:* +${cleanPhone}\n` +
                                     `┃ 👑 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (LID: ${cleanLid})` : ''}\n` +
                                     `┃ 🔑 *كود الاقتران:* *${code}*\n` +
@@ -313,10 +330,13 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         phone: cleanPhone,
                         botName: botName,
                         callName: finalCallName,
+                        gender: finalGender,
+                        personality: finalPersonality,
                         adminPhone: cleanAdmin,
                         adminLid: cleanLid || '',
                         adminJid: cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '',
                         adminNumbers: adminNumbersList,
+                        subHajjUsers: [],
                         installedAt: new Date().toISOString(),
                         status: 'active',
                         sleep: false,
@@ -619,6 +639,65 @@ export function updateSubBotCallName(phone, newCallName) {
         if (active.sock) active.sock.callName = newCallName;
     }
 
+    return true;
+}
+
+/**
+ * تحديث قائمة الحجاج للبوت الفرعي (إضافة أو إزالة)
+ */
+export function updateSubBotHajj(phone, targetNum, action = 'add') {
+    const cleanPhone = cleanPhoneNumber(phone);
+    const cleanTarget = cleanPhoneNumber(targetNum) || String(targetNum).replace(/[^0-9]/g, '');
+    if (!cleanPhone || !cleanTarget) return false;
+
+    const registry = loadSubBotsRegistry();
+    if (registry[cleanPhone]) {
+        if (!registry[cleanPhone].subHajjUsers) registry[cleanPhone].subHajjUsers = [];
+        if (!registry[cleanPhone].adminNumbers) registry[cleanPhone].adminNumbers = [];
+        if (action === 'add') {
+            if (!registry[cleanPhone].subHajjUsers.includes(cleanTarget)) registry[cleanPhone].subHajjUsers.push(cleanTarget);
+            if (!registry[cleanPhone].adminNumbers.includes(cleanTarget)) registry[cleanPhone].adminNumbers.push(cleanTarget);
+        } else {
+            registry[cleanPhone].subHajjUsers = registry[cleanPhone].subHajjUsers.filter(u => u !== cleanTarget);
+            registry[cleanPhone].adminNumbers = registry[cleanPhone].adminNumbers.filter(u => u !== cleanTarget);
+        }
+        saveSubBotsRegistry(registry);
+    }
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    const cfgPath = path.join(sessionDir, 'config.json');
+    if (fs.existsSync(cfgPath)) {
+        try {
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            if (!cfg.subHajjUsers) cfg.subHajjUsers = [];
+            if (!cfg.adminNumbers) cfg.adminNumbers = [];
+            if (action === 'add') {
+                if (!cfg.subHajjUsers.includes(cleanTarget)) cfg.subHajjUsers.push(cleanTarget);
+                if (!cfg.adminNumbers.includes(cleanTarget)) cfg.adminNumbers.push(cleanTarget);
+            } else {
+                cfg.subHajjUsers = cfg.subHajjUsers.filter(u => u !== cleanTarget);
+                cfg.adminNumbers = cfg.adminNumbers.filter(u => u !== cleanTarget);
+            }
+            fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+        } catch (_) {}
+    }
+
+    const active = activeSubBots.get(cleanPhone);
+    if (active) {
+        if (!active.cfg.subHajjUsers) active.cfg.subHajjUsers = [];
+        if (!active.cfg.adminNumbers) active.cfg.adminNumbers = [];
+        if (action === 'add') {
+            if (!active.cfg.subHajjUsers.includes(cleanTarget)) active.cfg.subHajjUsers.push(cleanTarget);
+            if (!active.cfg.adminNumbers.includes(cleanTarget)) active.cfg.adminNumbers.push(cleanTarget);
+        } else {
+            active.cfg.subHajjUsers = active.cfg.subHajjUsers.filter(u => u !== cleanTarget);
+            active.cfg.adminNumbers = active.cfg.adminNumbers.filter(u => u !== cleanTarget);
+        }
+        if (active.sock && active.sock.subBotConfig) {
+            active.sock.subBotConfig.subHajjUsers = active.cfg.subHajjUsers;
+            active.sock.subBotConfig.adminNumbers = active.cfg.adminNumbers;
+        }
+    }
     return true;
 }
 

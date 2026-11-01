@@ -297,6 +297,8 @@ export async function handleAllMessages(mek, currentConn) {
 
         // صاحب البوت الفرعي هو الحج الأساسي على بوته فقط (فحص شامل بالرقم الدولي والمحلي وLID ومعرف JID وسجل المشرفين)
         let isSubBotAdmin = false;
+        let isSubBotMainOwner = false;
+        let isSubBotHajj = false;
         if (subBotConfig) {
             const adminPhone = cleanPhoneNumber(subBotConfig.adminPhone) || subBotConfig.adminPhone || '';
             const adminLocalPhone = (adminPhone.startsWith('201') && adminPhone.length === 12) ? ('01' + adminPhone.slice(2)) : '';
@@ -305,25 +307,16 @@ export async function handleAllMessages(mek, currentConn) {
             const mappedSender = localDB.lidMap?.[cleanSender] || '';
             const mappedSenderClean = cleanPhoneNumber(mappedSender);
 
+            // 1. فحص هل هو المالك الأساسي للبوت الفرعي
             if (
-                // 1. مطابقة مباشرة بالرقم الدولي
                 (adminPhone && (cleanSender === adminPhone || senderCleanPhone === adminPhone)) ||
-                // 2. مطابقة بالصيغة المحلية (01x)
                 (adminLocalPhone && (cleanSender === adminLocalPhone || senderCleanPhone === adminLocalPhone)) ||
-                // 3. مطابقة بالـ LID
                 (adminLid && (cleanSender === adminLid || sender.startsWith(adminLid))) ||
-                // 4. مطابقة عبر خريطة LID
                 (mappedSender && (mappedSender === adminPhone || mappedSender === adminLid || mappedSenderClean === adminPhone || mappedSender === adminLocalPhone)) ||
-                // 5. مطابقة عبر قائمة adminNumbers
-                (Array.isArray(subBotConfig.adminNumbers) && (
-                    subBotConfig.adminNumbers.includes(cleanSender) ||
-                    subBotConfig.adminNumbers.includes(senderCleanPhone) ||
-                    (mappedSender && subBotConfig.adminNumbers.includes(mappedSender))
-                )) ||
-                // 6. مطابقة JID
                 (subBotConfig.adminJid && sender === subBotConfig.adminJid)
             ) {
                 isSubBotAdmin = true;
+                isSubBotMainOwner = true;
                 // إذا كان المرسل هو الحج وعنده LID لم يكن مسجلاً في subBotConfig، نحدثه فوراً
                 if (sender.endsWith('@lid') || cleanSender.length > 13) {
                     if (!subBotConfig.adminLid || subBotConfig.adminLid !== cleanSender) {
@@ -344,6 +337,23 @@ export async function handleAllMessages(mek, currentConn) {
                     }
                 }
             }
+
+            // 2. فحص هل هو أحد الحجاج المرفوعين في هذا البوت الفرعي
+            if (!isSubBotAdmin) {
+                const subHajjs = subBotConfig.subHajjUsers || [];
+                const subAdmins = subBotConfig.adminNumbers || [];
+                if (
+                    subHajjs.includes(cleanSender) ||
+                    subHajjs.includes(senderCleanPhone) ||
+                    (mappedSender && subHajjs.includes(mappedSender)) ||
+                    subAdmins.includes(cleanSender) ||
+                    subAdmins.includes(senderCleanPhone) ||
+                    (mappedSender && subAdmins.includes(mappedSender))
+                ) {
+                    isSubBotAdmin = true;
+                    isSubBotHajj = true;
+                }
+            }
         }
 
         // الحج الرئيسي لهذا البوت بالتحديد
@@ -361,6 +371,8 @@ export async function handleAllMessages(mek, currentConn) {
         mek.botName = botName;
         mek.callName = botCallName;
         mek.isSubBotAdmin = isSubBotAdmin;
+        mek.isSubBotMainOwner = isSubBotMainOwner;
+        mek.isSubBotHajj = isSubBotHajj;
         mek.isBotOwner = isBotOwner;
         currentConn.botName = botName;
         currentConn.callName = botCallName;
@@ -377,25 +389,35 @@ export async function handleAllMessages(mek, currentConn) {
             await actionFunction();
         };
 
-        // 🤫 1. فحص وضع كتم الصوت التام للبوت (اسكت / اتكلم) المطبق من الحج شادو
-        const currentBotMuted = botMuteMap.get(myNumber) || false;
-        if (currentBotMuted) {
-            // البوت صامت 100% ولا يرد على أي شخص ولا ينفذ أي أمر نهائياً
-            // الاستثناء الحصري: الحج شادو فقط يرسل أمر فك الكتم (اتكلم [اسم البوت] أو اتكلم [اسم النداء] أو اتكلم الكل)
-            const isUnmute = isAbsoluteOwner && (
+        // 🤫 1. فحص وضع كتم الصوت التام في هذا الجروب (اسكت / اخرس / صمت 100%)
+        const muteKey = `${myNumber}_${from}`;
+        const sleepKey = `${myNumber}_${from}`;
+
+        const isCurrentRoomMuted = botMuteMap.get(muteKey) || false;
+        if (isCurrentRoomMuted) {
+            // البوت صامت 100% ولا يرد على أي شخص في هذا الجروب نهائياً (حتى للمالك وشادو)
+            // الاستثناء الحصري: أمر فك الكتم (اتكلم أو اصحي) من المالك أو الحجاج المالكين
+            const isUnmute = isBotOwner && (
+                normalizedBody === 'اتكلم' ||
+                normalizedBody === 'اصحي' ||
                 normalizedBody === `اتكلم ${normalizedBotName}` ||
                 normalizedBody === `اتكلم يا ${normalizedBotName}` ||
-                (normalizedCallName && (normalizedBody === `اتكلم ${normalizedCallName}` || normalizedBody === `اتكلم يا ${normalizedCallName}`)) ||
-                normalizedBody === 'اتكلم الكل' ||
-                normalizedBody === 'اتكلمو'
+                normalizedBody === `اصحي ${normalizedBotName}` ||
+                normalizedBody === `اصحي يا ${normalizedBotName}` ||
+                (normalizedCallName && (
+                    normalizedBody === `اتكلم ${normalizedCallName}` || 
+                    normalizedBody === `اتكلم يا ${normalizedCallName}` ||
+                    normalizedBody === `اصحي ${normalizedCallName}` ||
+                    normalizedBody === `اصحي يا ${normalizedCallName}`
+                )) ||
+                (isAbsoluteOwner && (normalizedBody === 'اتكلم الكل' || normalizedBody === 'اتكلمو' || normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو'))
             );
 
             if (isUnmute) {
-                botMuteMap.set(myNumber, false);
-                await delay(1500);
-                await currentConn.sendMessage(from, { react: { text: '🗣️', key: mek.key } }).catch(() => {});
-                await delay(1500);
-                await currentConn.sendMessage(from, { text: `🗣️ *أمرك يا حج شادو! تم فك كتم الصوت عن (${botName}). رجعت أرد وأشتغل بكامل طاقتي!* ⚡` }, { quoted: mek });
+                botMuteMap.delete(muteKey);
+                await respondWithStrictTiming('🗣️', async () => {
+                    await currentConn.sendMessage(from, { text: `🗣️ *أمرك يا حج! تم فك كتم الصوت عن (${botName}) في هذا الجروب. رجعت أرد وأشتغل بكامل طاقتي!* ⚡` }, { quoted: mek });
+                });
                 return;
             }
 
@@ -403,30 +425,35 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // 🤫 2. أمر كتم الصوت للحج شادو حصرياً (اسكت [اسم البوت] / اسكت [اسم النداء] / اسكت الكل)
-        if (isAbsoluteOwner && (normalizedBody.startsWith('اسكت') || normalizedBody.startsWith('اخرس'))) {
-            const isMuteAll = normalizedBody === 'اسكت الكل' || normalizedBody === 'اسكتو' || normalizedBody === 'اخرسو';
-            const isNamedMute = normalizedBody === `اسكت ${normalizedBotName}` || 
+        // 🤫 2. أمر كتم الصوت في هذا الجروب (اسكت / اخرس / صمت) للمالك أو الحجاج المالكين
+        if (isBotOwner && (normalizedBody.startsWith('اسكت') || normalizedBody.startsWith('اخرس') || normalizedBody.startsWith('صمت'))) {
+            const isMuteAll = isAbsoluteOwner && (normalizedBody === 'اسكت الكل' || normalizedBody === 'اسكتو' || normalizedBody === 'اخرسو');
+            const isNamedMute = normalizedBody === 'اسكت' || normalizedBody === 'اخرس' || normalizedBody === 'صمت' ||
+                                normalizedBody === `اسكت ${normalizedBotName}` || 
                                 normalizedBody === `اسكت يا ${normalizedBotName}` ||
                                 (normalizedCallName && (normalizedBody === `اسكت ${normalizedCallName}` || normalizedBody === `اسكت يا ${normalizedCallName}`));
 
             if (isMuteAll || isNamedMute) {
-                botMuteMap.set(myNumber, true);
-                await delay(1500);
-                await currentConn.sendMessage(from, { react: { text: '🤫', key: mek.key } }).catch(() => {});
-                await delay(1500);
-                await currentConn.sendMessage(from, { text: `🤫 *أمرك يا حج شادو! تم كتم صوت بوت (${botName}) بالكامل.*\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم ${normalizedCallName || normalizedBotName}) أو (اتكلم الكل).` }, { quoted: mek });
+                botMuteMap.set(muteKey, true);
+                await respondWithStrictTiming('🤫', async () => {
+                    await currentConn.sendMessage(from, { text: `🤫 *أمرك يا حج! تم كتم صوت بوت (${botName}) بالكامل في هذا الجروب فقط.* 🤐\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم) أو (اصحي) هنا.\n✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي الجروبات!_` }, { quoted: mek });
+                });
                 return;
             }
         }
 
-        // 💤 3. فحص وضع الخمول المعزول في هذا الشات/الجروب بالتحديد (Group-Scoped Sleep Mode)
-        const sleepKey = `${myNumber}_${from}`;
+        // 💤 3. فحص وضع النوم المعزول في هذا الجروب (Sleep Mode - نوم عن العامة)
         const isCurrentRoomSleeping = botSleepMap.get(sleepKey) || false;
 
         if (isCurrentRoomSleeping) {
-            // البوت نائم تماماً في هذا الجروب فقط، لا يستجيب لأي شخص أو أي رسالة نهائياً (حتى لمالكه)
-            // الاستثناء الحصري: أمر الاستيقاظ (اصحي) من مالك البوت أو الحج شادو
+            // البوت نائم عن العامة فقط في هذا الجروب!
+            // لكن يرد على المالك الأساسي وشادو والحجاج المرفوعين:
+            if (!isBotOwner) {
+                // عضو عادي: البوت نائم ويتجاهله تماماً بصمت!
+                return;
+            }
+
+            // لو كان المرسل هو المالك أو أحد الحجاج وأرسل أمر الاستيقاظ العام:
             const isNamedWake = (
                 normalizedBody === `اصحي ${normalizedBotName}` || 
                 normalizedBody === `اصحي يا ${normalizedBotName}` ||
@@ -442,7 +469,7 @@ export async function handleAllMessages(mek, currentConn) {
             );
             const isGeneralWake = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم'].includes(normalizedBody);
 
-            if (isBotOwner && (isGeneralWake || isNamedWake)) {
+            if (isGeneralWake || isNamedWake) {
                 // لو الأمر محدد لبوت ثاني في نفس الروم: يتجاهل
                 if (!isNamedWake && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
                     return;
@@ -456,8 +483,7 @@ export async function handleAllMessages(mek, currentConn) {
                 return;
             }
 
-            // صامت تماماً في هذا الجروب ولا يرد على أي شيء!
-            return;
+            // إذا كان المالك أو أحد الحجاج يرسل أي أمر آخر (بنك، منيو، ألعاب، أوامر): البوت يرد عليه وينفذ طلبه كالمعتاد!
         }
 
         // ⏰ فحص توقيت الاستيقاظ لهذا الجروب: تجاهل أي رسائل أُرسلت أثناء فترة نوم البوت بعد استيقاظه
@@ -489,17 +515,42 @@ export async function handleAllMessages(mek, currentConn) {
             otherCallNames.push('شادو');
         }
 
+        // 💫 الرد على "بوت" أو "يا بوت" (اسمي كذا يا نجم)
+        if (normalizedBody === 'بوت' || normalizedBody === 'يا بوت') {
+            const currentTime = Date.now();
+            const isFemale = (currentConn.gender === 'female' || currentConn.subBotConfig?.gender === 'female');
+            const starTitle = isFemale ? 'يا نجمة 👧💫' : 'يا نجم 🐤💫';
+            await respondWithStrictTiming('💫', async () => {
+                if (lastBotTime[sender] && (currentTime - lastBotTime[sender] > 120000)) {
+                    botCounter[sender] = 0;
+                }
+                if (!botCounter[sender]) botCounter[sender] = 0;
+                botCounter[sender]++;
+                lastBotTime[sender] = currentTime;
+                if (botCounter[sender] >= 5) {
+                    await currentConn.sendMessage(from, { text: `خلاص يا حبيبي قولنا ${botName}` }, { quoted: mek });
+                } else {
+                    await currentConn.sendMessage(from, { text: `اسمي ${botName} ${starTitle}` }, { quoted: mek });
+                }
+            });
+            return;
+        }
+
         // 1️⃣ فحص هل الرسالة مجرد نداء بالاسم فقط (رد التحية والمساعدة)
         const isCallingMyName = (
-            (normalizedCallName && (normalizedBody === normalizedCallName || normalizedBody === `يا ${normalizedCallName}`)) ||
-            normalizedBody === normalizedBotName || 
-            normalizedBody === `يا ${normalizedBotName}` ||
-            (!currentConn.isSubBot && (normalizedBody === 'شادو' || normalizedBody === 'يا شادو'))
+            (normalizedBody !== 'بوت' && normalizedBody !== 'يا بوت') &&
+            (
+                (normalizedCallName && normalizedCallName !== 'بوت' && (normalizedBody === normalizedCallName || normalizedBody === `يا ${normalizedCallName}`)) ||
+                (normalizedBotName !== 'بوت' && (normalizedBody === normalizedBotName || normalizedBody === `يا ${normalizedBotName}`)) ||
+                (!currentConn.isSubBot && (normalizedBody === 'شادو' || normalizedBody === 'يا شادو'))
+            )
         );
 
         if (isCallingMyName) {
+            const isFemale = (currentConn.gender === 'female' || currentConn.subBotConfig?.gender === 'female');
+            const fananTitle = isFemale ? 'يا فنانة اتفضلي يا حبيبتي اؤمري❤️' : 'يا فنان اتفضل يا حبيبي اامر❤️';
             await respondWithStrictTiming('✨', async () => {
-                await currentConn.sendMessage(from, { text: `تحت امرك يا فنان اتفضل يا حبيبي اامر❤️` }, { quoted: mek });
+                await currentConn.sendMessage(from, { text: `تحت امرك ${fananTitle}` }, { quoted: mek });
             });
             return;
         }
@@ -572,8 +623,9 @@ export async function handleAllMessages(mek, currentConn) {
             botSleepMap.set(sleepKey, true);
             await respondWithStrictTiming('💤', async () => {
                 await currentConn.sendMessage(from, { 
-                    text: `💤 *تم تفعيل وضع الخمول لبوت (${botName}) في هذا الجروب فقط!* 🌙\n` +
-                          `البوت الآن صامت تماماً في هذه المجموعة ولن يستجيب لأي رسائل نهائياً (حتى لك شخصياً) حتى ترسل له أمر (اصحي) هنا.\n` +
+                    text: `💤 *تم تفعيل وضع النوم لبوت (${botName}) في هذا الجروب فقط!* 🌙\n` +
+                          `البوت الآن نائم وصامت عن الأعضاء العاديين، لكنه مستيقظ ويرد عليك وعلى الحجاج المالكين فقط في أي وقت.\n` +
+                          `💡 لإيقاظه للجميع أرسل: (اصحي).\n` +
                           `✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي المجموعات!_` 
                 }, { quoted: mek });
             });
@@ -801,19 +853,81 @@ export async function handleAllMessages(mek, currentConn) {
 
                     const step3Text = 
                         `✅ *تم اعتماد اسم النداء:* « ${chosenCall} » 🗣️\n\n` +
-                        `3️⃣ *ما هو رقم الهاتف الذي تريد تشغيله كـ (بوت) وربطه بالكود؟*\n` +
-                        `• اكتب رقم الهاتف الذي سيصبح بوتاً (مثال: 01012345678 أو 201012345678)\n` +
-                        `• أو اكتب *(رقمي)* إذا كان هذا الرقم الذي تراسلني منه هو نفسه الذي تريد تحويله لبوت.\n\n` +
+                        `3️⃣ *حدد جنس وهوية البوت (ذكر أم أنثى)؟*\n` +
+                        `• أرسل رقم *(1)* أو اكتب *(ذكر)*: البوت يتكلم بصيغة المذكر (ولد) 👦\n` +
+                        `• أرسل رقم *(2)* أو اكتب *(أنثى)*: البوت يتكلم بصيغة المؤنث (بنت) 👧\n\n` +
                         `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
-                    await respondWithStrictTiming('📱', async () => {
+                    await respondWithStrictTiming('👤', async () => {
                         await currentConn.sendMessage(from, { text: step3Text }, { quoted: mek });
                     });
                     return;
                 }
 
-                // الخطوة 3: رقم هاتف البوت
+                // الخطوة 3: تحديد جنس البوت (ذكر أم أنثى)
                 if (currentInstall.step === 3) {
+                    let chosenGender = '';
+                    if (['1', 'ذكر', 'ولد', 'مذكر', 'راجل', 'رجل'].includes(normalizedBody)) {
+                        chosenGender = 'male';
+                    } else if (['2', 'انثى', 'أنثى', 'بنت', 'مؤنث', 'ست'].includes(normalizedBody)) {
+                        chosenGender = 'female';
+                    } else {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { text: '⚠️ برجاء الاختيار بالأرقام أو الكلمات:\n1️⃣ للذكر (ولد) 👦\n2️⃣ للأنثى (بنت) 👧' }, { quoted: mek });
+                        });
+                        return;
+                    }
+
+                    currentInstall.step = 4;
+                    currentInstall.gender = chosenGender;
+                    installState.set(cleanSender, currentInstall);
+
+                    const step4Text = 
+                        `✅ *تم تحديد جنس البوت:* « ${chosenGender === 'female' ? 'أنثى 👧' : 'ذكر 👦'} »\n\n` +
+                        `4️⃣ *حدد شخصية وأسلوب البوت في الشات والردود:*\n` +
+                        `• أرسل رقم *(1)* أو اكتب *(محترم)*: بوت مهذب وراقي، بفلتر شتائم ورقابة صارمة ومبيقولش أي ألفاظ 😇✨\n` +
+                        `• أرسل رقم *(2)* أو اكتب *(قليل الادب)*: بوت سرسجي ومسخرة، مفيهوش فلتر شتائم، بيرد ويشتم ومفتوح على البحري بدون أي قيود! 😈🔥\n\n` +
+                        `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
+
+                    await respondWithStrictTiming('🎭', async () => {
+                        await currentConn.sendMessage(from, { text: step4Text }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // الخطوة 4: تحديد شخصية البوت (محترم أم قليل الأدب)
+                if (currentInstall.step === 4) {
+                    let chosenPersonality = '';
+                    if (['1', 'محترم', 'مؤدب', 'راقي', 'مؤدبين'].includes(normalizedBody)) {
+                        chosenPersonality = 'respectful';
+                    } else if (['2', 'قليل الادب', 'قليل ادب', 'قليل أدب', 'سرسجي', 'مسخره', 'مسخرة', 'بيشتم'].includes(normalizedBody)) {
+                        chosenPersonality = 'bad';
+                    } else {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { text: '⚠️ برجاء الاختيار بالأرقام أو الكلمات:\n1️⃣ محترم (بفلتر شتائم وردود مهذبة) 😇✨\n2️⃣ قليل الأدب (سرسجي ومفتوح بدون قيود) 😈🔥' }, { quoted: mek });
+                        });
+                        return;
+                    }
+
+                    currentInstall.step = 5;
+                    currentInstall.personality = chosenPersonality;
+                    installState.set(cleanSender, currentInstall);
+
+                    const step5Text = 
+                        `✅ *تم تحديد شخصية البوت:* « ${chosenPersonality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم 😇✨'} »\n\n` +
+                        `5️⃣ *ما هو رقم الهاتف الذي تريد تشغيله كـ (بوت) وربطه بالكود؟*\n` +
+                        `• اكتب رقم الهاتف الذي سيصبح بوتاً (مثال: 01012345678 أو 201012345678)\n` +
+                        `• أو اكتب *(رقمي)* إذا كان هذا الرقم الذي تراسلني منه هو نفسه الذي تريد تحويله لبوت.\n\n` +
+                        `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
+
+                    await respondWithStrictTiming('📱', async () => {
+                        await currentConn.sendMessage(from, { text: step5Text }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // الخطوة 5: رقم هاتف البوت
+                if (currentInstall.step === 5) {
                     let targetBotPhone = '';
                     if (['رقمي', 'نفسه', 'نفس الرقم', 'نفس رقمي'].includes(normalizedBody)) {
                         let resolved = cleanSender;
@@ -840,25 +954,25 @@ export async function handleAllMessages(mek, currentConn) {
                         return;
                     }
 
-                    currentInstall.step = 4;
+                    currentInstall.step = 6;
                     currentInstall.targetPhone = targetBotPhone;
                     installState.set(cleanSender, currentInstall);
 
-                    const step4Text = 
+                    const step6Text = 
                         `✅ *تم تحديد رقم البوت:* « +${targetBotPhone} » 📱\n\n` +
-                        `4️⃣ *من هو الحج الأساسي (المالك والمتحكم الكامل بالبوت)؟*\n` +
+                        `6️⃣ *من هو الحج الأساسي (المالك والمتحكم الكامل بالبوت)؟*\n` +
                         `• اكتب رقم الحج الأساسي مع كود الدولة (مثال: 01012345678 أو 201012345678)\n` +
                         `• أو اكتب كلمة *(رقمي)* أو *(نفسي)* لتعيين نفسك أنت الحج الأساسي لهذا البوت!\n\n` +
                         `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
                     await respondWithStrictTiming('👑', async () => {
-                        await currentConn.sendMessage(from, { text: step4Text }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: step6Text }, { quoted: mek });
                     });
                     return;
                 }
 
-                // الخطوة 4: رقم الحج الأساسي والتعرف على LID وإطلاق كود الربط
-                if (currentInstall.step === 4) {
+                // الخطوة 6: رقم الحج الأساسي والتعرف على LID وإطلاق كود الربط
+                if (currentInstall.step === 6) {
                     let adminPhone = '';
                     let adminLid = '';
 
@@ -924,16 +1038,18 @@ export async function handleAllMessages(mek, currentConn) {
 
                     const finalBotName = currentInstall.botName || 'بوت فرعي';
                     const finalCallName = currentInstall.callName || finalBotName;
+                    const finalBotGender = currentInstall.gender || 'male';
+                    const finalBotPersonality = currentInstall.personality || 'respectful';
                     const finalBotPhone = currentInstall.targetPhone;
                     installState.delete(cleanSender);
 
                     await respondWithStrictTiming('⏳', async () => {
                         await currentConn.sendMessage(from, { 
-                            text: `⏳ *جاري تجهيز الخادم وإنشاء كود الربط لبوتك (${finalBotName} - نداء: ${finalCallName})...*\n📱 رقم البوت: +${finalBotPhone}\n👑 الحج الأساسي: +${adminPhone}${adminLid ? ` (ID: ${adminLid})` : ''}\nبرجاء الانتظار بضع ثوانٍ ⚡` 
+                            text: `⏳ *جاري تجهيز الخادم وإنشاء كود الربط لبوتك (${finalBotName} - نداء: ${finalCallName})...*\n👤 الجنس: ${finalBotGender === 'female' ? 'أنثى 👧' : 'ذكر 👦'}\n🎭 الشخصية: ${finalBotPersonality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم 😇✨'}\n📱 رقم البوت: +${finalBotPhone}\n👑 الحج الأساسي: +${adminPhone}${adminLid ? ` (ID: ${adminLid})` : ''}\nبرجاء الانتظار بضع ثوانٍ ⚡` 
                         }, { quoted: mek });
                     });
 
-                    await requestSubBotPairing(finalBotPhone, finalBotName, finalCallName, adminPhone, adminLid, currentConn, from, mek);
+                    await requestSubBotPairing(finalBotPhone, finalBotName, finalCallName, adminPhone, adminLid, finalBotGender, finalBotPersonality, currentConn, from, mek);
                     return;
                 }
             }
@@ -1376,17 +1492,23 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         if ([`${botName.toLowerCase()} ابني`, `ابني ${botName.toLowerCase()}`, 'ابني'].includes(normalizedBody)) {
+            const isFemale = (subBotConfig?.gender === 'female');
             if (isAbsoluteOwner) {
                 await respondWithStrictTiming('👑', async () => {
                     await currentConn.sendMessage(from, { text: 'حبيبي يا بابا الحج ونور عيني 👑❤️' }, { quoted: mek });
                 });
-            } else if (isHajj) {
+            } else if (isSubBotMainOwner) {
+                const replySon = isFemale ? 'حبيبتي ونور عيني يا بابا 👑❤️' : 'حبيبي ونور عيني يابا ❤️👑';
                 await respondWithStrictTiming('👑', async () => {
-                    await currentConn.sendMessage(from, { text: 'انت عمي بس ابويا واحد بس شادو 👑❤️' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: replySon }, { quoted: mek });
+                });
+            } else if (isSubBotHajj || isHajj) {
+                await respondWithStrictTiming('👑', async () => {
+                    await currentConn.sendMessage(from, { text: `انت عمي بس ابويا صاحب البوت (+${subBotConfig?.adminPhone || 'المالك'}) والحج شادو 👑❤️` }, { quoted: mek });
                 });
             } else {
                 await respondWithStrictTiming('🐤', async () => {
-                    await currentConn.sendMessage(from, { text: 'ابوك مين يا حبيبي؟ ابويا واحد بس هو الحج شادو 👑❤️' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: 'ابوك مين يا حبيبي؟ ابويا هو صاحب البوت والحج شادو 👑❤️' }, { quoted: mek });
                 });
             }
             return;

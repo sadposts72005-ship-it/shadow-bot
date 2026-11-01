@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
-import { loadSubBotsRegistry } from '../core/subbot.js';
+import { loadSubBotsRegistry, updateSubBotHajj } from '../core/subbot.js';
 
 const dbPath = path.join(process.cwd(), 'scramble_db.json');
 
@@ -802,7 +802,8 @@ const datelsHandler = {
                     return true;
                 }
 
-                if (containsBadWords(textToSay)) {
+                const isBadPersonality = (currentConn.personality === 'bad' || currentConn.subBotConfig?.personality === 'bad');
+                if (!isBadPersonality && containsBadWords(textToSay)) {
                     await handleCommandTiming('🐤');
                     await currentConn.sendMessage(from, { text: '❌ لا مقدرش اقول الكلام ده 🐤🚫' }, { quoted: mek });
                     return true;
@@ -1553,9 +1554,10 @@ const datelsHandler = {
 
             // رفع حج أساسي
             if (normalizedBody.startsWith('رفع حج اساسي') || normalizedBody.startsWith('رفع حج أساسي')) {
-                if (!isAbsoluteOwner) {
+                const isSubBotOwner = currentConn.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin);
+                if (!isAbsoluteOwner && !isSubBotOwner) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي صاحب البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي أو مالك البوت الفرعي! 👑🚫' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -1565,6 +1567,23 @@ const datelsHandler = {
                     return true;
                 }
                 let targetNum = getCleanNumber(target);
+
+                // إذا كان مالك البوت الفرعي هو الذي يرفع
+                if (isSubBotOwner && !isAbsoluteOwner) {
+                    const subCfg = currentConn.subBotConfig || {};
+                    const currentSubHajjs = subCfg.subHajjUsers || [];
+                    if (currentSubHajjs.includes(targetNum) || (subCfg.adminNumbers && subCfg.adminNumbers.includes(targetNum))) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: `⚠️ الشخص @${targetNum} مرفوع حج أساسي بالفعل في هذا البوت الفرعي! 👑`, mentions: [target] }, { quoted: mek });
+                        return true;
+                    }
+                    updateSubBotHajj(myBotNum, targetNum, 'add');
+                    await handleCommandTiming('👑');
+                    await currentConn.sendMessage(from, { text: `👑🕋 *أمر ملكي من صاحب البوت الفرعي:* \nتم ترقية @${targetNum} لرتبة [ حج أساسي ] في هذا البوت بنجاح! 👑⚡\nالآن يقدر ينيم ويصحي البوت ويأمره بأي أمر بكامل الصلاحيات!`, mentions: [target] }, { quoted: mek });
+                    return true;
+                }
+
+                // إذا كان الحج شادو الأصلي
                 if (isUserInList(target, localDB.mainHajjUsers)) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { text: `⚠️ الشخص @${targetNum} مرفوع حج أساسي بالفعل بالسستم! 👑`, mentions: [target] }, { quoted: mek });
@@ -1584,6 +1603,9 @@ const datelsHandler = {
                     localDB.users[cleanTargetJid].level = 999;
                 }
                 saveLocalDB(localDB);
+                if (currentConn.isSubBot) {
+                    updateSubBotHajj(myBotNum, targetNum, 'add');
+                }
 
                 await handleCommandTiming('👑');
                 await currentConn.sendMessage(from, { text: `👑🕋 *أمر ملكي مطلق من الحج الأصلي:* \nتم ترقية @${targetNum} مباشرة لرتبة [ حج أساسي ] بالسستم! 👑❤️`, mentions: [target] }, { quoted: mek });
@@ -1592,9 +1614,10 @@ const datelsHandler = {
 
             // تنزيل حج
             if (normalizedBody.startsWith('نزل حج') || normalizedBody.startsWith('تنزيل حج')) {
-                if (!isAbsoluteOwner) {
+                const isSubBotOwner = currentConn.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin);
+                if (!isAbsoluteOwner && !isSubBotOwner) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي صاحب البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي أو مالك البوت الفرعي! 👑🚫' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -1609,6 +1632,22 @@ const datelsHandler = {
                     await currentConn.sendMessage(from, { text: '❌ هوب هوب يا فنان! ده الحج شادو الأصلي صاحب البوت ومحدش يقدر ينزله من رتبته نهائياً! 👑🛡️' }, { quoted: mek });
                     return true;
                 }
+
+                // إذا كان صاحب البوت الفرعي
+                if (isSubBotOwner && !isAbsoluteOwner) {
+                    const subCfg = currentConn.subBotConfig || {};
+                    if (targetNum === subCfg.adminPhone || targetNum === subCfg.adminLid) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ لا يمكنك تنزيل صاحب البوت الأساسي! 👑🚫' }, { quoted: mek });
+                        return true;
+                    }
+                    updateSubBotHajj(myBotNum, targetNum, 'remove');
+                    await handleCommandTiming('📉');
+                    await currentConn.sendMessage(from, { text: `📉 تم تنزيل @${targetNum} من رتبة الحج في هذا البوت بنجاح!`, mentions: [target] }, { quoted: mek });
+                    return true;
+                }
+
+                // إذا كان الحج شادو الأصلي
                 if (!isUserInList(target, localDB.hajjUsers) && !isUserInList(target, localDB.mainHajjUsers)) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { text: `⚠️ الشخص @${targetNum} ليس مسجلاً كحج بالفعل بالسستم! 📉`, mentions: [target] }, { quoted: mek });
@@ -1624,6 +1663,9 @@ const datelsHandler = {
                     return clean !== targetNum && (!mapped || clean !== mapped);
                 });
                 saveLocalDB(localDB);
+                if (currentConn.isSubBot) {
+                    updateSubBotHajj(myBotNum, targetNum, 'remove');
+                }
 
                 await handleCommandTiming('📉');
                 await currentConn.sendMessage(from, { text: `📉 تم تنزيل @${targetNum} من رتبة الحج وسحب صلاحياته بنجاح!`, mentions: [target] }, { quoted: mek });
