@@ -231,26 +231,58 @@ export async function handleAllMessages(mek, currentConn) {
         const ownerAltPhone = '201229409956';
         let localDB = loadLocalDB();
 
-        // 🏷️ استخراج اسم البوت والتحقق من كونه بوتاً فرعياً (Sub-Bot)
+        // 🏷️ استخراج اسم البوت وإعدادات البوت الفرعي (Sub-Bot) بأعلى دقة وشمولية
         let myNumber = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
-        let botName = 'شادو';
-        let subBotConfig = null;
-        if (myNumber) {
-            const subConfigPath = path.join(process.cwd(), 'sessions', 'sub_bots', myNumber, 'config.json');
-            if (fs.existsSync(subConfigPath)) {
-                try {
-                    subBotConfig = JSON.parse(fs.readFileSync(subConfigPath, 'utf8'));
-                    if (subBotConfig.botName) botName = subBotConfig.botName;
-                } catch (e) {}
+        let subBotConfig = currentConn.subBotConfig || null;
+        let botName = currentConn.botName || 'شادو';
+
+        if (!subBotConfig) {
+            const registry = loadSubBotsRegistry();
+            if (myNumber && registry[myNumber]) {
+                subBotConfig = registry[myNumber];
             } else {
-                const configPath = path.join(process.cwd(), 'sessions', `session_${myNumber}`, 'bot_config.json');
-                if (fs.existsSync(configPath)) {
-                    try {
-                        let cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-                        if (cfg.botName) botName = cfg.botName;
-                    } catch (e) {}
+                for (const [p, cfg] of Object.entries(registry)) {
+                    if (p === myNumber || cfg.phone === myNumber || (myNumber && p.endsWith(myNumber))) {
+                        subBotConfig = cfg;
+                        break;
+                    }
                 }
             }
+            if (!subBotConfig && myNumber) {
+                const subConfigPath = path.join(process.cwd(), 'sessions', 'sub_bots', myNumber, 'config.json');
+                if (fs.existsSync(subConfigPath)) {
+                    try { subBotConfig = JSON.parse(fs.readFileSync(subConfigPath, 'utf8')); } catch (_) {}
+                }
+            }
+        }
+
+        if (subBotConfig) {
+            currentConn.subBotConfig = subBotConfig;
+            if (subBotConfig.botName) botName = subBotConfig.botName;
+            if (subBotConfig.callName) currentConn.callName = subBotConfig.callName;
+        }
+
+        // 🔍 تحديث خريطة الـ LID من أعضاء الجروب تلقائياً لتجاوز قيود تشفير واتساب للـ LID
+        if (isRealGroup && (sender.endsWith('@lid') || cleanSender.length > 13)) {
+            try {
+                const groupMeta = await currentConn.groupMetadata(from).catch(() => null);
+                if (groupMeta && groupMeta.participants) {
+                    let mapUpdated = false;
+                    if (!localDB.lidMap) localDB.lidMap = {};
+                    for (const p of groupMeta.participants) {
+                        const pPhone = cleanPhoneNumber(p.id?.split('@')[0]?.split(':')[0]);
+                        const pLid = p.lid?.split('@')[0]?.split(':')[0]?.replace(/[^0-9]/g, '');
+                        if (pPhone && pLid) {
+                            if (localDB.lidMap[pPhone] !== pLid || localDB.lidMap[pLid] !== pPhone) {
+                                localDB.lidMap[pPhone] = pLid;
+                                localDB.lidMap[pLid] = pPhone;
+                                mapUpdated = true;
+                            }
+                        }
+                    }
+                    if (mapUpdated) saveLocalDB(localDB);
+                }
+            } catch (_) {}
         }
 
         // الحج الأصلي شادو (متحكم مطلق في البوت الرئيسي وجميع البوتات الفرعية)
@@ -263,16 +295,56 @@ export async function handleAllMessages(mek, currentConn) {
             mek.key.fromMe
         );
 
-        // صاحب البوت الفرعي هو الحج الأساسي على بوته فقط (فحص شامل بالرقم وLID ومعرف JID وسجل المشرفين)
-        const isSubBotAdmin = Boolean(
-            subBotConfig &&
-            (
-                (subBotConfig.adminPhone && (cleanSender === subBotConfig.adminPhone || localDB.lidMap?.[cleanSender] === subBotConfig.adminPhone)) ||
-                (subBotConfig.adminLid && (cleanSender === subBotConfig.adminLid || localDB.lidMap?.[cleanSender] === subBotConfig.adminLid)) ||
-                (subBotConfig.adminJid && sender === subBotConfig.adminJid) ||
-                (subBotConfig.adminNumbers && subBotConfig.adminNumbers.includes(cleanSender))
-            )
-        );
+        // صاحب البوت الفرعي هو الحج الأساسي على بوته فقط (فحص شامل بالرقم الدولي والمحلي وLID ومعرف JID وسجل المشرفين)
+        let isSubBotAdmin = false;
+        if (subBotConfig) {
+            const adminPhone = cleanPhoneNumber(subBotConfig.adminPhone) || subBotConfig.adminPhone || '';
+            const adminLocalPhone = (adminPhone.startsWith('201') && adminPhone.length === 12) ? ('01' + adminPhone.slice(2)) : '';
+            const adminLid = subBotConfig.adminLid ? String(subBotConfig.adminLid).replace(/[^0-9]/g, '') : '';
+            const senderCleanPhone = cleanPhoneNumber(cleanSender);
+            const mappedSender = localDB.lidMap?.[cleanSender] || '';
+            const mappedSenderClean = cleanPhoneNumber(mappedSender);
+
+            if (
+                // 1. مطابقة مباشرة بالرقم الدولي
+                (adminPhone && (cleanSender === adminPhone || senderCleanPhone === adminPhone)) ||
+                // 2. مطابقة بالصيغة المحلية (01x)
+                (adminLocalPhone && (cleanSender === adminLocalPhone || senderCleanPhone === adminLocalPhone)) ||
+                // 3. مطابقة بالـ LID
+                (adminLid && (cleanSender === adminLid || sender.startsWith(adminLid))) ||
+                // 4. مطابقة عبر خريطة LID
+                (mappedSender && (mappedSender === adminPhone || mappedSender === adminLid || mappedSenderClean === adminPhone || mappedSender === adminLocalPhone)) ||
+                // 5. مطابقة عبر قائمة adminNumbers
+                (Array.isArray(subBotConfig.adminNumbers) && (
+                    subBotConfig.adminNumbers.includes(cleanSender) ||
+                    subBotConfig.adminNumbers.includes(senderCleanPhone) ||
+                    (mappedSender && subBotConfig.adminNumbers.includes(mappedSender))
+                )) ||
+                // 6. مطابقة JID
+                (subBotConfig.adminJid && sender === subBotConfig.adminJid)
+            ) {
+                isSubBotAdmin = true;
+                // إذا كان المرسل هو الحج وعنده LID لم يكن مسجلاً في subBotConfig، نحدثه فوراً
+                if (sender.endsWith('@lid') || cleanSender.length > 13) {
+                    if (!subBotConfig.adminLid || subBotConfig.adminLid !== cleanSender) {
+                        subBotConfig.adminLid = cleanSender;
+                        if (!Array.isArray(subBotConfig.adminNumbers)) subBotConfig.adminNumbers = [];
+                        if (!subBotConfig.adminNumbers.includes(cleanSender)) subBotConfig.adminNumbers.push(cleanSender);
+                        
+                        const subPhone = subBotConfig.phone || myNumber;
+                        const sessionDir = path.join(process.cwd(), 'sessions', 'sub_bots', subPhone);
+                        if (fs.existsSync(sessionDir)) {
+                            try { fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(subBotConfig, null, 2), 'utf8'); } catch (_) {}
+                        }
+                        const reg = loadSubBotsRegistry();
+                        if (reg[subPhone]) {
+                            reg[subPhone].adminLid = cleanSender;
+                            saveSubBotsRegistry(reg);
+                        }
+                    }
+                }
+            }
+        }
 
         // الحج الرئيسي لهذا البوت بالتحديد
         const isBotOwner = isAbsoluteOwner || isSubBotAdmin;
@@ -813,15 +885,35 @@ export async function handleAllMessages(mek, currentConn) {
                     }
 
                     // استخراج الـ LID من واتساب تلقائياً للتحقق من هوية الحج بأي وضع اتصال
+                    if (!adminLid) {
+                        try {
+                            const { USyncQuery, USyncUser } = await import('@whiskeysockets/baileys');
+                            const usyncQuery = new USyncQuery().withLIDProtocol().withContext('background');
+                            usyncQuery.withUser(new USyncUser().withId(`${adminPhone}@s.whatsapp.net`));
+                            const results = await currentConn.executeUSyncQuery(usyncQuery);
+                            if (results && results.list && results.list.length > 0) {
+                                const item = results.list.find(a => !!a.lid);
+                                if (item && item.lid) {
+                                    adminLid = item.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                                }
+                            }
+                        } catch (_) {}
+                    }
+
                     try {
-                        const waCheck = await currentConn.onWhatsApp(`${adminPhone}@s.whatsapp.net`);
-                        if (waCheck && waCheck[0]?.lid) {
-                            adminLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                        if (!adminLid) {
+                            const waCheck = await currentConn.onWhatsApp(`${adminPhone}@s.whatsapp.net`);
+                            if (waCheck && waCheck[0]?.lid) {
+                                adminLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                            }
                         }
                     } catch (_) {}
 
-                    if (!adminLid && (sender.endsWith('@lid') || cleanSender.length > 13)) {
-                        adminLid = cleanSender;
+                    // إذا كان الشخص القائم بالتنصيب كتب رقمه هو، نربط معرفه مباشرة
+                    if (!adminLid && (cleanSender === adminPhone || cleanPhoneNumber(cleanSender) === adminPhone)) {
+                        if (sender.endsWith('@lid') || cleanSender.length > 13) {
+                            adminLid = cleanSender;
+                        }
                     }
 
                     if (adminPhone && adminLid) {

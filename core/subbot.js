@@ -307,7 +307,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     sock.subBotStartTime = subBotStartTime;
                     console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
 
-                    const adminNumbersList = [cleanAdmin, cleanLid].filter(Boolean);
+                    const adminLocal = (cleanAdmin.startsWith('201') && cleanAdmin.length === 12) ? ('01' + cleanAdmin.slice(2)) : '';
+                    const adminNumbersList = [cleanAdmin, adminLocal, `+${cleanAdmin}`, cleanLid, `${cleanAdmin}@s.whatsapp.net`, cleanLid ? `${cleanLid}@lid` : ''].filter(Boolean);
                     const cfgData = {
                         phone: cleanPhone,
                         botName: botName,
