@@ -35,8 +35,6 @@ export default {
         const isCallingThisBot = (
             normalizedBody === 'شادو' || 
             normalizedBody === 'يا شادو' ||
-            normalizedBody === 'بوت' || 
-            normalizedBody === 'يا بوت' ||
             normalizedBody === normName || 
             normalizedBody === 'يا ' + normName ||
             (normCall && (normalizedBody === normCall || normalizedBody === 'يا ' + normCall))

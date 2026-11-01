@@ -422,7 +422,7 @@ export async function handleAllMessages(mek, currentConn) {
             (normalizedCallName && (normalizedBody === normalizedCallName || normalizedBody === `يا ${normalizedCallName}`)) ||
             normalizedBody === normalizedBotName || 
             normalizedBody === `يا ${normalizedBotName}` ||
-            (!currentConn.isSubBot && (normalizedBody === 'شادو' || normalizedBody === 'يا شادو' || normalizedBody === 'بوت' || normalizedBody === 'يا بوت'))
+            (!currentConn.isSubBot && (normalizedBody === 'شادو' || normalizedBody === 'يا شادو'))
         );
 
         if (isCallingMyName) {
