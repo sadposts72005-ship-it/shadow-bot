@@ -1553,21 +1553,26 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         if (isExactShatema && isHajj) {
+            const isFemale = (subBotConfig?.gender === 'female');
+            const reply = isFemale ? 'عشان انت/ي الحج/ة بس.. ف مسموحلك 👑👑❤️' : 'عشان انت الحج بس.. ف مسموحلك 👑👑❤️';
             await respondWithStrictTiming('👑', async () => {
-                await currentConn.sendMessage(from, { text: 'عشان انت الحج بس.. ف مسموحلك 👑👑❤️' }, { quoted: mek });
+                await currentConn.sendMessage(from, { text: reply }, { quoted: mek });
             });
             return;
         }
 
         if (['metzaalsh', 'متزعلش', 'metzaalsh meny', 'خلاص متزعلش'].includes(normalizedBody)) {
+            const isFemale = (subBotConfig?.gender === 'female');
             if (isAbsoluteOwner) {
+                const reply = isFemale ? 'مقدرش ازعل من بابا/ماما الحج/ة حبيب/ة قلبي ❤️👑' : 'مقدرش ازعل من بابا الحج حبيب قلبي ❤️👑';
                 await respondWithStrictTiming('❤️', async () => {
-                    await currentConn.sendMessage(from, { text: 'مقدرش ازعل من بابا الحج حبيب قلبي ❤️👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: reply }, { quoted: mek });
                 });
                 return;
             } else if (isHajj) {
+                const reply = isFemale ? 'مقدرش ازعل من حبايب بابا/ماما الحج/ة شادو ❤️👑' : 'مقدرش ازعل من حبايب بابا الحج شادو ❤️👑';
                 await respondWithStrictTiming('❤️', async () => {
-                    await currentConn.sendMessage(from, { text: 'مقدرش ازعل من حبايب بابا الحج شادو ❤️👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: reply }, { quoted: mek });
                 });
                 return;
             }
@@ -1576,21 +1581,28 @@ export async function handleAllMessages(mek, currentConn) {
         if ([`${botName.toLowerCase()} ابني`, `ابني ${botName.toLowerCase()}`, 'ابني'].includes(normalizedBody)) {
             const isFemale = (subBotConfig?.gender === 'female');
             if (isAbsoluteOwner) {
+                const reply = isFemale ? 'حبيبي/حبيبتي يا بابا/ماما الحج/ة ونور عيني 👑❤️' : 'حبيبي يا بابا الحج ونور عيني 👑❤️';
                 await respondWithStrictTiming('👑', async () => {
-                    await currentConn.sendMessage(from, { text: 'حبيبي يا بابا الحج ونور عيني 👑❤️' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: reply }, { quoted: mek });
                 });
             } else if (isSubBotMainOwner) {
-                const replySon = isFemale ? 'حبيبتي ونور عيني يا بابا 👑❤️' : 'حبيبي ونور عيني يابا ❤️👑';
+                const replySon = isFemale ? 'حبيبي/حبيبتي ونور عيني يابا/ياما 👑❤️' : 'حبيبي ونور عيني يابا ❤️👑';
                 await respondWithStrictTiming('👑', async () => {
                     await currentConn.sendMessage(from, { text: replySon }, { quoted: mek });
                 });
             } else if (isSubBotHajj || isHajj) {
+                const replyUncle = isFemale ? 
+                    `انت/ي عمي/عمتي بس ابويا/امي صاحب/ة البوت (+${subBotConfig?.adminPhone || 'المالك'}) والحج شادو 👑❤️` : 
+                    `انت عمي بس ابويا صاحب البوت (+${subBotConfig?.adminPhone || 'المالك'}) والحج شادو 👑❤️`;
                 await respondWithStrictTiming('👑', async () => {
-                    await currentConn.sendMessage(from, { text: `انت عمي بس ابويا صاحب البوت (+${subBotConfig?.adminPhone || 'المالك'}) والحج شادو 👑❤️` }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: replyUncle }, { quoted: mek });
                 });
             } else {
+                const replyStr = isFemale ? 
+                    'ابوك/امك مين يا حبيبي/حبيبتي؟ ابويا/امي هو صاحب/ة البوت والحج شادو 👑❤️' : 
+                    'ابوك مين يا حبيبي؟ ابويا هو صاحب البوت والحج شادو 👑❤️';
                 await respondWithStrictTiming('🐤', async () => {
-                    await currentConn.sendMessage(from, { text: 'ابوك مين يا حبيبي؟ ابويا هو صاحب البوت والحج شادو 👑❤️' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: replyStr }, { quoted: mek });
                 });
             }
             return;
