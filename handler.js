@@ -1304,7 +1304,7 @@ export async function handleAllMessages(mek, currentConn) {
 
                 // تأخير ثانيتين لضمان وصول الرسالة قبل إغلاق السوكيت
                 setTimeout(async () => {
-                    await deleteSubBotRemote(myNumber);
+                    await deleteSubBotRemote(myNumber, currentConn);
 
                     // إشعار الحج الأصلي إذا كان الحاذف هو صاحب البوت الفرعي
                     if (!isAbsoluteOwner) {
@@ -1331,7 +1331,7 @@ export async function handleAllMessages(mek, currentConn) {
 
             if (userBotPhone) {
                 const targetBotName = registry[userBotPhone]?.botName || userBotPhone;
-                await deleteSubBotRemote(userBotPhone);
+                await deleteSubBotRemote(userBotPhone, currentConn);
                 await respondWithStrictTiming('🗑️', async () => {
                     await currentConn.sendMessage(from, { 
                         text: `🛑 *تم إلغاء تنصيب بوتك الفرعي (${targetBotName}) وحذف ملفاته بالكامل بنجاح!* ✅` 
@@ -1367,7 +1367,7 @@ export async function handleAllMessages(mek, currentConn) {
                 await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم الذي تريد حذفه، مثال:\n(حذف تنصيب 201012345678)' }, { quoted: mek });
                 return;
             }
-            const res = await deleteSubBotRemote(targetPhone);
+            const res = await deleteSubBotRemote(targetPhone, currentConn);
             await respondWithStrictTiming('🗑️', async () => {
                 await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
             });
@@ -1390,25 +1390,45 @@ export async function handleAllMessages(mek, currentConn) {
 
         const isBadPersonality = (currentConn.personality === 'bad' || subBotConfig?.personality === 'bad');
 
-        // 🔥 لو البوت قليل الأدب ووصله أي شتيمة: يشتم ويقصف فوراً بدون تردد وبدون قيود!
-        if (isBadPersonality && isCursePresent) {
-            const savageReplies = [
-                'كسمك انت يابن المتناكة 🖕🔥',
-                'غور يا كسمك من هنا يلا بدل ما افشخك 🤬🖕',
-                'امك عارفة انك خول كده في الشاتات؟ 🖕😂',
-                'ملكش دعوة بيا يا عيل بضان يلا طير 🖕😏',
-                'شكلك عايز تتهان وتاخد على قفاك يا ابن الشرموطة 🖕🔥',
-                'كسمك على كسم اللي يزعلك يا خول 🖕😈',
-                'يلا يا ابن المتناكة من هنا متصدعناش 🖕',
-                'انت مالك يا منيوك هو حد كلمك؟ 🖕🤬',
-                'ياض يا عرص احترم نفسك بدل ما اركبك 🖕🔥',
-                'عيل مهزء وبضان كسم شكلك 🖕🤣'
-            ];
-            const chosenReply = savageReplies[Math.floor(Math.random() * savageReplies.length)];
-            await respondWithStrictTiming('🖕', async () => {
-                await currentConn.sendMessage(from, { text: chosenReply }, { quoted: mek });
-            });
-            return;
+        // استخراج بيانات الرد والمنشن للتأكد هل الشتيمة موجهة للبوت تحديداً أم للأعضاء
+        const ctxInfo = mek.message?.extendedTextMessage?.contextInfo;
+        const quotedParticipant = ctxInfo?.participant || '';
+        const quotedClean = getCleanNumber(quotedParticipant);
+        const isQuotedToMe = (quotedClean && quotedClean === myNumber) || (Boolean(ctxInfo?.quotedMessage) && !isRealGroup);
+        const mentionedJids = ctxInfo?.mentionedJid || [];
+        const isMentioned = mentionedJids.some(jid => getCleanNumber(jid) === myNumber);
+        const hasBotKeyword = normalizedBody.includes('بوت') || 
+            (botName && normalizedBody.includes(botName.toLowerCase())) || 
+            (botCallName && normalizedBody.includes(botCallName.toLowerCase()));
+
+        // الشتيمة موجهة للبوت حصرياً إذا كان ريبلاي على رسالة البوت أو الرسالة فيها كلمة بوت/اسم البوت
+        const isCurseTargetingBot = isCursePresent && (isQuotedToMe || isMentioned || hasBotKeyword || !isRealGroup);
+
+        // 🔥 لو البوت قليل الأدب ووصله شتيمة موجهة له (ريبلاي عليه أو مع كلمة بوت): يشتم ويرد بقسوة!
+        // أما لو الأعضاء بيشتموا بعض أو كلام عام في الجروب: ميردش نهائياً!
+        if (isBadPersonality) {
+            if (isCurseTargetingBot) {
+                const savageReplies = [
+                    'كسمك انت يابن المتناكة 🖕🔥',
+                    'غور يا كسمك من هنا يلا بدل ما افشخك 🤬🖕',
+                    'امك عارفة انك خول كده في الشاتات؟ 🖕😂',
+                    'ملكش دعوة بيا يا عيل بضان يلا طير 🖕😏',
+                    'شكلك عايز تتهان وتاخد على قفاك يا ابن الشرموطة 🖕🔥',
+                    'كسمك على كسم اللي يزعلك يا خول 🖕😈',
+                    'يلا يا ابن المتناكة من هنا متصدعناش 🖕',
+                    'انت مالك يا منيوك هو حد كلمك؟ 🖕🤬',
+                    'ياض يا عرص احترم نفسك بدل ما اركبك 🖕🔥',
+                    'عيل مهزء وبضان كسم شكلك 🖕🤣'
+                ];
+                const chosenReply = savageReplies[Math.floor(Math.random() * savageReplies.length)];
+                await respondWithStrictTiming('🖕', async () => {
+                    await currentConn.sendMessage(from, { text: chosenReply }, { quoted: mek });
+                });
+                return;
+            } else if (isCursePresent) {
+                // الشتيمة مش موجهة للبوت (بين الأعضاء وبعض): يتجاهلها تماماً ولا يرد!
+                return;
+            }
         }
 
         // 🛡️ [نظام الفلتر والتكرار وحظر الكلمات للأعضاء]

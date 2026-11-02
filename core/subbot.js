@@ -600,11 +600,31 @@ export async function startSubBotRemote(phone, mainConn) {
 }
 
 /**
- * حذف بوت فرعي وملفاته نهائياً
+ * حذف بوت فرعي وملفاته نهائياً وإشعار المالك بإعادة التنصيب للتحديثات
  */
-export async function deleteSubBotRemote(phone) {
+export async function deleteSubBotRemote(phone, mainConn = null) {
     const cleanPhone = cleanPhoneNumber(phone);
     const registry = loadSubBotsRegistry();
+    const botData = registry[cleanPhone] || null;
+
+    // إرسال إشعار لصاحب البوت لإبلاغه بالتحديثات وطلب إعادة التنصيب
+    if (mainConn && botData) {
+        const adminNum = botData.adminPhone || '';
+        const targetBotName = botData.botName || 'بوتك الفرعي';
+        const ownerJid = botData.adminJid || (adminNum ? `${cleanPhoneNumber(adminNum)}@s.whatsapp.net` : '');
+        if (ownerJid) {
+            try {
+                const notifyMsg = 
+                    `⚠️ *إشعار هام من إدارة شادو بوت* 👑🤖\n\n` +
+                    `عذراً يا فنان/ة، تم إلغاء تنصيب بوتك (${targetBotName}) مؤقتاً نظراً لإجراء تحديثات وتطويرات جديدة شاملة على السيرفر.\n\n` +
+                    `🔄 *معلش أنصبه تاني* للاستفادة من أحدث المميزات والإصلاحات والتطويرات الجديدة!\n` +
+                    `✨ فقط افتح الشات الخاص مع البوت واكتب *(تنصيب)* واتبع الخطوات البسيطة للربط بكود جديد مجاناً ❤️`;
+                await mainConn.sendMessage(ownerJid, { text: notifyMsg });
+            } catch (err) {
+                console.error(`خطأ في إرسال إشعار الحذف لصاحب البوت (+${adminNum}):`, err?.message || err);
+            }
+        }
+    }
 
     const active = activeSubBots.get(cleanPhone);
     if (active && active.sock) {
@@ -626,7 +646,7 @@ export async function deleteSubBotRemote(phone) {
         }
     } catch (_) {}
 
-    return { success: true, message: `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته بالكامل بنجاح!` };
+    return { success: true, message: `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته بنجاح وإشعار المالك بالتحديثات!` };
 }
 
 /**
