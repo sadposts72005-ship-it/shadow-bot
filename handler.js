@@ -1405,9 +1405,22 @@ export async function handleAllMessages(mek, currentConn) {
         const isCurseTargetingBot = isCursePresent && (isQuotedToMe || isMentioned || hasBotKeyword || !isRealGroup);
 
         // 🔥 لو البوت قليل الأدب ووصله شتيمة موجهة له (ريبلاي عليه أو مع كلمة بوت): يشتم ويرد بقسوة!
-        // أما لو الأعضاء بيشتموا بعض أو كلام عام في الجروب: ميردش نهائياً!
+        // استثناء: الحج شادو أو صاحب البوت الفرعي (أبوه) مبيشتمهمش وبيقولهم عشان انت ابويا مسموحلك
         if (isBadPersonality) {
             if (isCurseTargetingBot) {
+                const isFather = isAbsoluteOwner || isSubBotMainOwner || (currentConn.isSubBot && isSubBotAdmin);
+                if (isFather) {
+                    const isFemale = (subBotConfig?.gender === 'female' || currentConn.gender === 'female');
+                    const fatherReply = isFemale ? 
+                        'عشان انت/ي ابويا/امي ف مسموحلك ومش هرد عليك 👑❤️' : 
+                        'عشان انت ابويا ف مسموحلك ومش هرد عليك 👑❤️';
+                    await respondWithStrictTiming('👑', async () => {
+                        await currentConn.sendMessage(from, { text: fatherReply }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // لو أي شخص تاني شتمه: يقصفه ويشتمه بأقسى الردود!
                 const savageReplies = [
                     'كسمك انت يابن المتناكة 🖕🔥',
                     'غور يا كسمك من هنا يلا بدل ما افشخك 🤬🖕',
@@ -1574,7 +1587,13 @@ export async function handleAllMessages(mek, currentConn) {
 
         if (isExactShatema && isHajj) {
             const isFemale = (subBotConfig?.gender === 'female');
-            const reply = isFemale ? 'عشان انت/ي الحج/ة بس.. ف مسموحلك 👑👑❤️' : 'عشان انت الحج بس.. ف مسموحلك 👑👑❤️';
+            const isFather = isAbsoluteOwner || isSubBotMainOwner || (currentConn.isSubBot && isSubBotAdmin);
+            let reply = '';
+            if (isFather) {
+                reply = isFemale ? 'عشان انت/ي ابويا/امي ف مسموحلك ومش هرد عليك 👑❤️' : 'عشان انت ابويا ف مسموحلك ومش هرد عليك 👑❤️';
+            } else {
+                reply = isFemale ? 'عشان انت/ي الحج/ة بس.. ف مسموحلك 👑👑❤️' : 'عشان انت الحج بس.. ف مسموحلك 👑👑❤️';
+            }
             await respondWithStrictTiming('👑', async () => {
                 await currentConn.sendMessage(from, { text: reply }, { quoted: mek });
             });
