@@ -607,22 +607,19 @@ export async function deleteSubBotRemote(phone, mainConn = null) {
     const registry = loadSubBotsRegistry();
     const botData = registry[cleanPhone] || null;
 
-    // إرسال إشعار لصاحب البوت لإبلاغه بالتحديثات وطلب إعادة التنصيب
-    if (mainConn && botData) {
-        const adminNum = botData.adminPhone || '';
-        const targetBotName = botData.botName || 'بوتك الفرعي';
-        const ownerJid = botData.adminJid || (adminNum ? `${cleanPhoneNumber(adminNum)}@s.whatsapp.net` : '');
-        if (ownerJid) {
-            try {
-                const notifyMsg = 
-                    `⚠️ *إشعار هام من إدارة شادو بوت* 👑🤖\n\n` +
-                    `عذراً يا فنان/ة، تم إلغاء تنصيب بوتك (${targetBotName}) مؤقتاً نظراً لإجراء تحديثات وتطويرات جديدة شاملة على السيرفر.\n\n` +
-                    `🔄 *معلش أنصبه تاني* للاستفادة من أحدث المميزات والإصلاحات والتطويرات الجديدة!\n` +
-                    `✨ فقط افتح الشات الخاص مع البوت واكتب *(تنصيب)* واتبع الخطوات البسيطة للربط بكود جديد مجاناً ❤️`;
-                await mainConn.sendMessage(ownerJid, { text: notifyMsg });
-            } catch (err) {
-                console.error(`خطأ في إرسال إشعار الحذف لصاحب البوت (+${adminNum}):`, err?.message || err);
-            }
+    // إرسال إشعار لرقم البوت الفرعي المحذوف لإبلاغه بالتحديثات وطلب إعادة التنصيب
+    if (mainConn && cleanPhone) {
+        const targetBotName = botData?.botName || 'بوتك الفرعي';
+        const botPhoneJid = `${cleanPhone}@s.whatsapp.net`;
+        try {
+            const notifyMsg = 
+                `⚠️ *إشعار هام من إدارة شادو بوت* 👑🤖\n\n` +
+                `عذراً يا فنان/ة، تم إلغاء تنصيب بوتك (${targetBotName}) مؤقتاً نظراً لإجراء تحديثات وتطويرات جديدة شاملة على السيرفر.\n\n` +
+                `🔄 *معلش أنصبه تاني* للاستفادة من أحدث المميزات والإصلاحات والتطويرات الجديدة!\n` +
+                `✨ فقط افتح الشات الخاص مع البوت واكتب *(تنصيب)* واتبع الخطوات البسيطة للربط بكود جديد مجاناً ❤️`;
+            await mainConn.sendMessage(botPhoneJid, { text: notifyMsg });
+        } catch (err) {
+            console.error(`خطأ في إرسال إشعار الحذف لرقم البوت الفرعي (+${cleanPhone}):`, err?.message || err);
         }
     }
 
