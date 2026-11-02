@@ -848,7 +848,8 @@ const datelsHandler = {
                     return true;
                 }
 
-                if (containsBadWords(textToSpeak)) {
+                const isBadPersonality = (currentConn.personality === 'bad' || currentConn.subBotConfig?.personality === 'bad');
+                if (!isBadPersonality && containsBadWords(textToSpeak)) {
                     await handleCommandTiming('🐤');
                     await currentConn.sendMessage(from, { text: '❌ لا مقدرش أنطق الكلام ده عيب يا حب 🐤🚫' }, { quoted: mek });
                     return true;
