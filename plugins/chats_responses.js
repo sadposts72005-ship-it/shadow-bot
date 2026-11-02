@@ -43,7 +43,7 @@ export default {
 
         if (isCallingThisBot) {
             const isFemale = (currentConn.gender === 'female' || currentConn.subBotConfig?.gender === 'female');
-            const fananTitle = isFemale ? 'يا فنانة اتفضلي يا حبيبتي اؤمري❤️' : 'يا فنان اتفضل يا حبيبي اامر❤️';
+            const fananTitle = isFemale ? 'يا فنان/ة اتفضل/ي يا حبيبي/حبيبتي اؤمر/ي❤️' : 'يا فنان اتفضل يا حبيبي اامر❤️';
             await currentConn.sendMessage(from, { text: `تحت امرك ${fananTitle}` }, { quoted: mek });
             return true;
         }

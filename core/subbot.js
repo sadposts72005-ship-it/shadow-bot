@@ -55,6 +55,36 @@ export function cleanPhoneNumber(phone) {
 }
 
 /**
+ * توحيد صيغة المذكر والمؤنث لجميع الردود والألعاب والأوامر للبوت الأنثى
+ */
+export function formatGenderText(text) {
+    if (!text || typeof text !== 'string') return text;
+    return text
+        .replace(/يا فنانة/g, 'يا فنان/ة')
+        .replace(/يا فنان\b/g, 'يا فنان/ة')
+        .replace(/يا نجمة/g, 'يا نجم/ة')
+        .replace(/يا نجم\b/g, 'يا نجم/ة')
+        .replace(/يا بطلة/g, 'يا بطل/ة')
+        .replace(/يا بطل\b/g, 'يا بطل/ة')
+        .replace(/يا غالية/g, 'يا غالي/ة')
+        .replace(/يا غالي\b/g, 'يا غالي/ة')
+        .replace(/يا حبيبي/g, 'يا حبيبي/حبيبتي')
+        .replace(/يا حبيبتي/g, 'يا حبيبي/حبيبتي')
+        .replace(/مبروك يا فنان/g, 'مبروك يا فنان/ة')
+        .replace(/مبروك يا بطل/g, 'مبروك يا بطل/ة')
+        .replace(/عاش يا وحش/g, 'عاش يا وحش/ة')
+        .replace(/اتفضل يا حبيبي اامر/g, 'اتفضل/ي يا حبيبي/حبيبتي اؤمر/ي')
+        .replace(/اتفضلي يا حبيبتي اؤمري/g, 'اتفضل/ي يا حبيبي/حبيبتي اؤمر/ي')
+        .replace(/اتفضل يا فنان/g, 'اتفضل/ي يا فنان/ة')
+        .replace(/اتفضلي يا فنانة/g, 'اتفضل/ي يا فنان/ة')
+        .replace(/تحت امرك يا فنان/g, 'تحت أمرك يا فنان/ة')
+        .replace(/تحت امرك يا فنانة/g, 'تحت أمرك يا فنان/ة')
+        .replace(/يا لاعب/g, 'يا لاعب/ة')
+        .replace(/فائز/g, 'فائز/ة')
+        .replace(/خاسر/g, 'خاسر/ة');
+}
+
+/**
  * إعداد سوكيت بوت فرعي مع تطبيق معايير الأمان ومكافحة الحظر
  */
 async function createSubBotSocket(phone, sessionDir) {
@@ -84,6 +114,17 @@ async function createSubBotSocket(phone, sessionDir) {
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (...args) => {
         try {
+            // توحيد صيغة المذكر والمؤنث لجميع ردود وألعاب وأوامر البوت الأنثى تلقائياً
+            if (sock.gender === 'female' || sock.subBotConfig?.gender === 'female') {
+                if (args[1] && typeof args[1] === 'object') {
+                    if (typeof args[1].text === 'string') {
+                        args[1].text = formatGenderText(args[1].text);
+                    }
+                    if (typeof args[1].caption === 'string') {
+                        args[1].caption = formatGenderText(args[1].caption);
+                    }
+                }
+            }
             const res = await originalSendMessage(...args);
             if (res?.key?.id) {
                 subBotSentMsgIds.add(res.key.id);
@@ -234,8 +275,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     }
 
     const cleanPhone = cleanPhoneNumber(targetPhone);
-    const cleanAdmin = cleanPhoneNumber(adminPhone);
-    const cleanLid = adminLid ? String(adminLid).replace(/[^0-9]/g, '') : '';
+    const cleanAdmin = cleanPhoneNumber(adminPhone) || String(adminPhone).replace(/[^0-9]/g, '');
+    let cleanLid = adminLid ? String(adminLid).replace(/[^0-9]/g, '') : '';
+    if (!cleanLid && cleanAdmin.length > 13) cleanLid = cleanAdmin;
     const finalCallName = (callName || botName || 'فرعي').trim();
     const finalGender = (gender === 'female' || gender === '2') ? 'female' : 'male';
     const finalPersonality = (personality === 'bad' || personality === 'toxic' || personality === '2') ? 'bad' : 'respectful';

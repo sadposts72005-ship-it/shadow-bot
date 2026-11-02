@@ -19,6 +19,8 @@ import {
     loadSubBotsRegistry,
     updateSubBotName,
     updateSubBotCallName,
+    updateSubBotHajj,
+    formatGenderText,
     activeSubBots
 } from './core/subbot.js';
 
@@ -519,7 +521,7 @@ export async function handleAllMessages(mek, currentConn) {
         if (normalizedBody === 'بوت' || normalizedBody === 'يا بوت') {
             const currentTime = Date.now();
             const isFemale = (currentConn.gender === 'female' || currentConn.subBotConfig?.gender === 'female');
-            const starTitle = isFemale ? 'يا نجمة 👧💫' : 'يا نجم 🐤💫';
+            const starTitle = isFemale ? 'يا نجم/ة 🐤💫' : 'يا نجم 🐤💫';
             await respondWithStrictTiming('💫', async () => {
                 if (lastBotTime[sender] && (currentTime - lastBotTime[sender] > 120000)) {
                     botCounter[sender] = 0;
@@ -528,7 +530,7 @@ export async function handleAllMessages(mek, currentConn) {
                 botCounter[sender]++;
                 lastBotTime[sender] = currentTime;
                 if (botCounter[sender] >= 5) {
-                    await currentConn.sendMessage(from, { text: `خلاص يا حبيبي قولنا ${botName}` }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `خلاص يا حبيبي/حبيبتي قولنا ${botName}` }, { quoted: mek });
                 } else {
                     await currentConn.sendMessage(from, { text: `اسمي ${botName} ${starTitle}` }, { quoted: mek });
                 }
@@ -548,7 +550,7 @@ export async function handleAllMessages(mek, currentConn) {
 
         if (isCallingMyName) {
             const isFemale = (currentConn.gender === 'female' || currentConn.subBotConfig?.gender === 'female');
-            const fananTitle = isFemale ? 'يا فنانة اتفضلي يا حبيبتي اؤمري❤️' : 'يا فنان اتفضل يا حبيبي اامر❤️';
+            const fananTitle = isFemale ? 'يا فنان/ة اتفضل/ي يا حبيبي/حبيبتي اؤمر/ي❤️' : 'يا فنان اتفضل يا حبيبي اامر❤️';
             await respondWithStrictTiming('✨', async () => {
                 await currentConn.sendMessage(from, { text: `تحت امرك ${fananTitle}` }, { quoted: mek });
             });
@@ -886,7 +888,9 @@ export async function handleAllMessages(mek, currentConn) {
                         `✅ *تم تحديد جنس البوت:* « ${chosenGender === 'female' ? 'أنثى 👧' : 'ذكر 👦'} »\n\n` +
                         `4️⃣ *حدد شخصية وأسلوب البوت في الشات والردود:*\n` +
                         `• أرسل رقم *(1)* أو اكتب *(محترم)*: بوت مهذب وراقي، بفلتر شتائم ورقابة صارمة ومبيقولش أي ألفاظ 😇✨\n` +
-                        `• أرسل رقم *(2)* أو اكتب *(قليل الادب)*: بوت سرسجي ومسخرة، مفيهوش فلتر شتائم، بيرد ويشتم ومفتوح على البحري بدون أي قيود! 😈🔥\n\n` +
+                        `• أرسل رقم *(2)* أو اكتب *(قليل الادب)*: بوت سرسجي ومسخرة، مفيهوش أي فلتر شتائم، بيرد ويشتم ومفتوح على البحري بدون أي قيود! 😈🔥\n\n` +
+                        `⚠️ *تنبيه وإخلاء مسؤولية هامة:* ⚠️\n` +
+                        `اختيار بوت (قليل الأدب) يجعله ينطق ويشتم بأقسى الألفاظ والشتائم بدون قيود، وقد يعرض رقم هاتفك للبلاغات والحظر من شركة واتساب! إدارة البوت غير مسؤولة تماماً عن حظر أي رقم يختار هذه الشخصية.\n\n` +
                         `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
                     await respondWithStrictTiming('🎭', async () => {
@@ -904,7 +908,7 @@ export async function handleAllMessages(mek, currentConn) {
                         chosenPersonality = 'bad';
                     } else {
                         await respondWithStrictTiming('⚠️', async () => {
-                            await currentConn.sendMessage(from, { text: '⚠️ برجاء الاختيار بالأرقام أو الكلمات:\n1️⃣ محترم (بفلتر شتائم وردود مهذبة) 😇✨\n2️⃣ قليل الأدب (سرسجي ومفتوح بدون قيود) 😈🔥' }, { quoted: mek });
+                            await currentConn.sendMessage(from, { text: '⚠️ برجاء الاختيار بالأرقام أو الكلمات:\n1️⃣ محترم (بفلتر شتائم وردود مهذبة) 😇✨\n2️⃣ قليل الأدب (سرسجي ومفتوح بدون قيود) 😈🔥\n\n⚠️ ملاحظة: اختيار (قليل الأدب) على مسؤوليتك الشخصية تجنباً لحظر رقمك من واتساب.' }, { quoted: mek });
                         });
                         return;
                     }
@@ -914,7 +918,7 @@ export async function handleAllMessages(mek, currentConn) {
                     installState.set(cleanSender, currentInstall);
 
                     const step5Text = 
-                        `✅ *تم تحديد شخصية البوت:* « ${chosenPersonality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم 😇✨'} »\n\n` +
+                        `✅ *تم تحديد شخصية البوت:* « ${chosenPersonality === 'bad' ? 'قليل الأدب 😈🔥 (على مسؤوليتك الكاملة)' : 'محترم 😇✨'} »\n\n` +
                         `5️⃣ *ما هو رقم الهاتف الذي تريد تشغيله كـ (بوت) وربطه بالكود؟*\n` +
                         `• اكتب رقم الهاتف الذي سيصبح بوتاً (مثال: 01012345678 أو 201012345678)\n` +
                         `• أو اكتب *(رقمي)* إذا كان هذا الرقم الذي تراسلني منه هو نفسه الذي تريد تحويله لبوت.\n\n` +
@@ -929,20 +933,27 @@ export async function handleAllMessages(mek, currentConn) {
                 // الخطوة 5: رقم هاتف البوت
                 if (currentInstall.step === 5) {
                     let targetBotPhone = '';
-                    if (['رقمي', 'نفسه', 'نفس الرقم', 'نفس رقمي'].includes(normalizedBody)) {
-                        let resolved = cleanSender;
-                        if (sender.endsWith('@lid') || cleanSender.length > 13) {
-                            resolved = localDB.lidMap?.[cleanSender] || '';
+                    const isSelf = ['رقمي', 'نفسه', 'نفس الرقم', 'نفس رقمي', 'حسابي', 'ده', 'انا', 'أنا'].includes(normalizedBody);
+                    if (isSelf) {
+                        let resolved = '';
+                        if (!sender.endsWith('@lid') && cleanSender.length <= 13) {
+                            resolved = cleanSender;
+                        } else if (localDB.lidMap?.[cleanSender]) {
+                            resolved = localDB.lidMap[cleanSender];
+                        } else if (from.endsWith('@s.whatsapp.net')) {
+                            resolved = getCleanNumber(from);
+                        } else if (mek.key?.remoteJid?.endsWith('@s.whatsapp.net')) {
+                            resolved = getCleanNumber(mek.key.remoteJid);
                         }
-                        if (!resolved || resolved.length > 13) {
+                        targetBotPhone = cleanPhoneNumber(resolved);
+                        if (!targetBotPhone || targetBotPhone.length < 10) {
                             await respondWithStrictTiming('⚠️', async () => {
                                 await currentConn.sendMessage(from, { 
-                                    text: '⚠️ حسابك يظهر برمز مشفر داخل واتساب (LID)!\nبرجاء كتابة رقم الهاتف بالأرقام (مثال: 01012345678 أو 201012345678):' 
+                                    text: '⚠️ حسابك يظهر برمز مشفر داخل واتساب (LID) تعذر استخراج رقم الشريحة منه تلقائياً لاستخراج كود الاقتران!\nبرجاء كتابة رقم هاتف البوت بالأرقام (مثال: 01012345678 أو 201012345678):' 
                                 }, { quoted: mek });
                             });
                             return;
                         }
-                        targetBotPhone = cleanPhoneNumber(resolved);
                     } else {
                         targetBotPhone = cleanPhoneNumber(body);
                     }
@@ -976,23 +987,42 @@ export async function handleAllMessages(mek, currentConn) {
                     let adminPhone = '';
                     let adminLid = '';
 
-                    if (['رقمي', 'نفسي', 'نفسه', 'انا', 'أنا', 'نفس الرقم'].includes(normalizedBody)) {
+                    const isSelf = ['رقمي', 'نفسي', 'نفسه', 'انا', 'أنا', 'نفس الرقم', 'حسابي', 'ده'].includes(normalizedBody);
+
+                    if (isSelf) {
+                        let candidatePhone = '';
+                        if (!sender.endsWith('@lid') && cleanSender.length <= 13) {
+                            candidatePhone = cleanSender;
+                        } else if (localDB.lidMap?.[cleanSender]) {
+                            candidatePhone = localDB.lidMap[cleanSender];
+                        } else if (from.endsWith('@s.whatsapp.net')) {
+                            candidatePhone = getCleanNumber(from);
+                        } else if (mek.key?.remoteJid?.endsWith('@s.whatsapp.net')) {
+                            candidatePhone = getCleanNumber(mek.key.remoteJid);
+                        }
+
                         if (sender.endsWith('@lid') || cleanSender.length > 13) {
                             adminLid = cleanSender;
-                            adminPhone = localDB.lidMap?.[cleanSender] || '';
+                        }
+
+                        if (candidatePhone) {
+                            adminPhone = cleanPhoneNumber(candidatePhone);
                         } else {
+                            // لو الرقم مش جايب، المهم نتعرف عليه بالـ LID ونقبله فوراً بدون أي خطأ!
                             adminPhone = cleanSender;
-                            adminLid = localDB.lidMap?.[cleanSender] || '';
+                            adminLid = cleanSender;
                         }
                     } else {
-                        adminPhone = cleanPhoneNumber(body);
-                        adminLid = localDB.lidMap?.[adminPhone] || '';
+                        let rawAdmin = extractTarget(mek, body) || body;
+                        let cleaned = cleanPhoneNumber(rawAdmin) || getCleanNumber(rawAdmin);
+                        adminPhone = cleaned;
+                        adminLid = localDB.lidMap?.[cleaned] || '';
                     }
 
-                    if (!adminPhone || adminPhone.length < 10) {
+                    if (!adminPhone) {
                         await respondWithStrictTiming('⚠️', async () => {
                             await currentConn.sendMessage(from, { 
-                                text: '❌ رقم الحج الأساسي غير صالح أو غير مكتمل!\nبرجاء كتابة الرقم بشكل صحيح بالأرقام (مثال: 01012345678 أو 201012345678)\nأو اكتب (رقمي) لتعيين رقمك الحالي:' 
+                                text: '❌ تعذر التعرف على هوية أو رقم الحج الأساسي!\nبرجاء كتابة الرقم بالأرقام (مثال: 01012345678 أو 201012345678)\nأو اكتب كلمة (رقمي) أو (نفسي) لتعيين حسابك الحالي:' 
                             }, { quoted: mek });
                         });
                         return;
@@ -1057,6 +1087,25 @@ export async function handleAllMessages(mek, currentConn) {
 
         // 2. أمر بدء التنصيب
         if (['تنصيب', '.تنصيب', 'تنصيب بوت', 'بوت فرعي', 'جديد بوت', 'jadibot'].includes(normalizedBody)) {
+            // توجيه مستخدمي البوتات الفرعية للبوت الأساسي فوراً
+            if (currentConn.isSubBot) {
+                const subBotNotice = 
+                    `⚠️ *عفواً يا فنان/ة! التنصيب متاح حصرياً من البوت الأساسي (شادو بوت)!* 👑🤖\n\n` +
+                    `📱 *رقم البوت الأساسي:*\n` +
+                    `+201229409956\n` +
+                    `🔗 *رابط الشات المباشر مع البوت الأساسي:*\n` +
+                    `https://wa.me/201229409956\n\n` +
+                    `✨ *طريقة التنصيب:*\n` +
+                    `1️⃣ افتح الرابط واكتب للبوت الأساسي كلمة *(تنصيب)*.\n` +
+                    `2️⃣ اتبع خطوات التنصيب (اسم البوت، ذكر أو أنثى، شخصية محترمة أو قليلة الأدب، ورقمك).\n` +
+                    `3️⃣ هيوصلك كود الاقتران تربط بيه ويكون معاك بوتك الخاص مجاناً! 🚀`;
+
+                await respondWithStrictTiming('⚠️', async () => {
+                    await currentConn.sendMessage(from, { text: subBotNotice }, { quoted: mek });
+                });
+                return;
+            }
+
             // إذا كُتب الأمر داخل جروب، نحوله فوراً إلى الخاص للأمان والسرية
             if (isRealGroup) {
                 await respondWithStrictTiming('🔒', async () => {
@@ -1325,12 +1374,45 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // مصفوفة الشتائم الموحدة فحص تطابق كامل
-        const shatemaWords = ['كسمك', 'خول', 'عرص', 'متناك', 'عبيط', 'اهبل', 'جزمه', 'عره', 'زاني', 'كلب', 'وسخ', 'انيك', 'زباله', 'دمج', 'حيوان', 'قليل الادب', 'متربتش', 'حقير', 'بضان', 'انت بضان'];
+        // مصفوفة الشتائم الموحدة
+        const shatemaWords = ['كسمك', 'خول', 'عرص', 'متناك', 'عبيط', 'اهبل', 'جزمه', 'عره', 'زاني', 'كلب', 'وسخ', 'انيك', 'زباله', 'دمج', 'حيوان', 'قليل الادب', 'متربتش', 'حقير', 'بضان', 'انت بضان', 'شرموط', 'قحبة', 'منيوك', 'يا متناك', 'يا خول', 'يا عرص', 'يا كسمك'];
         const isExactShatema = shatemaWords.includes(normalizedBody);
+        const isCursePresent = isExactShatema || 
+            shatemaWords.some(w => normalizedBody.includes(w)) || 
+            textLower.includes('كسم') || 
+            textLower.includes('خول') || 
+            textLower.includes('عرص') || 
+            textLower.includes('متناك') || 
+            textLower.includes('شرموط') || 
+            textLower.includes('قحب') || 
+            textLower.includes('بضان') || 
+            textLower.includes('منيوك');
+
+        const isBadPersonality = (currentConn.personality === 'bad' || subBotConfig?.personality === 'bad');
+
+        // 🔥 لو البوت قليل الأدب ووصله أي شتيمة: يشتم ويقصف فوراً بدون تردد وبدون قيود!
+        if (isBadPersonality && isCursePresent) {
+            const savageReplies = [
+                'كسمك انت يابن المتناكة 🖕🔥',
+                'غور يا كسمك من هنا يلا بدل ما افشخك 🤬🖕',
+                'امك عارفة انك خول كده في الشاتات؟ 🖕😂',
+                'ملكش دعوة بيا يا عيل بضان يلا طير 🖕😏',
+                'شكلك عايز تتهان وتاخد على قفاك يا ابن الشرموطة 🖕🔥',
+                'كسمك على كسم اللي يزعلك يا خول 🖕😈',
+                'يلا يا ابن المتناكة من هنا متصدعناش 🖕',
+                'انت مالك يا منيوك هو حد كلمك؟ 🖕🤬',
+                'ياض يا عرص احترم نفسك بدل ما اركبك 🖕🔥',
+                'عيل مهزء وبضان كسم شكلك 🖕🤣'
+            ];
+            const chosenReply = savageReplies[Math.floor(Math.random() * savageReplies.length)];
+            await respondWithStrictTiming('🖕', async () => {
+                await currentConn.sendMessage(from, { text: chosenReply }, { quoted: mek });
+            });
+            return;
+        }
 
         // 🛡️ [نظام الفلتر والتكرار وحظر الكلمات للأعضاء]
-        if (!isHajj) {
+        if (!isHajj && !isBadPersonality) {
             if (!wordSpamTracker[sender]) wordSpamTracker[sender] = {};
             if (!wordSpamTracker[sender][textLower]) wordSpamTracker[sender][textLower] = [];
             wordSpamTracker[sender][textLower] = wordSpamTracker[sender][textLower].filter(time => now - time < 60000);
@@ -2221,8 +2303,8 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // 🛑 فحص الشتائم ككلمة مفردة ومطابقة تماماً
-        if (isExactShatema) {
+        // 🛑 فحص الشتائم ككلمة مفردة ومطابقة تماماً (للبوت المحترم فقط)
+        if (isExactShatema && !isBadPersonality) {
             dynamicState[sender] = 'waiting_for_shatema_clarification';
             await respondWithStrictTiming('🤨', async () => {
                 await currentConn.sendMessage(from, { text: 'انا ولا مين' }, { quoted: mek });
