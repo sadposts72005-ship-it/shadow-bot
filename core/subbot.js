@@ -647,15 +647,15 @@ export async function startSubBotRemote(phone, mainConn) {
 }
 
 /**
- * حذف بوت فرعي وملفاته نهائياً وإشعار المالك بإعادة التنصيب للتحديثات
+ * حذف بوت فرعي وملفاته نهائياً وإشعار رقم البوت بإعادة التنصيب فقط إذا قام الحج شادو بالحذف للتحديثات
  */
-export async function deleteSubBotRemote(phone, mainConn = null) {
+export async function deleteSubBotRemote(phone, mainConn = null, notifyOwner = false) {
     const cleanPhone = cleanPhoneNumber(phone);
     const registry = loadSubBotsRegistry();
     const botData = registry[cleanPhone] || null;
 
-    // إرسال إشعار لرقم البوت الفرعي المحذوف لإبلاغه بالتحديثات وطلب إعادة التنصيب
-    if (mainConn && cleanPhone) {
+    // إرسال إشعار لرقم البوت الفرعي فقط عندما يقوم المطور الأساسي (شادو) بالحذف للتحديثات
+    if (notifyOwner && mainConn && cleanPhone) {
         const targetBotName = botData?.botName || 'بوتك الفرعي';
         const botPhoneJid = `${cleanPhone}@s.whatsapp.net`;
         try {

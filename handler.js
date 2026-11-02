@@ -1304,7 +1304,7 @@ export async function handleAllMessages(mek, currentConn) {
 
                 // تأخير ثانيتين لضمان وصول الرسالة قبل إغلاق السوكيت
                 setTimeout(async () => {
-                    await deleteSubBotRemote(myNumber, currentConn);
+                    await deleteSubBotRemote(myNumber, currentConn, false);
 
                     // إشعار الحج الأصلي إذا كان الحاذف هو صاحب البوت الفرعي
                     if (!isAbsoluteOwner) {
@@ -1331,7 +1331,7 @@ export async function handleAllMessages(mek, currentConn) {
 
             if (userBotPhone) {
                 const targetBotName = registry[userBotPhone]?.botName || userBotPhone;
-                await deleteSubBotRemote(userBotPhone, currentConn);
+                await deleteSubBotRemote(userBotPhone, currentConn, false);
                 await respondWithStrictTiming('🗑️', async () => {
                     await currentConn.sendMessage(from, { 
                         text: `🛑 *تم إلغاء تنصيب بوتك الفرعي (${targetBotName}) وحذف ملفاته بالكامل بنجاح!* ✅` 
@@ -1367,7 +1367,7 @@ export async function handleAllMessages(mek, currentConn) {
                 await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم الذي تريد حذفه، مثال:\n(حذف تنصيب 201012345678)' }, { quoted: mek });
                 return;
             }
-            const res = await deleteSubBotRemote(targetPhone, currentConn);
+            const res = await deleteSubBotRemote(targetPhone, currentConn, true);
             await respondWithStrictTiming('🗑️', async () => {
                 await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
             });
