@@ -341,8 +341,12 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
     let pairingCodeSent = false;
     let isConnected = false;
+    let isExpired = false;
+    let warnTimer = null;
+    let expireTimer = null;
 
     async function startPairingEngine() {
+        if (isExpired) return;
         try {
             const { sock, saveCreds } = await createSubBotSocket(cleanPhone, sessionDir);
             sock.botName = botName;
@@ -361,7 +365,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     pairingCodeSent = true;
                     setTimeout(async () => {
                         try {
-                            if (!sock.authState.creds.registered) {
+                            if (!sock.authState.creds.registered && !isExpired) {
                                 let code = await sock.requestPairingCode(cleanPhone);
                                 code = code?.match(/.{1,4}/g)?.join("-") || code;
 
@@ -381,9 +385,47 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                     `3️⃣ اضغط *ربط جهاز*.\n` +
                                     `4️⃣ اضغط *الربط باستخدام رقم الهاتف بدلاً من ذلك*.\n` +
                                     `5️⃣ أدخل الكود أعلاه: *${code}*\n\n` +
-                                    `⏳ *الكود صالح لدقيقتين فقط.* بمجرد الربط سيبدأ البوت العمل فوراً!`;
+                                    `⏳ *الكود صالح لمدة 3 دقائق فقط.*\n` +
+                                    `⚠️ سيصلك إشعار تنبيه قبل دقيقة من انتهاء الوقت إذا لم تقم بالربط!`;
 
                                 await mainConn.sendMessage(notifyJid, { text: pairMsg }, { quoted: quotedMek });
+
+                                // ⏱️ تنبيه بعد دقيقتين (120 ثانية) بأن المتبقي دقيقة واحدة فقط
+                                warnTimer = setTimeout(async () => {
+                                    if (!isConnected && !isExpired && (!sock.authState?.creds?.registered)) {
+                                        try {
+                                            const warnMsg = 
+                                                `⚠️ *تنبيه هام: متبقي دقيقة واحدة فقط!* ⏳\n\n` +
+                                                `كود اقتران بوتك (${botName}) سينتهي ويصبح غير صالح بعد 60 ثانية!\n` +
+                                                `📱 برجاء ربط الكود في واتساب الآن قبل انتهاء الوقت:\n` +
+                                                `🔑 الكود: *${code}*`;
+                                            await mainConn.sendMessage(notifyJid, { text: warnMsg }, { quoted: quotedMek });
+                                        } catch (_) {}
+                                    }
+                                }, 120000);
+
+                                // ⏱️ إلغاء الجلسة بعد 3 دقائق (180 ثانية) لانتهاء الوقت
+                                expireTimer = setTimeout(async () => {
+                                    if (!isConnected && (!sock.authState?.creds?.registered)) {
+                                        isExpired = true;
+                                        try {
+                                            const expireMsg = 
+                                                `❌ *تم إلغاء جلسة التنصيب لانتهاء صلاحية كود الاقتران!* ⌛\n\n` +
+                                                `انتهت المهلة المحددة لربط البوت (${botName} - +${cleanPhone}) وأصبح الكود غير صالح.\n` +
+                                                `🔄 برجاء إعادة التنصيب مرة أخرى بكتابة أمر: *(تنصيب)*`;
+                                            await mainConn.sendMessage(notifyJid, { text: expireMsg }, { quoted: quotedMek });
+                                        } catch (_) {}
+
+                                        try {
+                                            sock.end(new Error('Pairing code expired'));
+                                        } catch (_) {}
+                                        try {
+                                            if (fs.existsSync(sessionDir)) {
+                                                fs.rmSync(sessionDir, { recursive: true, force: true });
+                                            }
+                                        } catch (_) {}
+                                    }
+                                }, 180000);
                             }
                         } catch (codeErr) {
                             console.error('❌ خطأ في استخراج كود الاقتران:', codeErr?.message || codeErr);
@@ -394,6 +436,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                 if (connection === 'open') {
                     isConnected = true;
+                    if (warnTimer) clearTimeout(warnTimer);
+                    if (expireTimer) clearTimeout(expireTimer);
                     subBotStartTime = Math.floor(Date.now() / 1000);
                     sock.subBotStartTime = subBotStartTime;
                     console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
@@ -453,6 +497,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                 }
 
                 if (connection === 'close') {
+                    if (isExpired) return;
                     const statusCode = lastDisconnect?.error?.output?.statusCode;
                     console.log(`⚠️ [Sub-Bot Pairing] انقطع اتصال السوكيت للرقم (+${cleanPhone}) بكود: ${statusCode}`);
                     activeSubBots.delete(cleanPhone);
@@ -464,7 +509,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         // ⚡ الأهم: إعادة الاتصال فوراً لاستكمال المصافحة (Handshake) بعد إدخال الكود (خصوصاً خطأ 515 و 428)
                         console.log(`🔄 [Sub-Bot Pairing] إعادة الاتصال التلقائي لاستكمال الاقتران (+${cleanPhone})...`);
                         setTimeout(() => {
-                            startPairingEngine().catch(e => console.error('Retry pairing error:', e));
+                            if (!isExpired) {
+                                startPairingEngine().catch(e => console.error('Retry pairing error:', e));
+                            }
                         }, 2500);
                     } else {
                         // إذا كان متصلاً وانقطع لاحقاً
