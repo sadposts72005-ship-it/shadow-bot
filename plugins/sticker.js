@@ -6,6 +6,8 @@ import { spawn } from 'child_process';
 import webp from 'node-webpmux';
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 /**
  * دالة تنظيف النص العربي
  */
@@ -259,7 +261,9 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
 
         // إذا لم تكن هناك صورة أو استيكر
         if (!mediaObj || !mediaObj.buffer) {
+            await delay(1500);
             await currentConn.sendMessage(from, { react: { text: '💡', key: mek.key } }).catch(() => {});
+            await delay(1500);
             const guideMsg = `📸 *طريقة تحويل صورة إلى استيكر:* ✨\n\n` +
                              `1️⃣ ابعت صورة واكتب في الوصف (الكابشن): *استيكر* 🖼️\n` +
                              `2️⃣ أو اعمل ريبلاي (رد) على أي صورة أو ستيكر واكتب: *استيكر* 💬\n\n` +
@@ -270,7 +274,8 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
             return true;
         }
 
-        // تفاعل بالانتظار
+        // تأخير طبيعي مثل باقي أوامر البوت والتفاعل بالانتظار
+        await delay(1500);
         await currentConn.sendMessage(from, { react: { text: '⏳', key: mek.key } }).catch(() => {});
 
         let webpBuf = null;
@@ -284,6 +289,7 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
         }
 
         if (!webpBuf) {
+            await delay(1000);
             await currentConn.sendMessage(from, { react: { text: '❌', key: mek.key } }).catch(() => {});
             await currentConn.sendMessage(from, { text: '❌ فشل تحويل الصورة إلى ستيكر، تأكد من صحة الصورة وحاول مرة أخرى.' }, { quoted: mek });
             return true;
@@ -291,6 +297,9 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
 
         // إضافة حقوق EXIF
         const stampedSticker = await addExif(webpBuf, packname, author);
+
+        // تأخير واقعي وطبيعي قبل الإرسال لمحاكاة المعالجة الطبيعية وتجنب السرعة الزائدة
+        await delay(2000);
 
         // إرسال الستيكر
         await currentConn.sendMessage(from, { sticker: stampedSticker }, { quoted: mek });
