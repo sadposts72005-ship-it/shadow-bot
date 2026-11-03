@@ -778,12 +778,17 @@ export async function handleAllMessages(mek, currentConn) {
         // =========================================================================
 
         // 1. فحص وجود عملية تنصيب جارية لهذا المستخدم (تتم حصرياً في الخاص)
-        if (installState.has(cleanSender)) {
-            const currentInstall = installState.get(cleanSender);
+        const cleanFrom = getCleanNumber(from);
+        const installKey = installState.has(cleanSender) ? cleanSender : (installState.has(cleanFrom) ? cleanFrom : null);
+
+        if (installKey) {
+            const currentInstall = installState.get(installKey);
 
             // التحقق من انتهاء مهلة الجلسة (10 دقائق)
             if (Date.now() - (currentInstall.createdAt || 0) > 10 * 60 * 1000) {
+                installState.delete(installKey);
                 installState.delete(cleanSender);
+                installState.delete(cleanFrom);
             } else if (!isRealGroup) {
                 // معالجة خطوات التنصيب في الخاص فقط
 
@@ -997,7 +1002,8 @@ export async function handleAllMessages(mek, currentConn) {
                             adminLid = cleanSender;
                         }
                     } else {
-                        let rawAdmin = extractTarget(mek, body) || body;
+                        const ctx = mek.message?.extendedTextMessage?.contextInfo;
+                        let rawAdmin = ctx?.mentionedJid?.[0] || ctx?.participant || body;
                         let cleaned = cleanPhoneNumber(rawAdmin) || getCleanNumber(rawAdmin);
                         adminPhone = cleaned;
                         adminLid = localDB.lidMap?.[cleaned] || '';
@@ -1045,7 +1051,9 @@ export async function handleAllMessages(mek, currentConn) {
                     const finalBotGender = currentInstall.gender || 'male';
                     const finalBotPersonality = currentInstall.personality || 'respectful';
                     const finalBotPhone = currentInstall.targetPhone;
+                    installState.delete(installKey);
                     installState.delete(cleanSender);
+                    installState.delete(cleanFrom);
 
                     await respondWithStrictTiming('⏳', async () => {
                         await currentConn.sendMessage(from, { 
@@ -1109,6 +1117,7 @@ export async function handleAllMessages(mek, currentConn) {
 
             // إذا كُتب في الخاص مباشرة
             installState.set(cleanSender, { step: 1, createdAt: Date.now() });
+            if (cleanFrom) installState.set(cleanFrom, { step: 1, createdAt: Date.now() });
 
             const startInstallText = 
                 `✨ *مرحباً بك في نظام تنصيب البوتات الفرعية (Sub-Bot)!* 🤖\n\n` +
