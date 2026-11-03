@@ -391,15 +391,25 @@ export async function handleAllMessages(mek, currentConn) {
             await actionFunction();
         };
 
-        // 🤫 1. فحص وضع كتم الصوت التام في هذا الجروب (اسكت / اخرس / صمت 100%)
-        const muteKey = `${myNumber}_${from}`;
-        const sleepKey = `${myNumber}_${from}`;
+        // 🔑 المعرف الثابت الموحد للبوت وللجروب
+        const botIdKey = currentConn.isSubBot 
+            ? (subBotConfig?.phone || currentConn.subBotPhone || myNumber || 'sub') 
+            : 'main_bot';
+        const roomKey = `${botIdKey}_${from}`;
 
-        const isCurrentRoomMuted = botMuteMap.get(muteKey) || false;
+        // 👑 تحديد المسموح له بالتحكم بالنوم والصمت:
+        // في البوت الأساسي: شادو فقط (isAbsoluteOwner)
+        // في البوت الفرعي: شادو (isAbsoluteOwner) أو مالك البوت الفرعي (isSubBotMainOwner) أو الحجاج المرفوعين فيه (isSubBotHajj)
+        const isSleepOwner = currentConn.isSubBot
+            ? (isAbsoluteOwner || isSubBotMainOwner || isSubBotHajj)
+            : isAbsoluteOwner;
+
+        // 🤫 1. فحص هل الجروب في وضع الصمت التام (اسكت / اخرس 100%)
+        const isCurrentRoomMuted = botMuteMap.get(roomKey) || false;
         if (isCurrentRoomMuted) {
             // البوت صامت 100% ولا يرد على أي شخص في هذا الجروب نهائياً (حتى للمالك وشادو)
-            // الاستثناء الحصري: أمر فك الكتم (اتكلم أو اصحي) من المالك أو الحجاج المالكين
-            const isUnmute = isBotOwner && (
+            // الاستثناء الحصري الوحيد: أمر فك الكتم (اتكلم أو اصحي) من المالك أو شادو
+            const isUnmute = isSleepOwner && (
                 normalizedBody === 'اتكلم' ||
                 normalizedBody === 'اصحي' ||
                 normalizedBody === `اتكلم ${normalizedBotName}` ||
@@ -416,7 +426,9 @@ export async function handleAllMessages(mek, currentConn) {
             );
 
             if (isUnmute) {
-                botMuteMap.delete(muteKey);
+                botMuteMap.delete(roomKey);
+                botSleepMap.delete(roomKey);
+                botWakeTimeMap.set(roomKey, Math.floor(Date.now() / 1000));
                 await respondWithStrictTiming('🗣️', async () => {
                     await currentConn.sendMessage(from, { text: `🗣️ *أمرك يا حج! تم فك كتم الصوت عن (${botName}) في هذا الجروب. رجعت أرد وأشتغل بكامل طاقتي!* ⚡` }, { quoted: mek });
                 });
@@ -427,8 +439,8 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // 🤫 2. أمر كتم الصوت في هذا الجروب (اسكت / اخرس / صمت) للمالك أو الحجاج المالكين
-        if (isBotOwner && (normalizedBody.startsWith('اسكت') || normalizedBody.startsWith('اخرس') || normalizedBody.startsWith('صمت'))) {
+        // 🤫 2. أمر كتم الصوت التام في هذا الجروب (اسكت / اخرس / صمت)
+        if (isSleepOwner && (normalizedBody.startsWith('اسكت') || normalizedBody.startsWith('اخرس') || normalizedBody.startsWith('صمت'))) {
             const isMuteAll = isAbsoluteOwner && (normalizedBody === 'اسكت الكل' || normalizedBody === 'اسكتو' || normalizedBody === 'اخرسو');
             const isNamedMute = normalizedBody === 'اسكت' || normalizedBody === 'اخرس' || normalizedBody === 'صمت' ||
                                 normalizedBody === `اسكت ${normalizedBotName}` || 
@@ -436,61 +448,105 @@ export async function handleAllMessages(mek, currentConn) {
                                 (normalizedCallName && (normalizedBody === `اسكت ${normalizedCallName}` || normalizedBody === `اسكت يا ${normalizedCallName}`));
 
             if (isMuteAll || isNamedMute) {
-                botMuteMap.set(muteKey, true);
+                botMuteMap.set(roomKey, true);
+                botSleepMap.delete(roomKey);
                 await respondWithStrictTiming('🤫', async () => {
-                    await currentConn.sendMessage(from, { text: `🤫 *أمرك يا حج! تم كتم صوت بوت (${botName}) بالكامل في هذا الجروب فقط.* 🤐\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم) أو (اصحي) هنا.\n✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي الجروبات!_` }, { quoted: mek });
+                    await currentConn.sendMessage(from, { 
+                        text: `🤫 *أمرك يا حج! تم كتم صوت بوت (${botName}) بالكامل في هذا الجروب فقط.* 🤐\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم) أو (اصحي) هنا.\n✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي الجروبات!_` 
+                    }, { quoted: mek });
                 });
                 return;
             }
         }
 
-        // 💤 3. فحص وضع النوم المعزول في هذا الجروب (Sleep Mode - نوم عن العامة)
-        const isCurrentRoomSleeping = botSleepMap.get(sleepKey) || false;
+        // 💤 3. أمر تفعيل وضع النوم (نام / خمول / وضع الخمول) في هذا الجروب فقط
+        const isGeneralSleepCmd = ['نام', 'وضع الخمول', 'ايقاف مؤقت', 'خمول'].includes(normalizedBody);
+        const isNamedSleepCmd = (
+            normalizedBody === `نام ${normalizedBotName}` || 
+            normalizedBody === `نام يا ${normalizedBotName}` ||
+            normalizedBody === `خمول ${normalizedBotName}` ||
+            (normalizedCallName && (
+                normalizedBody === `نام ${normalizedCallName}` ||
+                normalizedBody === `نام يا ${normalizedCallName}` ||
+                normalizedBody === `خمول ${normalizedCallName}`
+            )) ||
+            (isAbsoluteOwner && (normalizedBody === 'نام الكل' || normalizedBody === 'نامو'))
+        );
 
-        if (isCurrentRoomSleeping) {
-            // البوت نائم عن العامة فقط في هذا الجروب!
-            // لكن يرد على المالك الأساسي وشادو والحجاج المرفوعين:
-            if (!isBotOwner) {
-                // عضو عادي: البوت نائم ويتجاهله تماماً بصمت!
+        if (isSleepOwner && (isGeneralSleepCmd || isNamedSleepCmd)) {
+            // لو الأمر موجه لبوت آخر بالتحديد، يتجاهله
+            if (!isNamedSleepCmd && normalizedBody.startsWith('نام ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
                 return;
             }
 
-            // لو كان المرسل هو المالك أو أحد الحجاج وأرسل أمر الاستيقاظ العام:
-            const isNamedWake = (
-                normalizedBody === `اصحي ${normalizedBotName}` || 
-                normalizedBody === `اصحي يا ${normalizedBotName}` ||
-                normalizedBody === `تشغيل ${normalizedBotName}` ||
-                normalizedBody === `قوم ${normalizedBotName}` ||
-                (normalizedCallName && (
-                    normalizedBody === `اصحي ${normalizedCallName}` ||
-                    normalizedBody === `اصحي يا ${normalizedCallName}` ||
-                    normalizedBody === `تشغيل ${normalizedCallName}` ||
-                    normalizedBody === `قوم ${normalizedCallName}`
-                )) ||
-                (isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو'))
-            );
-            const isGeneralWake = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم'].includes(normalizedBody);
+            botSleepMap.set(roomKey, true);
+            const masterTitle = isAbsoluteOwner ? 'يا حج شادو' : 'يا صاحب البوت';
+            await respondWithStrictTiming('💤', async () => {
+                await currentConn.sendMessage(from, { 
+                    text: `💤 *أمرك ${masterTitle}! تم تفعيل وضع النوم لبوت (${botName}) في هذا الجروب فقط!* 🌙\n` +
+                          `البوت الآن نائم وصامت عن باقي الأعضاء، لكنه مستيقظ ويرد عليك فقط في أي وقت.\n` +
+                          `💡 لإيقاظه للجميع أرسل: (اصحي).\n` +
+                          `✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي المجموعات!_` 
+                }, { quoted: mek });
+            });
+            return;
+        }
 
-            if (isGeneralWake || isNamedWake) {
-                // لو الأمر محدد لبوت ثاني في نفس الروم: يتجاهل
-                if (!isNamedWake && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
-                    return;
-                }
+        // ⚡ 4. أمر استيقاظ البوت وعودته للعمل للجميع (اصحي / استيقظ / تشغيل)
+        const isGeneralWakeCmd = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم', 'اتكلم'].includes(normalizedBody);
+        const isNamedWakeCmd = (
+            normalizedBody === `اصحي ${normalizedBotName}` || 
+            normalizedBody === `اصحي يا ${normalizedBotName}` ||
+            normalizedBody === `اتكلم ${normalizedBotName}` ||
+            normalizedBody === `اتكلم يا ${normalizedBotName}` ||
+            normalizedBody === `تشغيل ${normalizedBotName}` ||
+            normalizedBody === `قوم ${normalizedBotName}` ||
+            (normalizedCallName && (
+                normalizedBody === `اصحي ${normalizedCallName}` ||
+                normalizedBody === `اصحي يا ${normalizedCallName}` ||
+                normalizedBody === `اتكلم ${normalizedCallName}` ||
+                normalizedBody === `اتكلم يا ${normalizedCallName}` ||
+                normalizedBody === `تشغيل ${normalizedCallName}` ||
+                normalizedBody === `قوم ${normalizedCallName}`
+            )) ||
+            (isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو' || normalizedBody === 'اتكلم الكل' || normalizedBody === 'اتكلمو'))
+        );
 
-                botSleepMap.delete(sleepKey);
-                botWakeTimeMap.set(sleepKey, Math.floor(Date.now() / 1000));
+        if (isSleepOwner && (isGeneralWakeCmd || isNamedWakeCmd)) {
+            if (!isNamedWakeCmd && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
+                return;
+            }
+
+            const wasSleeping = botSleepMap.get(roomKey) || false;
+            const wasMuted = botMuteMap.get(roomKey) || false;
+
+            if (wasSleeping || wasMuted) {
+                botSleepMap.delete(roomKey);
+                botMuteMap.delete(roomKey);
+                botWakeTimeMap.set(roomKey, Math.floor(Date.now() / 1000));
+
                 await respondWithStrictTiming('⚡', async () => {
                     await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في هذا الجروب وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
                 });
                 return;
             }
+        }
 
-            // إذا كان المالك أو أحد الحجاج يرسل أي أمر آخر (بنك، منيو، ألعاب، أوامر): البوت يرد عليه وينفذ طلبه كالمعتاد!
+        // 💤 5. فحص وضع النوم: إذا كان البوت نائماً في هذا الجروب
+        const isCurrentRoomSleeping = botSleepMap.get(roomKey) || false;
+        if (isCurrentRoomSleeping) {
+            // البوت نائم عن العامة فقط في هذا الجروب!
+            // ولا يرد على أي شخص نهائياً إلا صاحب البوت أو شادو:
+            if (!isSleepOwner) {
+                // أي شخص آخر (مشرفين، حجاج، أعضاء): البوت نائم ويتجاهله تماماً بصمت!
+                return;
+            }
+            // إذا كان المرسل هو المالك المصرح له: يكمل وينفذ كل طلباته كالمعتاد!
         }
 
         // ⏰ فحص توقيت الاستيقاظ لهذا الجروب: تجاهل أي رسائل أُرسلت أثناء فترة نوم البوت بعد استيقاظه
-        const lastWakeTime = botWakeTimeMap.get(sleepKey);
-        if (lastWakeTime && !isBotOwner) {
+        const lastWakeTime = botWakeTimeMap.get(roomKey);
+        if (lastWakeTime && !isSleepOwner) {
             const mTime = getMsgTimestamp(mek);
             if (mTime > 0 && mTime < lastWakeTime) {
                 return;
@@ -597,78 +653,6 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
-        // =========================================================================
-        // 💤 [أوامر النوم والاستيقاظ المعزولة لهذا الجروب فقط]
-        // =========================================================================
-        const isGeneralSleep = ['نام', 'وضع الخمول', 'ايقاف مؤقت', 'خمول'].includes(normalizedBody);
-        const isNamedSleep = (
-            normalizedBody === `نام ${normalizedBotName}` || 
-            normalizedBody === `نام يا ${normalizedBotName}` ||
-            normalizedBody === `خمول ${normalizedBotName}` ||
-            (normalizedCallName && (
-                normalizedBody === `نام ${normalizedCallName}` ||
-                normalizedBody === `نام يا ${normalizedCallName}` ||
-                normalizedBody === `خمول ${normalizedCallName}`
-            )) ||
-            (isAbsoluteOwner && (normalizedBody === 'نام الكل' || normalizedBody === 'نامو'))
-        );
-
-        if (isGeneralSleep || isNamedSleep) {
-            if (!isNamedSleep && normalizedBody.startsWith('نام ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
-                return;
-            }
-
-            if (!isBotOwner) {
-                return;
-            }
-
-            botSleepMap.set(sleepKey, true);
-            await respondWithStrictTiming('💤', async () => {
-                await currentConn.sendMessage(from, { 
-                    text: `💤 *تم تفعيل وضع النوم لبوت (${botName}) في هذا الجروب فقط!* 🌙\n` +
-                          `البوت الآن نائم وصامت عن الأعضاء العاديين، لكنه مستيقظ ويرد عليك وعلى الحجاج المالكين فقط في أي وقت.\n` +
-                          `💡 لإيقاظه للجميع أرسل: (اصحي).\n` +
-                          `✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي المجموعات!_` 
-                }, { quoted: mek });
-            });
-            return;
-        }
-
-        const isGeneralWake = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم'].includes(normalizedBody);
-        const isNamedWake = (
-            normalizedBody === `اصحي ${normalizedBotName}` || 
-            normalizedBody === `اصحي يا ${normalizedBotName}` ||
-            normalizedBody === `تشغيل ${normalizedBotName}` ||
-            normalizedBody === `قوم ${normalizedBotName}` ||
-            (normalizedCallName && (
-                normalizedBody === `اصحي ${normalizedCallName}` ||
-                normalizedBody === `اصحي يا ${normalizedCallName}` ||
-                normalizedBody === `تشغيل ${normalizedCallName}` ||
-                normalizedBody === `قوم ${normalizedCallName}`
-            )) ||
-            (isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو'))
-        );
-
-        if (isGeneralWake || isNamedWake) {
-            if (!isNamedWake && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
-                return;
-            }
-
-            if (!isBotOwner) {
-                return;
-            }
-
-            const wasSleeping = botSleepMap.get(sleepKey) || false;
-            if (wasSleeping) {
-                botSleepMap.delete(sleepKey);
-                botWakeTimeMap.set(sleepKey, Math.floor(Date.now() / 1000));
-            }
-
-            await respondWithStrictTiming('⚡', async () => {
-                await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في هذا الجروب وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
-            });
-            return;
-        }
 
         // =========================================================================
         // 🚪 [أمر خروج البوت من الجروب (اخرج [الاسم] / اخرج / غادر)]
