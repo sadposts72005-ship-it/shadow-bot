@@ -814,8 +814,9 @@ export async function handleAllMessages(mek, currentConn) {
 
                 // الخطوة 1: اختيار اسم البوت الرسمي
                 if (currentInstall.step === 1) {
-                    const chosenName = body.trim().replace(/[*_~`]/g, '').slice(0, 30);
-                    if (!chosenName || chosenName.length < 2) {
+                    // إزالة علامات التنسيق من الأطراف فقط مع الحفاظ على كل الزخارف والتشكيل والرموز والإيموجي
+                    const chosenName = body.trim().replace(/^[*_~`]+|[*_~`]+$/g, '').trim().slice(0, 60);
+                    if (!chosenName || chosenName.length < 1) {
                         await respondWithStrictTiming('⚠️', async () => {
                             await currentConn.sendMessage(from, { text: '⚠️ برجاء كتابة اسم رسمي واضح لبوتك (مثال: إمبراطور الظلام / شادو 2 / الصقر الملكي):' }, { quoted: mek });
                         });
@@ -841,8 +842,8 @@ export async function handleAllMessages(mek, currentConn) {
 
                 // الخطوة 2: اختيار اسم النداء السهل
                 if (currentInstall.step === 2) {
-                    const chosenCall = body.trim().replace(/[*_~`]/g, '').slice(0, 20);
-                    if (!chosenCall || chosenCall.length < 2) {
+                    const chosenCall = body.trim().replace(/^[*_~`]+|[*_~`]+$/g, '').trim().slice(0, 40);
+                    if (!chosenCall || chosenCall.length < 1) {
                         await respondWithStrictTiming('⚠️', async () => {
                             await currentConn.sendMessage(from, { text: '⚠️ برجاء كتابة اسم نداء سهل ومختصر (مثال: إمبراطور / سوسو / فهد):' }, { quoted: mek });
                         });
@@ -987,7 +988,7 @@ export async function handleAllMessages(mek, currentConn) {
                     let adminPhone = '';
                     let adminLid = '';
 
-                    const isSelf = ['رقمي', 'نفسي', 'نفسه', 'انا', 'أنا', 'نفس الرقم', 'حسابي', 'ده'].includes(normalizedBody);
+                    const isSelf = ['رقمي', 'نفسي', 'نفسه', 'انا', 'أنا', 'نفس الرقم', 'حسابي', 'ده', 'نفس'].includes(normalizedBody);
 
                     if (isSelf) {
                         let candidatePhone = '';
@@ -1008,7 +1009,6 @@ export async function handleAllMessages(mek, currentConn) {
                         if (candidatePhone) {
                             adminPhone = cleanPhoneNumber(candidatePhone);
                         } else {
-                            // لو الرقم مش جايب، المهم نتعرف عليه بالـ LID ونقبله فوراً بدون أي خطأ!
                             adminPhone = cleanSender;
                             adminLid = cleanSender;
                         }
@@ -1019,7 +1019,7 @@ export async function handleAllMessages(mek, currentConn) {
                         adminLid = localDB.lidMap?.[cleaned] || '';
                     }
 
-                    if (!adminPhone) {
+                    if (!adminPhone || adminPhone.length < 5) {
                         await respondWithStrictTiming('⚠️', async () => {
                             await currentConn.sendMessage(from, { 
                                 text: '❌ تعذر التعرف على هوية أو رقم الحج الأساسي!\nبرجاء كتابة الرقم بالأرقام (مثال: 01012345678 أو 201012345678)\nأو اكتب كلمة (رقمي) أو (نفسي) لتعيين حسابك الحالي:' 
@@ -1028,32 +1028,22 @@ export async function handleAllMessages(mek, currentConn) {
                         return;
                     }
 
-                    // استخراج الـ LID من واتساب تلقائياً للتحقق من هوية الحج بأي وضع اتصال
-                    if (!adminLid) {
+                    // استخراج الـ LID بطريقة سريعة جداً مع مهلة ثانية واحدة لتجنب أي تعليق
+                    if (!adminLid && adminPhone.length <= 13) {
                         try {
-                            const { USyncQuery, USyncUser } = await import('@whiskeysockets/baileys');
-                            const usyncQuery = new USyncQuery().withLIDProtocol().withContext('background');
-                            usyncQuery.withUser(new USyncUser().withId(`${adminPhone}@s.whatsapp.net`));
-                            const results = await currentConn.executeUSyncQuery(usyncQuery);
-                            if (results && results.list && results.list.length > 0) {
-                                const item = results.list.find(a => !!a.lid);
-                                if (item && item.lid) {
-                                    adminLid = item.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                            const lidPromise = (async () => {
+                                const waCheck = await currentConn.onWhatsApp(`${adminPhone}@s.whatsapp.net`);
+                                if (waCheck && waCheck[0]?.lid) {
+                                    return waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
                                 }
-                            }
+                                return '';
+                            })();
+                            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(''), 1200));
+                            adminLid = await Promise.race([lidPromise, timeoutPromise]);
                         } catch (_) {}
                     }
 
-                    try {
-                        if (!adminLid) {
-                            const waCheck = await currentConn.onWhatsApp(`${adminPhone}@s.whatsapp.net`);
-                            if (waCheck && waCheck[0]?.lid) {
-                                adminLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                            }
-                        }
-                    } catch (_) {}
-
-                    // إذا كان الشخص القائم بالتنصيب كتب رقمه هو، نربط معرفه مباشرة
+                    // إذا كان الحج هو نفس القائم بالتنصيب
                     if (!adminLid && (cleanSender === adminPhone || cleanPhoneNumber(cleanSender) === adminPhone)) {
                         if (sender.endsWith('@lid') || cleanSender.length > 13) {
                             adminLid = cleanSender;
@@ -1079,7 +1069,10 @@ export async function handleAllMessages(mek, currentConn) {
                         }, { quoted: mek });
                     });
 
-                    await requestSubBotPairing(finalBotPhone, finalBotName, finalCallName, adminPhone, adminLid, finalBotGender, finalBotPersonality, currentConn, from, mek);
+                    // تشغيل كود الاقتران فوراً مع التقاط أي استثناء
+                    requestSubBotPairing(finalBotPhone, finalBotName, finalCallName, adminPhone, adminLid, finalBotGender, finalBotPersonality, currentConn, from, mek).catch(err => {
+                        console.error('⚠️ [Pairing Execution Error]:', err?.message || err);
+                    });
                     return;
                 }
             }
@@ -1617,32 +1610,67 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
-        if ([`${botName.toLowerCase()} ابني`, `ابني ${botName.toLowerCase()}`, 'ابني'].includes(normalizedBody)) {
-            const isFemale = (subBotConfig?.gender === 'female');
-            if (isAbsoluteOwner) {
-                const reply = isFemale ? 'حبيبي/حبيبتي يا بابا/ماما الحج/ة ونور عيني 👑❤️' : 'حبيبي يا بابا الحج ونور عيني 👑❤️';
-                await respondWithStrictTiming('👑', async () => {
-                    await currentConn.sendMessage(from, { text: reply }, { quoted: mek });
-                });
-            } else if (isSubBotMainOwner) {
-                const replySon = isFemale ? 'حبيبي/حبيبتي ونور عيني يابا/ياما 👑❤️' : 'حبيبي ونور عيني يابا ❤️👑';
-                await respondWithStrictTiming('👑', async () => {
-                    await currentConn.sendMessage(from, { text: replySon }, { quoted: mek });
-                });
-            } else if (isSubBotHajj || isHajj) {
-                const replyUncle = isFemale ? 
-                    `انت/ي عمي/عمتي بس ابويا/امي صاحب/ة البوت (+${subBotConfig?.adminPhone || 'المالك'}) والحج شادو 👑❤️` : 
-                    `انت عمي بس ابويا صاحب البوت (+${subBotConfig?.adminPhone || 'المالك'}) والحج شادو 👑❤️`;
-                await respondWithStrictTiming('👑', async () => {
-                    await currentConn.sendMessage(from, { text: replyUncle }, { quoted: mek });
-                });
+        // 👶 [أمر ابني / بنتي للبوتات الفرعية والأساسي]
+        const isFemaleSubBot = (currentConn.isSubBot && (currentConn.gender === 'female' || subBotConfig?.gender === 'female'));
+        const lowerBotName = (botName || 'شادو').toLowerCase().trim();
+
+        // أوامر النداء للبوت الأنثى الفرعي (بنتي) وللبوت الذكر/الأساسي (ابني)
+        const isDaughterCmd = isFemaleSubBot && [
+            'بنتي', 'يا بنتي', `${lowerBotName} بنتي`, `بنتي ${lowerBotName}`,
+            'ابني', 'يا ابني', `${lowerBotName} ابني`, `ابني ${lowerBotName}`
+        ].includes(normalizedBody);
+
+        const isSonCmd = !isFemaleSubBot && [
+            'ابني', 'يا ابني', `${lowerBotName} ابني`, `ابني ${lowerBotName}`
+        ].includes(normalizedBody);
+
+        if (isDaughterCmd || isSonCmd) {
+            if (isFemaleSubBot) {
+                // ردود البوت الأنثى الفرعي (بنتي)
+                if (isAbsoluteOwner) {
+                    await respondWithStrictTiming('👑', async () => {
+                        await currentConn.sendMessage(from, { text: 'بنتك وحبيبتك يا بابا الحج ونور عيني 👑❤️' }, { quoted: mek });
+                    });
+                } else if (isSubBotMainOwner) {
+                    await respondWithStrictTiming('👑', async () => {
+                        await currentConn.sendMessage(from, { text: 'بنتك وحبيبتك ونور عينك يابا ❤️👑' }, { quoted: mek });
+                    });
+                } else if (isSubBotHajj || isHajj) {
+                    await respondWithStrictTiming('👑', async () => {
+                        await currentConn.sendMessage(from, { 
+                            text: `انت عمي بس ابويا صاحب البوت (+${subBotConfig?.adminPhone || 'المالك'}) والحج شادو 👑❤️` 
+                        }, { quoted: mek });
+                    });
+                } else {
+                    await respondWithStrictTiming('👧', async () => {
+                        await currentConn.sendMessage(from, { 
+                            text: 'ابوك مين يا نجم؟ انا بنوتة صاحب البوت والحج شادو 👑❤️' 
+                        }, { quoted: mek });
+                    });
+                }
             } else {
-                const replyStr = isFemale ? 
-                    'ابوك/امك مين يا حبيبي/حبيبتي؟ ابويا/امي هو صاحب/ة البوت والحج شادو 👑❤️' : 
-                    'ابوك مين يا حبيبي؟ ابويا هو صاحب البوت والحج شادو 👑❤️';
-                await respondWithStrictTiming('🐤', async () => {
-                    await currentConn.sendMessage(from, { text: replyStr }, { quoted: mek });
-                });
+                // ردود البوت الذكر وشادو الأساسي (ابني)
+                if (isAbsoluteOwner) {
+                    await respondWithStrictTiming('👑', async () => {
+                        await currentConn.sendMessage(from, { text: 'حبيبي يا بابا الحج ونور عيني 👑❤️' }, { quoted: mek });
+                    });
+                } else if (isSubBotMainOwner) {
+                    await respondWithStrictTiming('👑', async () => {
+                        await currentConn.sendMessage(from, { text: 'حبيبي ونور عيني يابا ❤️👑' }, { quoted: mek });
+                    });
+                } else if (isSubBotHajj || isHajj) {
+                    await respondWithStrictTiming('👑', async () => {
+                        await currentConn.sendMessage(from, { 
+                            text: `انت عمي بس ابويا صاحب البوت (+${subBotConfig?.adminPhone || 'المالك'}) والحج شادو 👑❤️` 
+                        }, { quoted: mek });
+                    });
+                } else {
+                    await respondWithStrictTiming('🐤', async () => {
+                        await currentConn.sendMessage(from, { 
+                            text: 'ابوك مين يا حبيبي؟ ابويا هو صاحب البوت والحج شادو 👑❤️' 
+                        }, { quoted: mek });
+                    });
+                }
             }
             return;
         }

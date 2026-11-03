@@ -45,7 +45,13 @@ export function saveSubBotsRegistry(data) {
  */
 export function cleanPhoneNumber(phone) {
     if (!phone) return '';
-    let clean = String(phone).replace(/[^0-9]/g, '');
+    let str = String(phone);
+    const arabicDigits = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
+    const persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+    for (let i = 0; i < 10; i++) {
+        str = str.replaceAll(arabicDigits[i], String(i)).replaceAll(persianDigits[i], String(i));
+    }
+    let clean = str.replace(/[^0-9]/g, '');
     if (clean.startsWith('00')) clean = clean.substring(2);
     // تحويل أرقام مصر المحلية 010/011/012/015 المكونة من 11 رقماً تلقائياً إلى 201...
     if (clean.startsWith('01') && clean.length === 11) {
