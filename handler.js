@@ -21,7 +21,8 @@ import {
     updateSubBotCallName,
     updateSubBotHajj,
     formatGenderText,
-    activeSubBots
+    activeSubBots,
+    subBotSentMsgIds
 } from './core/subbot.js';
 
 // 💤 خريطة حفظ حالة وتوقيت النوم المعزولة لكل بوت (سواء الأساسي أو الفرعي)
@@ -29,6 +30,101 @@ const botSleepMap = new Map();
 const botWakeTimeMap = new Map();
 // 🤫 خريطة كتم الصوت المعزولة (اسكت / اتكلم) لكل بوت
 const botMuteMap = new Map();
+
+// 💾 ملف حفظ واسترجاع حالات التحكم (نام / اصحي / اسكت / اتكلم) عبر التحديثات والريستارت
+const CONTROLS_FILE = path.join(process.cwd(), 'runtime_controls.json');
+
+function loadRuntimeControls() {
+    try {
+        if (fs.existsSync(CONTROLS_FILE)) {
+            const raw = fs.readFileSync(CONTROLS_FILE, 'utf8');
+            const data = JSON.parse(raw);
+            if (data.botSleep && typeof data.botSleep === 'object') {
+                for (const [k, v] of Object.entries(data.botSleep)) {
+                    if (v) botSleepMap.set(k, true);
+                }
+            }
+            if (data.botMute && typeof data.botMute === 'object') {
+                for (const [k, v] of Object.entries(data.botMute)) {
+                    if (v) botMuteMap.set(k, true);
+                }
+            }
+            if (data.botWakeTime && typeof data.botWakeTime === 'object') {
+                for (const [k, v] of Object.entries(data.botWakeTime)) {
+                    if (typeof v === 'number') botWakeTimeMap.set(k, v);
+                }
+            }
+        }
+    } catch (err) {
+        console.error('⚠️ خطأ في قراءة ملف runtime_controls.json:', err?.message || err);
+    }
+}
+
+function saveRuntimeControls() {
+    try {
+        const sleepObj = {};
+        for (const [k, v] of botSleepMap.entries()) {
+            if (v) sleepObj[k] = true;
+        }
+        const muteObj = {};
+        for (const [k, v] of botMuteMap.entries()) {
+            if (v) muteObj[k] = true;
+        }
+        const wakeObj = {};
+        for (const [k, v] of botWakeTimeMap.entries()) {
+            if (typeof v === 'number') wakeObj[k] = v;
+        }
+
+        const data = {
+            botSleep: sleepObj,
+            botMute: muteObj,
+            botWakeTime: wakeObj,
+            lastUpdated: new Date().toISOString()
+        };
+        fs.writeFileSync(CONTROLS_FILE, JSON.stringify(data, null, 2), 'utf8');
+    } catch (err) {
+        console.error('⚠️ خطأ في حفظ ملف runtime_controls.json:', err?.message || err);
+    }
+}
+
+function setRoomSleep(roomKey) {
+    botSleepMap.set(roomKey, true);
+    saveRuntimeControls();
+}
+
+function setRoomMute(roomKey) {
+    botMuteMap.set(roomKey, true);
+    botSleepMap.delete(roomKey);
+    saveRuntimeControls();
+}
+
+function clearRoomState(roomKey) {
+    botSleepMap.delete(roomKey);
+    botMuteMap.delete(roomKey);
+    botWakeTimeMap.set(roomKey, Math.floor(Date.now() / 1000));
+    saveRuntimeControls();
+}
+
+// استرجاع حالات النوم والكتم فوراً عند تشغيل أو تحديث البوت
+loadRuntimeControls();
+
+function extractContextInfo(mek) {
+    if (!mek?.message) return null;
+    let msg = mek.message;
+    if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
+    if (msg.viewOnceMessage?.message) msg = msg.viewOnceMessage.message;
+    if (msg.viewOnceMessageV2?.message) msg = msg.viewOnceMessageV2.message;
+    if (msg.documentWithCaptionMessage?.message) msg = msg.documentWithCaptionMessage.message;
+
+    return msg.extendedTextMessage?.contextInfo ||
+           msg.imageMessage?.contextInfo ||
+           msg.videoMessage?.contextInfo ||
+           msg.stickerMessage?.contextInfo ||
+           msg.documentMessage?.contextInfo ||
+           msg.audioMessage?.contextInfo ||
+           msg.contactMessage?.contextInfo ||
+           null;
+}
 
 const botCounter = {};
 const lastBotTime = {};
@@ -393,7 +489,7 @@ export async function handleAllMessages(mek, currentConn) {
 
         // 🔑 المعرف الثابت الموحد للبوت وللجروب
         const botIdKey = currentConn.isSubBot 
-            ? (subBotConfig?.phone || currentConn.subBotPhone || myNumber || 'sub') 
+            ? (cleanPhoneNumber(subBotConfig?.phone || currentConn.subBotPhone || myNumber) || 'sub') 
             : 'main_bot';
         const roomKey = `${botIdKey}_${from}`;
 
@@ -426,9 +522,20 @@ export async function handleAllMessages(mek, currentConn) {
             );
 
             if (isUnmute) {
-                botMuteMap.delete(roomKey);
-                botSleepMap.delete(roomKey);
-                botWakeTimeMap.set(roomKey, Math.floor(Date.now() / 1000));
+                const isWakeAll = isAbsoluteOwner && (normalizedBody === 'اتكلم الكل' || normalizedBody === 'اتكلمو' || normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو');
+                if (isWakeAll) {
+                    clearRoomState(roomKey);
+                    clearRoomState(`main_bot_${from}`);
+                    try {
+                        const reg = loadSubBotsRegistry();
+                        for (const p of Object.keys(reg)) {
+                            const cp = cleanPhoneNumber(p);
+                            if (cp) clearRoomState(`${cp}_${from}`);
+                        }
+                    } catch (_) {}
+                } else {
+                    clearRoomState(roomKey);
+                }
                 await respondWithStrictTiming('🗣️', async () => {
                     await currentConn.sendMessage(from, { text: `🗣️ *أمرك يا حج! تم فك كتم الصوت عن (${botName}) في هذا الجروب. رجعت أرد وأشتغل بكامل طاقتي!* ⚡` }, { quoted: mek });
                 });
@@ -448,8 +555,19 @@ export async function handleAllMessages(mek, currentConn) {
                                 (normalizedCallName && (normalizedBody === `اسكت ${normalizedCallName}` || normalizedBody === `اسكت يا ${normalizedCallName}`));
 
             if (isMuteAll || isNamedMute) {
-                botMuteMap.set(roomKey, true);
-                botSleepMap.delete(roomKey);
+                if (isMuteAll) {
+                    setRoomMute(roomKey);
+                    setRoomMute(`main_bot_${from}`);
+                    try {
+                        const reg = loadSubBotsRegistry();
+                        for (const p of Object.keys(reg)) {
+                            const cp = cleanPhoneNumber(p);
+                            if (cp) setRoomMute(`${cp}_${from}`);
+                        }
+                    } catch (_) {}
+                } else {
+                    setRoomMute(roomKey);
+                }
                 await respondWithStrictTiming('🤫', async () => {
                     await currentConn.sendMessage(from, { 
                         text: `🤫 *أمرك يا حج! تم كتم صوت بوت (${botName}) بالكامل في هذا الجروب فقط.* 🤐\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم) أو (اصحي) هنا.\n✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي الجروبات!_` 
@@ -479,7 +597,20 @@ export async function handleAllMessages(mek, currentConn) {
                 return;
             }
 
-            botSleepMap.set(roomKey, true);
+            const isSleepAll = isAbsoluteOwner && (normalizedBody === 'نام الكل' || normalizedBody === 'نامو');
+            if (isSleepAll) {
+                setRoomSleep(roomKey);
+                setRoomSleep(`main_bot_${from}`);
+                try {
+                    const reg = loadSubBotsRegistry();
+                    for (const p of Object.keys(reg)) {
+                        const cp = cleanPhoneNumber(p);
+                        if (cp) setRoomSleep(`${cp}_${from}`);
+                    }
+                } catch (_) {}
+            } else {
+                setRoomSleep(roomKey);
+            }
             const masterTitle = isAbsoluteOwner ? 'يا حج شادو' : 'يا صاحب البوت';
             await respondWithStrictTiming('💤', async () => {
                 await currentConn.sendMessage(from, { 
@@ -517,13 +648,28 @@ export async function handleAllMessages(mek, currentConn) {
                 return;
             }
 
+            const isWakeAll = isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو' || normalizedBody === 'اتكلم الكل' || normalizedBody === 'اتكلمو');
+            if (isWakeAll) {
+                clearRoomState(roomKey);
+                clearRoomState(`main_bot_${from}`);
+                try {
+                    const reg = loadSubBotsRegistry();
+                    for (const p of Object.keys(reg)) {
+                        const cp = cleanPhoneNumber(p);
+                        if (cp) clearRoomState(`${cp}_${from}`);
+                    }
+                } catch (_) {}
+                await respondWithStrictTiming('⚡', async () => {
+                    await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في هذا الجروب وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
+                });
+                return;
+            }
+
             const wasSleeping = botSleepMap.get(roomKey) || false;
             const wasMuted = botMuteMap.get(roomKey) || false;
 
             if (wasSleeping || wasMuted) {
-                botSleepMap.delete(roomKey);
-                botMuteMap.delete(roomKey);
-                botWakeTimeMap.set(roomKey, Math.floor(Date.now() / 1000));
+                clearRoomState(roomKey);
 
                 await respondWithStrictTiming('⚡', async () => {
                     await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في هذا الجروب وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
@@ -1360,37 +1506,97 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // مصفوفة الشتائم الموحدة
-        const shatemaWords = ['كسمك', 'خول', 'عرص', 'متناك', 'عبيط', 'اهبل', 'جزمه', 'عره', 'زاني', 'كلب', 'وسخ', 'انيك', 'زباله', 'دمج', 'حيوان', 'قليل الادب', 'متربتش', 'حقير', 'بضان', 'انت بضان', 'شرموط', 'قحبة', 'منيوك', 'يا متناك', 'يا خول', 'يا عرص', 'يا كسمك'];
-        const isExactShatema = shatemaWords.includes(normalizedBody);
-        const isCursePresent = isExactShatema || 
-            shatemaWords.some(w => normalizedBody.includes(w)) || 
-            textLower.includes('كسم') || 
-            textLower.includes('خول') || 
-            textLower.includes('عرص') || 
-            textLower.includes('متناك') || 
-            textLower.includes('شرموط') || 
-            textLower.includes('قحب') || 
-            textLower.includes('بضان') || 
-            textLower.includes('منيوك');
+        // مصفوفة الشتائم الموحدة والتعابير النمطية المتقدمة للكشف عن الشتائم
+        const curseWords = [
+            'كسمك', 'كسم', 'كسختك', 'كسامك', 'كسمكم', 'كسمكوا', 'كسمينك', 'كسمين امك',
+            'خول', 'خولة', 'يا خول', 'معرص', 'معرصة', 'عرص', 'عرصة', 'يا عرص', 'يا معرص',
+            'متناك', 'متناكة', 'يا متناك', 'يا متناكة',
+            'منيوك', 'منيوكة', 'يا منيوك', 'منيكة',
+            'شرموط', 'شرموطة', 'يا شرموط', 'يا شرموطة', 'شرمطة',
+            'قحبة', 'يا قحبة',
+            'بضان', 'يا بضان', 'انت بضان', 'مبضون', 'تبضن', 'ابضن',
+            'عبيط', 'يا عبيط', 'اهبل', 'يا اهبل', 'جزمه', 'يا جزمه', 'عره', 'يا عره',
+            'زاني', 'زانية', 'كلب', 'يا كلب', 'ابن الكلب', 'وسخ', 'وسخة', 'يا وسخ', 'يا وسخة', 'ابن الوسخة',
+            'انيك', 'انيكك', 'نيكو', 'نيك', 'اركبك',
+            'زباله', 'يا زبالة', 'دمج', 'يا دمج', 'حيوان', 'يا حيوان', 'ابن الحيوان',
+            'قليل الادب', 'متربتش', 'حقير', 'يا حقير', 'واطي', 'يا واطي', 'نجس', 'يا نجس',
+            'طيز', 'طيزك', 'زب', 'كس', 'كسك',
+            'حمار', 'يا حمار', 'بغل', 'يا بغل', 'طور', 'يا طور',
+            'يلعن', 'يلعنك', 'يلعن ميتينك', 'يلعن ابوك', 'يلعن امك', 'يلعن دينك', 'انعل',
+            'غور', 'كول خرا', 'كل خرا', 'خرا'
+        ];
 
-        const isBadPersonality = (currentConn.personality === 'bad' || subBotConfig?.personality === 'bad');
+        const curseRegex = /(كسم|كسخت|كسام|متناك|متناكه|منيوك|منيوكه|منيك|خول|خوله|عرص|عرصه|معرص|معرصه|شرموط|شرموطه|شرمط|قحب|قحبه|بضان|مبضون|تبضن|ابضن|عبيط|اهبل|جزمه|عره|زاني|كلب|وسخ|وسخه|انيك|انيكك|اركبك|نيك|زباله|حيوان|متربتش|حقير|دمج|طيز|طيزك|زب|نجس|واطي|يلعن|انعل|كول\s*خرا|كل\s*خرا|ابن\s*(الكلب|الوسخ|الوسخه|المتناك|المتناكه|الشرموط|الشرموطه|الحيوان|القحبه|الزانيه|الهبله)|يا\s*(ابن|كلب|خول|عرص|معرص|متناك|شرموط|وسخ|بضان|منيوك|حمار|حيوان|واطي|نجس|قذر|زباله|عبيط|اهبل|جزمه|عره|شحات))/i;
+
+        const isExactShatema = curseWords.includes(normalizedBody);
+        const isCursePresent = isExactShatema || 
+            curseWords.some(w => normalizedBody.includes(w)) || 
+            curseRegex.test(normalizedBody) ||
+            curseRegex.test(textLower);
+
+        const isBadPersonality = Boolean(
+            currentConn.personality === 'bad' || 
+            currentConn.subBotConfig?.personality === 'bad' || 
+            subBotConfig?.personality === 'bad'
+        );
 
         // استخراج بيانات الرد والمنشن للتأكد هل الشتيمة موجهة للبوت تحديداً أم للأعضاء
-        const ctxInfo = mek.message?.extendedTextMessage?.contextInfo;
+        const ctxInfo = extractContextInfo(mek);
         const quotedParticipant = ctxInfo?.participant || '';
         const quotedClean = getCleanNumber(quotedParticipant);
-        const isQuotedToMe = (quotedClean && quotedClean === myNumber) || (Boolean(ctxInfo?.quotedMessage) && !isRealGroup);
-        const mentionedJids = ctxInfo?.mentionedJid || [];
-        const isMentioned = mentionedJids.some(jid => getCleanNumber(jid) === myNumber);
-        const hasBotKeyword = normalizedBody.includes('بوت') || 
-            (botName && normalizedBody.includes(botName.toLowerCase())) || 
-            (botCallName && normalizedBody.includes(botCallName.toLowerCase()));
+        const stanzaId = ctxInfo?.stanzaId || '';
 
-        // الشتيمة موجهة للبوت حصرياً إذا كان ريبلاي على رسالة البوت أو الرسالة فيها كلمة بوت/اسم البوت
+        // بناء قائمة بكل المعرفات الممكنة للبوت الحالي (أرقام تليفون، LIDs، سجلات)
+        const thisBotIdentities = new Set();
+        if (myNumber) thisBotIdentities.add(myNumber);
+        if (currentConn.user?.id) {
+            const uPhone = currentConn.user.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+            if (uPhone) thisBotIdentities.add(uPhone);
+        }
+        if (currentConn.user?.lid) {
+            const uLid = currentConn.user.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+            if (uLid) thisBotIdentities.add(uLid);
+        }
+        if (subBotConfig?.phone) {
+            const sPhone = cleanPhoneNumber(subBotConfig.phone);
+            if (sPhone) thisBotIdentities.add(sPhone);
+        }
+        if (currentConn.subBotPhone) {
+            const sPhone = cleanPhoneNumber(currentConn.subBotPhone);
+            if (sPhone) thisBotIdentities.add(sPhone);
+        }
+        if (myNumber && localDB?.lidMap?.[myNumber]) {
+            thisBotIdentities.add(String(localDB.lidMap[myNumber]).replace(/[^0-9]/g, ''));
+        }
+        if (localDB?.lidMap) {
+            for (const [phone, lid] of Object.entries(localDB.lidMap)) {
+                if (thisBotIdentities.has(phone)) thisBotIdentities.add(String(lid).replace(/[^0-9]/g, ''));
+                if (thisBotIdentities.has(lid)) thisBotIdentities.add(String(phone).replace(/[^0-9]/g, ''));
+            }
+        }
+
+        const isQuotedToMe = (quotedClean && thisBotIdentities.has(quotedClean)) ||
+            (Boolean(stanzaId) && (
+                (currentConn.sentMsgIds && currentConn.sentMsgIds.has(stanzaId)) ||
+                (subBotSentMsgIds && subBotSentMsgIds.has(stanzaId)) ||
+                (global.botSentMsgIds && global.botSentMsgIds.has(stanzaId))
+            )) ||
+            (Boolean(ctxInfo?.quotedMessage) && !isRealGroup);
+
+        const mentionedJids = ctxInfo?.mentionedJid || [];
+        const isMentioned = mentionedJids.some(jid => {
+            const cleanJid = getCleanNumber(jid);
+            return cleanJid && thisBotIdentities.has(cleanJid);
+        });
+
+        const hasBotKeyword = normalizedBody.includes('بوت') || 
+            (botName && normalizedBody.includes(normalizeArabic(botName.toLowerCase()))) || 
+            (botCallName && normalizedBody.includes(normalizeArabic(botCallName.toLowerCase())));
+
+        // الشتيمة موجهة للبوت إذا كان ريبلاي عليه، أو منشن له، أو كتب اسم البوت مع الشتيمة، أو في الخاص
         const isCurseTargetingBot = isCursePresent && (isQuotedToMe || isMentioned || hasBotKeyword || !isRealGroup);
 
-        // 🔥 لو البوت قليل الأدب ووصله شتيمة موجهة له (ريبلاي عليه أو مع كلمة بوت): يشتم ويرد بقسوة!
+        // 🔥 لو البوت قليل الأدب ووصله شتيمة موجهة له (ريبلاي عليه أو منشن أو مع كلمة بوت): يشتم ويرد بقسوة!
         // استثناء: الحج شادو أو صاحب البوت الفرعي (أبوه) مبيشتمهمش وبيقولهم عشان انت ابويا مسموحلك
         if (isBadPersonality) {
             if (isCurseTargetingBot) {
@@ -1417,7 +1623,9 @@ export async function handleAllMessages(mek, currentConn) {
                     'يلا يا ابن المتناكة من هنا متصدعناش 🖕',
                     'انت مالك يا منيوك هو حد كلمك؟ 🖕🤬',
                     'ياض يا عرص احترم نفسك بدل ما اركبك 🖕🔥',
-                    'عيل مهزء وبضان كسم شكلك 🖕🤣'
+                    'عيل مهزء وبضان كسم شكلك 🖕🤣',
+                    'بتشتم مين يا ابن الوسخة انت ناسي نفسك؟ 🖕⚡',
+                    'طب كسمك ليل ونهار يا روح امك 🖕😏'
                 ];
                 const chosenReply = savageReplies[Math.floor(Math.random() * savageReplies.length)];
                 await respondWithStrictTiming('🖕', async () => {

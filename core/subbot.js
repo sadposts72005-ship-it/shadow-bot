@@ -11,7 +11,8 @@ const SUB_BOTS_DIR = path.join(process.cwd(), 'sessions', 'sub_bots');
 // حفظ السوكيتات النشطة في الذاكرة
 export const activeSubBots = new Map();
 // تتبع الرسائل المرسلة من البوتات الفرعية لتجنب اللوب
-const subBotSentMsgIds = new Set();
+export const subBotSentMsgIds = new Set();
+global.subBotSentMsgIds = subBotSentMsgIds;
 
 /**
  * تحميل سجل البوتات الفرعية من ملف sub_bots.json
@@ -166,7 +167,12 @@ async function createSubBotSocket(phone, sessionDir) {
             const res = await originalSendMessage(...args);
             if (res?.key?.id) {
                 subBotSentMsgIds.add(res.key.id);
-                setTimeout(() => subBotSentMsgIds.delete(res.key.id), 120000);
+                sock.sentMsgIds = sock.sentMsgIds || new Set();
+                sock.sentMsgIds.add(res.key.id);
+                setTimeout(() => {
+                    subBotSentMsgIds.delete(res.key.id);
+                    sock.sentMsgIds?.delete(res.key.id);
+                }, 120000);
             }
             return res;
         } catch (e) {

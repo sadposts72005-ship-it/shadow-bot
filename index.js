@@ -40,6 +40,7 @@ global.setting = {
 };
 
 const botSentMsgIds = new Set();
+global.botSentMsgIds = botSentMsgIds;
 
 // ⏰ وقت تشغيل البوت الحالي لتجاهل أي رسائل قديمة وصلت أثناء إيقاف البوت
 global.botStartTime = Math.floor(Date.now() / 1000);
@@ -110,7 +111,12 @@ async function startShadowBot() {
             const res = await originalSendMessage(...args);
             if (res?.key?.id) {
                 botSentMsgIds.add(res.key.id);
-                setTimeout(() => botSentMsgIds.delete(res.key.id), 120000);
+                conn.sentMsgIds = conn.sentMsgIds || new Set();
+                conn.sentMsgIds.add(res.key.id);
+                setTimeout(() => {
+                    botSentMsgIds.delete(res.key.id);
+                    conn.sentMsgIds?.delete(res.key.id);
+                }, 120000);
             }
             return res;
         } catch (e) {
