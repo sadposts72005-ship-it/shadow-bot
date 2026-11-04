@@ -1,6 +1,8 @@
 // plugins/game-movies.js
 import fs from 'fs';
 import path from 'path';
+import { execFile } from 'child_process';
+import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 
 // ⏱️ دالة تأخير لمنع الحظر ومحاكاة الكتابة الطبيعية للإنسان
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -241,6 +243,128 @@ handler.before = async (m, conn) => {
 
         await conn.sendMessage(id, { text: helpText }, { quoted: m });
         return true;
+    }
+
+    // ➕ أمر إضافة فيلم حقيقي (للمطور والمالك)
+    const rawText = body.trim();
+    if (/^(اضف\s+فيلم|اضافة\s+فيلم)/i.test(rawText)) {
+        const owners = ['201129249396', '201229409956', '194961618301016'];
+        const cleanSenderNum = sender.replace(/[^0-9]/g, '');
+        const isOwner = owners.includes(cleanSenderNum) || m.key.fromMe;
+        if (!isOwner) {
+            await delay(1000);
+            await conn.sendMessage(id, { text: '❌ عذراً! هذا الأمر مخصص لمالك البوت فقط لإضافة مقاطع أفلام جديدة.' }, { quoted: m });
+            return true;
+        }
+
+        // استخراج الميديا المقتبسة أو المرفقة
+        const quotedMsg = m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        let mediaMsg = null;
+        let mediaType = null;
+
+        if (quotedMsg?.audioMessage) {
+            mediaMsg = quotedMsg.audioMessage;
+            mediaType = 'audio';
+        } else if (quotedMsg?.videoMessage) {
+            mediaMsg = quotedMsg.videoMessage;
+            mediaType = 'video';
+        } else if (m.message?.audioMessage) {
+            mediaMsg = m.message.audioMessage;
+            mediaType = 'audio';
+        } else if (m.message?.videoMessage) {
+            mediaMsg = m.message.videoMessage;
+            mediaType = 'video';
+        }
+
+        if (!mediaMsg) {
+            await delay(1000);
+            await conn.sendMessage(id, { 
+                text: `⚠️ *طـريـقـة إضـافـة فـيـلـم حـقـيـقـي* ⚠️\n\nقم بالرد على ريكورد أو فويس أو فيديو لمشهد الفيلم واكتب:\n*اضف فيلم [اسم الفيلم] | [الإفيه أو الجملة]*\n\n📌 *مثال:*\nاضف فيلم الفيل الأزرق 2 | لا تخافوا ولكن احذروا` 
+            }, { quoted: m });
+            return true;
+        }
+
+        const argsStr = rawText.replace(/^(اضف\s+فيلم|اضافة\s+فيلم)/i, '').trim();
+        const parts = argsStr.split('|').map(p => p.trim());
+        const movieName = parts[0];
+        const movieQuote = parts[1] || 'مشهد شهير من الفيلم';
+        const movieActors = parts[2] || 'أبطال الفيلم';
+        const movieYear = parts[3] || '2020';
+
+        if (!movieName) {
+            await delay(1000);
+            await conn.sendMessage(id, { text: '❌ يرجى كتابة اسم الفيلم! مثال:\n*اضف فيلم ولاد رزق | عينك في عيني كدة*' }, { quoted: m });
+            return true;
+        }
+
+        await delay(800);
+        await conn.sendMessage(id, { react: { text: '⏳', key: m.key } }).catch(() => {});
+        await conn.sendPresenceUpdate('recording', id).catch(() => {});
+
+        try {
+            const stream = await downloadContentFromMessage(mediaMsg, mediaType);
+            let buffer = Buffer.from([]);
+            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+
+            const scratchDir = path.join(process.cwd(), 'scratch');
+            if (!fs.existsSync(scratchDir)) {
+                fs.mkdirSync(scratchDir, { recursive: true });
+            }
+            const tempInput = path.join(scratchDir, `temp_${Date.now()}.${mediaType === 'video' ? 'mp4' : 'ogg'}`);
+            fs.writeFileSync(tempInput, buffer);
+
+            const nextNum = moviesList.length + 1;
+            const newId = `movie_${String(nextNum).padStart(3, '0')}`;
+            const targetOpus = path.join(process.cwd(), 'assets', 'audio', 'movies', `${newId}.opus`);
+
+            const ffmpegBin = (process.platform === 'win32')
+                ? path.join(process.cwd(), 'node_modules', 'ffmpeg-static', 'ffmpeg.exe')
+                : 'ffmpeg';
+
+            await new Promise((resolve, reject) => {
+                execFile(ffmpegBin, ['-y', '-i', tempInput, '-c:a', 'libopus', '-b:a', '48k', targetOpus], (err) => {
+                    try { fs.unlinkSync(tempInput); } catch (_) {}
+                    if (err) return reject(err);
+                    resolve();
+                });
+            });
+
+            const newEntry = {
+                id: newId,
+                name: movieName,
+                aliases: [
+                    movieName,
+                    movieName.replace(/[أإآ]/g, 'ا'),
+                    movieName.replace(/ة/g, 'ه'),
+                    movieName.replace(/ى/g, 'ي')
+                ],
+                year: movieYear,
+                actors: movieActors,
+                quote: movieQuote
+            };
+
+            moviesList.push(newEntry);
+            fs.writeFileSync(moviesDataPath, JSON.stringify(moviesList, null, 2), 'utf8');
+
+            await conn.sendMessage(id, { react: { text: '✅', key: m.key } }).catch(() => {});
+            await delay(1200);
+
+            const successCard = 
+                `✅ *تـم إضـافـة الـفـيـلـم بـنـجـاح!* 🎬🔥\n\n` +
+                `تم حفظ المقطع الصوتي بصوت الممثلين الأصلي بنقاء عالي وبصيغة واتساب المعتمدة 🎙️\n\n` +
+                `🎬 *اسم الفيلم:* *${movieName}*\n` +
+                `🗣️ *الإفيه:* "${movieQuote}"\n` +
+                `🆔 *رقم المقطع:* ${newId}\n` +
+                `📚 *إجمالي المقاطع المتاحة الآن:* ${moviesList.length} مقطع\n\n` +
+                `المقطع دخل فوراً في قرعة لعبة الأفلام 🍿!`;
+
+            await conn.sendMessage(id, { text: successCard }, { quoted: m });
+            return true;
+        } catch (e) {
+            console.error('Error in add movie command:', e);
+            await conn.sendMessage(id, { text: '❌ حدث خطأ أثناء معالجة وتحويل الصوت: ' + (e?.message || e) }, { quoted: m });
+            return true;
+        }
     }
 
     if (!conn.movies[cleanId]) return false;
