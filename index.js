@@ -129,6 +129,7 @@ async function startShadowBot() {
     conn.football = conn.football || {};
     conn.obito = conn.obito || {};
     conn.scramble = conn.scramble || {};
+    conn.movies = conn.movies || {};
     conn.gameSolo = conn.gameSolo || {};
     conn.game = conn.game || {};
 

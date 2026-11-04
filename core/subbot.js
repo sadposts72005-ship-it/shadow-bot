@@ -185,6 +185,7 @@ async function createSubBotSocket(phone, sessionDir) {
     sock.football = {};
     sock.obito = {};
     sock.scramble = {};
+    sock.movies = {};
     sock.gameSolo = {};
     sock.game = {};
     sock.bakasa = {};

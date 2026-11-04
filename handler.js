@@ -6,6 +6,7 @@ import gameSaraha from './plugins/game-saraha.js';
 import gameFootball from './plugins/game-football.js';
 import gameBakasa from './plugins/game-bakasa.js';
 import gamePuzzle from './plugins/puzzle.js';
+import gameMovies from './plugins/game-movies.js';
 import menuHandler from './plugins/menu.js';
 import datelsHandler, { extractMessageBody } from './plugins/datels.js';
 import { 
@@ -1966,7 +1967,15 @@ export async function handleAllMessages(mek, currentConn) {
         }
         
         // 🎮 [معالجة الألعاب والتأكد من عدم تضارب النقاط] 🎮
-        if (guessAnswered || scrambleAnswered || footballAnswered || tttAnswered || bakasaAnswered || puzzleAnswered) {
+        let moviesAnswered = false;
+        if (gameMovies) {
+            if ((currentConn.movies && currentConn.movies[from]) || ['شرح لعبة افلام', 'شرح افلام', 'كيف لعب افلام', 'تلميح افلام', 'تلميح فيلم', 'انسحاب افلام', 'انسحاب فيلم', 'الغاء افلام', 'الغاء فيلم'].includes(normalizedBody)) {
+                if (typeof gameMovies.before === 'function') moviesAnswered = await gameMovies.before(mek, currentConn);
+                else if (gameMovies.default && typeof gameMovies.default.before === 'function') moviesAnswered = await gameMovies.default.before(mek, currentConn);
+            }
+        }
+
+        if (guessAnswered || scrambleAnswered || footballAnswered || tttAnswered || bakasaAnswered || puzzleAnswered || moviesAnswered) {
             return;
         }
         if (sarahaHandled) return;
@@ -2055,6 +2064,16 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
         // =========================================================================
+        if (/^(افلام|فيلم|لعبة افلام|لعبه افلام|خمن الفيلم)$/i.test(normalizedBody)) {
+            if (gameMovies) {
+                await respondWithStrictTiming('🎬', async () => {
+                    if (typeof gameMovies === 'function') await gameMovies(mek, currentConn);
+                    else if (gameMovies.default && typeof gameMovies.default === 'function') await gameMovies.default(mek, currentConn);
+                });
+            }
+            return;
+        }
+
         // 📜 [قائمة الأوامر المقسمة إلى أقسام ذكية بالأرقام]
         // =========================================================================
         const isMainMenuCmd = ['اوامر', 'أوامر', 'منيو', 'المنيو', 'menu', 'help'].includes(normalizedBody);
