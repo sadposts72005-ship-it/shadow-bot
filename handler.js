@@ -21,6 +21,7 @@ import {
     updateSubBotName,
     updateSubBotCallName,
     updateSubBotHajj,
+    updateSubBotMainOwner,
     formatGenderText,
     activeSubBots,
     subBotSentMsgIds
@@ -335,10 +336,17 @@ export async function handleAllMessages(mek, currentConn) {
         let subBotConfig = currentConn.subBotConfig || null;
         let botName = currentConn.botName || 'شادو';
 
+        if (currentConn.subBotPhone) {
+            currentConn.isSubBot = true;
+            if (!myNumber) myNumber = currentConn.subBotPhone;
+        }
+
         if (!subBotConfig) {
             const registry = loadSubBotsRegistry();
             if (myNumber && registry[myNumber]) {
                 subBotConfig = registry[myNumber];
+            } else if (currentConn.subBotPhone && registry[currentConn.subBotPhone]) {
+                subBotConfig = registry[currentConn.subBotPhone];
             } else {
                 for (const [p, cfg] of Object.entries(registry)) {
                     if (p === myNumber || cfg.phone === myNumber || (myNumber && p.endsWith(myNumber))) {
@@ -357,6 +365,7 @@ export async function handleAllMessages(mek, currentConn) {
 
         if (subBotConfig) {
             currentConn.subBotConfig = subBotConfig;
+            currentConn.isSubBot = true;
             if (subBotConfig.botName) botName = subBotConfig.botName;
             if (subBotConfig.callName) currentConn.callName = subBotConfig.callName;
         }
@@ -405,6 +414,7 @@ export async function handleAllMessages(mek, currentConn) {
             const senderCleanPhone = cleanPhoneNumber(cleanSender);
             const mappedSender = localDB.lidMap?.[cleanSender] || '';
             const mappedSenderClean = cleanPhoneNumber(mappedSender);
+            const adminNumbers = Array.isArray(subBotConfig.adminNumbers) ? subBotConfig.adminNumbers : [];
 
             // 1. فحص هل هو المالك الأساسي للبوت الفرعي
             if (
@@ -412,7 +422,11 @@ export async function handleAllMessages(mek, currentConn) {
                 (adminLocalPhone && (cleanSender === adminLocalPhone || senderCleanPhone === adminLocalPhone)) ||
                 (adminLid && (cleanSender === adminLid || sender.startsWith(adminLid))) ||
                 (mappedSender && (mappedSender === adminPhone || mappedSender === adminLid || mappedSenderClean === adminPhone || mappedSender === adminLocalPhone)) ||
-                (subBotConfig.adminJid && sender === subBotConfig.adminJid)
+                (subBotConfig.adminJid && sender === subBotConfig.adminJid) ||
+                adminNumbers.includes(cleanSender) ||
+                adminNumbers.includes(senderCleanPhone) ||
+                adminNumbers.includes(sender) ||
+                (mappedSender && adminNumbers.includes(mappedSender))
             ) {
                 isSubBotAdmin = true;
                 isSubBotMainOwner = true;
@@ -420,8 +434,8 @@ export async function handleAllMessages(mek, currentConn) {
                 if (sender.endsWith('@lid') || cleanSender.length > 13) {
                     if (!subBotConfig.adminLid || subBotConfig.adminLid !== cleanSender) {
                         subBotConfig.adminLid = cleanSender;
-                        if (!Array.isArray(subBotConfig.adminNumbers)) subBotConfig.adminNumbers = [];
                         if (!subBotConfig.adminNumbers.includes(cleanSender)) subBotConfig.adminNumbers.push(cleanSender);
+                        if (!subBotConfig.adminNumbers.includes(`${cleanSender}@lid`)) subBotConfig.adminNumbers.push(`${cleanSender}@lid`);
                         
                         const subPhone = subBotConfig.phone || myNumber;
                         const sessionDir = path.join(process.cwd(), 'sessions', 'sub_bots', subPhone);
@@ -431,9 +445,24 @@ export async function handleAllMessages(mek, currentConn) {
                         const reg = loadSubBotsRegistry();
                         if (reg[subPhone]) {
                             reg[subPhone].adminLid = cleanSender;
+                            reg[subPhone].adminNumbers = subBotConfig.adminNumbers;
                             saveSubBotsRegistry(reg);
                         }
+                        if (adminPhone) {
+                            if (!localDB.lidMap) localDB.lidMap = {};
+                            localDB.lidMap[adminPhone] = cleanSender;
+                            localDB.lidMap[cleanSender] = adminPhone;
+                            saveLocalDB(localDB);
+                        }
                     }
+                }
+            }
+
+            // فحص إضافي: إذا كان المرسل عبر LID ولم يتم التعرف عليه وكان مسجلاً في خريطة الـ LID
+            if (!isSubBotMainOwner && (sender.endsWith('@lid') || cleanSender.length > 13) && adminPhone) {
+                if (localDB.lidMap?.[cleanSender] === adminPhone || localDB.lidMap?.[cleanSender] === adminLocalPhone || localDB.lidMap?.[adminPhone] === cleanSender) {
+                    isSubBotAdmin = true;
+                    isSubBotMainOwner = true;
                 }
             }
 
@@ -571,7 +600,7 @@ export async function handleAllMessages(mek, currentConn) {
                 }
                 await respondWithStrictTiming('🤫', async () => {
                     await currentConn.sendMessage(from, { 
-                        text: `🤫 *أمرك يا حج! تم كتم صوت بوت (${botName}) بالكامل في هذا الجروب فقط.* 🤐\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم) أو (اصحي) هنا.\n✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي الجروبات!_` 
+                        text: `🤫 *أمرك يا حج! تم كتم صوت بوت (${botName}) بالكامل في ${isRealGroup ? 'هذا الجروب' : 'هذه المحادثة'} فقط.* 🤐\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم) أو (اصحي) هنا.\n✨ _البوت ما زال يعمل بكامل طاقته في باقي المحادثات!_` 
                     }, { quoted: mek });
                 });
                 return;
@@ -615,10 +644,10 @@ export async function handleAllMessages(mek, currentConn) {
             const masterTitle = isAbsoluteOwner ? 'يا حج شادو' : 'يا صاحب البوت';
             await respondWithStrictTiming('💤', async () => {
                 await currentConn.sendMessage(from, { 
-                    text: `💤 *أمرك ${masterTitle}! تم تفعيل وضع النوم لبوت (${botName}) في هذا الجروب فقط!* 🌙\n` +
+                    text: `💤 *أمرك ${masterTitle}! تم تفعيل وضع النوم لبوت (${botName}) في ${isRealGroup ? 'هذا الجروب' : 'هذه المحادثة'} فقط!* 🌙\n` +
                           `البوت الآن نائم وصامت عن باقي الأعضاء، لكنه مستيقظ ويرد عليك فقط في أي وقت.\n` +
                           `💡 لإيقاظه للجميع أرسل: (اصحي).\n` +
-                          `✨ _البوت ما زال يعمل بكامل طاقته في الخاص وباقي المجموعات!_` 
+                          `✨ _البوت ما زال يعمل بكامل طاقته في باقي المحادثات!_` 
                 }, { quoted: mek });
             });
             return;
@@ -661,7 +690,7 @@ export async function handleAllMessages(mek, currentConn) {
                     }
                 } catch (_) {}
                 await respondWithStrictTiming('⚡', async () => {
-                    await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في هذا الجروب وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في ${isRealGroup ? 'هذا الجروب' : 'هذه المحادثة'} وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
                 });
                 return;
             }
@@ -1150,7 +1179,28 @@ export async function handleAllMessages(mek, currentConn) {
                         }
                     } else {
                         const ctx = mek.message?.extendedTextMessage?.contextInfo;
-                        let rawAdmin = ctx?.mentionedJid?.[0] || ctx?.participant || body;
+                        const bodyDigits = body.replace(/[^0-9]/g, '');
+                        let rawAdmin = '';
+
+                        // 1. أولوية عليا: إذا كتب المستخدم أرقاماً في نص الرسالة، فهذا هو رقم الحج المطلوب تعيينه
+                        if (bodyDigits.length >= 8) {
+                            rawAdmin = bodyDigits;
+                        } else if (ctx?.mentionedJid && ctx.mentionedJid.length > 0) {
+                            // 2. إذا قام بعمل منشن لشخص
+                            rawAdmin = ctx.mentionedJid[0];
+                        } else if (ctx?.participant) {
+                            // 3. إذا اقتبس رسالة شخص آخر (مع التأكد أنها ليست رسالة البوت نفسه)
+                            const myId = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '');
+                            const partNum = ctx.participant.split(':')[0]?.replace(/[^0-9]/g, '');
+                            if (partNum && partNum !== myId && partNum !== '201229409956') {
+                                rawAdmin = ctx.participant;
+                            } else {
+                                rawAdmin = body;
+                            }
+                        } else {
+                            rawAdmin = body;
+                        }
+
                         let cleaned = cleanPhoneNumber(rawAdmin) || getCleanNumber(rawAdmin);
                         adminPhone = cleaned;
                         adminLid = localDB.lidMap?.[cleaned] || '';
@@ -1165,7 +1215,7 @@ export async function handleAllMessages(mek, currentConn) {
                         return;
                     }
 
-                    // استخراج الـ LID بطريقة سريعة جداً مع مهلة ثانية واحدة لتجنب أي تعليق
+                    // استخراج الـ LID بطريقة سريعة مع مهلة مناسبة لتجنب أي تعليق
                     if (!adminLid && adminPhone.length <= 13) {
                         try {
                             const lidPromise = (async () => {
@@ -1175,7 +1225,7 @@ export async function handleAllMessages(mek, currentConn) {
                                 }
                                 return '';
                             })();
-                            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(''), 1200));
+                            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(''), 2500));
                             adminLid = await Promise.race([lidPromise, timeoutPromise]);
                         } catch (_) {}
                     }
@@ -1345,6 +1395,73 @@ export async function handleAllMessages(mek, currentConn) {
             await respondWithStrictTiming('⚡', async () => {
                 await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
             });
+            return;
+        }
+
+        // =========================================================================
+        // 👑 [أمر تعيين وتغيير الحج الأساسي للبوت الفرعي دون الحاجة لإعادة التنصيب]
+        // =========================================================================
+        if (normalizedBody.startsWith('تعيين حج ') || normalizedBody.startsWith('تغيير حج ') || normalizedBody.startsWith('نقل ملكية البوت ')) {
+            const isAuthorized = isAbsoluteOwner || (currentConn.isSubBot && isSubBotMainOwner);
+            if (!isAuthorized) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي أو لمالك البوت (الحج الأساسي)! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+
+            const ctx = mek.message?.extendedTextMessage?.contextInfo;
+            const parts = body.replace(/^(تعيين حج|تغيير حج|نقل ملكية البوت)\s*/i, '').trim().split(/\s+/);
+            let botTarget = '';
+            let newAdminTarget = '';
+
+            if (currentConn.isSubBot) {
+                botTarget = myNumber || currentConn.subBotPhone || (subBotConfig?.phone);
+                newAdminTarget = ctx?.mentionedJid?.[0] || parts[0];
+            } else {
+                if (parts.length >= 2) {
+                    botTarget = parts[0];
+                    newAdminTarget = ctx?.mentionedJid?.[0] || parts[1];
+                } else {
+                    await respondWithStrictTiming('⚠️', async () => {
+                        await currentConn.sendMessage(from, { 
+                            text: '⚠️ طريقة الاستخدام الصحيحة:\n*(تعيين حج <رقم_البوت> <رقم_الحج_الجديد>)*\nمثال:\n(تعيين حج 201011111111 201022222222)' 
+                        }, { quoted: mek });
+                    });
+                    return;
+                }
+            }
+
+            const cleanBot = cleanPhoneNumber(botTarget);
+            const cleanNewAdmin = cleanPhoneNumber(newAdminTarget);
+
+            if (!cleanBot || !cleanNewAdmin) {
+                await respondWithStrictTiming('⚠️', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ تعذر استخراج أرقام صحيحة للبوت والحج. يرجى التأكد من كتابة الأرقام بشكل صحيح.' }, { quoted: mek });
+                });
+                return;
+            }
+
+            let newLid = '';
+            try {
+                const waCheck = await currentConn.onWhatsApp(`${cleanNewAdmin}@s.whatsapp.net`);
+                if (waCheck && waCheck[0]?.lid) {
+                    newLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                }
+            } catch (_) {}
+
+            const updated = updateSubBotMainOwner(cleanBot, cleanNewAdmin, newLid);
+            if (updated) {
+                await respondWithStrictTiming('👑', async () => {
+                    await currentConn.sendMessage(from, { 
+                        text: `👑 *تم بنجاح تعيين الحج الأساسي الجديد!* ⚡\n🤖 *رقم البوت:* +${cleanBot}\n👤 *الحج الجديد:* +${cleanNewAdmin}${newLid ? ` (ID: ${newLid})` : ''}\n✨ أصبح لديه التحكم الكامل بهذا البوت الآن!` 
+                    }, { quoted: mek });
+                });
+            } else {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: `❌ لم يتم العثور على بوت فرعي مسجل بالرقم: +${cleanBot}` }, { quoted: mek });
+                });
+            }
             return;
         }
 

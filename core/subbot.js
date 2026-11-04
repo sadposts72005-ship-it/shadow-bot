@@ -221,6 +221,8 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
         sock.gender = cfg.gender || 'male';
         sock.personality = cfg.personality || 'respectful';
         sock.subBotConfig = cfg;
+        sock.isSubBot = true;
+        sock.subBotPhone = cleanPhone;
         let subBotStartTime = Math.floor(Date.now() / 1000);
 
         sock.ev.on('creds.update', saveCreds);
@@ -265,6 +267,42 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 subBotStartTime = Math.floor(Date.now() / 1000);
                 sock.subBotStartTime = subBotStartTime;
                 console.log(`🤖 [Sub-Bot] البوت الفرعي (${cfg.botName || cleanPhone}) متصل وشغال الآن! (+${cleanPhone})`);
+
+                // اكتشاف وتوثيق LID الحج الأساسي تلقائياً عند بدء التشغيل
+                if (!cfg.adminLid && cfg.adminPhone && cfg.adminPhone.length <= 13) {
+                    try {
+                        const waCheck = await sock.onWhatsApp(`${cfg.adminPhone}@s.whatsapp.net`);
+                        if (waCheck && waCheck[0]?.lid) {
+                            const fetchedLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                            if (fetchedLid) {
+                                cfg.adminLid = fetchedLid;
+                                if (!Array.isArray(cfg.adminNumbers)) cfg.adminNumbers = [];
+                                if (!cfg.adminNumbers.includes(fetchedLid)) cfg.adminNumbers.push(fetchedLid);
+                                if (!cfg.adminNumbers.includes(`${fetchedLid}@lid`)) cfg.adminNumbers.push(`${fetchedLid}@lid`);
+                                sock.subBotConfig = cfg;
+
+                                const registry = loadSubBotsRegistry();
+                                if (registry[cleanPhone]) {
+                                    registry[cleanPhone].adminLid = fetchedLid;
+                                    registry[cleanPhone].adminNumbers = cfg.adminNumbers;
+                                    saveSubBotsRegistry(registry);
+                                }
+                                try {
+                                    fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8');
+                                    const dbPath = path.join(process.cwd(), 'scramble_db.json');
+                                    if (fs.existsSync(dbPath)) {
+                                        const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                                        if (!db.lidMap) db.lidMap = {};
+                                        db.lidMap[cfg.adminPhone] = fetchedLid;
+                                        db.lidMap[fetchedLid] = cfg.adminPhone;
+                                        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
+                                    }
+                                } catch (_) {}
+                            }
+                        }
+                    } catch (_) {}
+                }
+
                 activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
             }
 
@@ -366,6 +404,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             sock.callName = finalCallName;
             sock.gender = finalGender;
             sock.personality = finalPersonality;
+            sock.isSubBot = true;
+            sock.subBotPhone = cleanPhone;
             let subBotStartTime = Math.floor(Date.now() / 1000);
 
             sock.ev.on('creds.update', saveCreds);
@@ -455,8 +495,28 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     sock.subBotStartTime = subBotStartTime;
                     console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
 
+                    // إذا لم يكن LID الحج مستخرجاً، نستخرجه فوراً عبر السوكيت بعد الاتصال مباشرة
+                    if (!cleanLid && cleanAdmin && cleanAdmin.length <= 13) {
+                        try {
+                            const waCheck = await sock.onWhatsApp(`${cleanAdmin}@s.whatsapp.net`);
+                            if (waCheck && waCheck[0]?.lid) {
+                                cleanLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                                console.log(`🔍 [Sub-Bot] تم اكتشاف LID الحج بنجاح: ${cleanLid}`);
+                            }
+                        } catch (_) {}
+                    }
+
                     const adminLocal = (cleanAdmin.startsWith('201') && cleanAdmin.length === 12) ? ('01' + cleanAdmin.slice(2)) : '';
-                    const adminNumbersList = [cleanAdmin, adminLocal, `+${cleanAdmin}`, cleanLid, `${cleanAdmin}@s.whatsapp.net`, cleanLid ? `${cleanLid}@lid` : ''].filter(Boolean);
+                    const adminNumbersList = [
+                        cleanAdmin, 
+                        adminLocal, 
+                        `+${cleanAdmin}`, 
+                        cleanLid, 
+                        `${cleanAdmin}@s.whatsapp.net`, 
+                        cleanLid ? `${cleanLid}@lid` : '',
+                        adminLocal ? `${adminLocal}@s.whatsapp.net` : ''
+                    ].filter(Boolean);
+
                     const cfgData = {
                         phone: cleanPhone,
                         botName: botName,
@@ -481,6 +541,20 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     const registry = loadSubBotsRegistry();
                     registry[cleanPhone] = cfgData;
                     saveSubBotsRegistry(registry);
+
+                    // توثيق الـ LID في scramble_db.json
+                    if (cleanAdmin && cleanLid) {
+                        try {
+                            const dbPath = path.join(process.cwd(), 'scramble_db.json');
+                            if (fs.existsSync(dbPath)) {
+                                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                                if (!db.lidMap) db.lidMap = {};
+                                db.lidMap[cleanAdmin] = cleanLid;
+                                db.lidMap[cleanLid] = cleanAdmin;
+                                fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
+                            }
+                        } catch (_) {}
+                    }
 
                     activeSubBots.set(cleanPhone, { sock, cfg: cfgData, startTime: subBotStartTime });
 
@@ -849,6 +923,80 @@ export function updateSubBotHajj(phone, targetNum, action = 'add') {
             active.sock.subBotConfig.adminNumbers = active.cfg.adminNumbers;
         }
     }
+    return true;
+}
+
+/**
+ * تعديل ونقل ملكية الحج الأساسي للبوت الفرعي بالكامل
+ */
+export function updateSubBotMainOwner(botPhone, newAdminPhone, newAdminLid = '') {
+    const cleanBot = cleanPhoneNumber(botPhone);
+    const cleanAdmin = cleanPhoneNumber(newAdminPhone);
+    if (!cleanBot || !cleanAdmin) return false;
+
+    const registry = loadSubBotsRegistry();
+    if (!registry[cleanBot]) return false;
+
+    const adminLocal = (cleanAdmin.startsWith('201') && cleanAdmin.length === 12) ? ('01' + cleanAdmin.slice(2)) : '';
+    const adminNumbersList = [
+        cleanAdmin,
+        adminLocal,
+        `+${cleanAdmin}`,
+        newAdminLid,
+        `${cleanAdmin}@s.whatsapp.net`,
+        newAdminLid ? `${newAdminLid}@lid` : '',
+        adminLocal ? `${adminLocal}@s.whatsapp.net` : ''
+    ].filter(Boolean);
+
+    registry[cleanBot].adminPhone = cleanAdmin;
+    if (newAdminLid) registry[cleanBot].adminLid = newAdminLid;
+    registry[cleanBot].adminJid = `${cleanAdmin}@s.whatsapp.net`;
+    registry[cleanBot].adminNumbers = adminNumbersList;
+    saveSubBotsRegistry(registry);
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanBot);
+    const cfgPath = path.join(sessionDir, 'config.json');
+    if (fs.existsSync(cfgPath)) {
+        try {
+            const currentCfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            currentCfg.adminPhone = cleanAdmin;
+            if (newAdminLid) currentCfg.adminLid = newAdminLid;
+            currentCfg.adminJid = `${cleanAdmin}@s.whatsapp.net`;
+            currentCfg.adminNumbers = adminNumbersList;
+            fs.writeFileSync(cfgPath, JSON.stringify(currentCfg, null, 2), 'utf8');
+        } catch (_) {}
+    }
+
+    if (activeSubBots.has(cleanBot)) {
+        const active = activeSubBots.get(cleanBot);
+        if (active.cfg) {
+            active.cfg.adminPhone = cleanAdmin;
+            if (newAdminLid) active.cfg.adminLid = newAdminLid;
+            active.cfg.adminJid = `${cleanAdmin}@s.whatsapp.net`;
+            active.cfg.adminNumbers = adminNumbersList;
+        }
+        if (active.sock && active.sock.subBotConfig) {
+            active.sock.subBotConfig.adminPhone = cleanAdmin;
+            if (newAdminLid) active.sock.subBotConfig.adminLid = newAdminLid;
+            active.sock.subBotConfig.adminJid = `${cleanAdmin}@s.whatsapp.net`;
+            active.sock.subBotConfig.adminNumbers = adminNumbersList;
+        }
+    }
+
+    // ربط الـ LID برقم الهاتف في scramble_db.json
+    if (cleanAdmin && newAdminLid) {
+        try {
+            const dbPath = path.join(process.cwd(), 'scramble_db.json');
+            if (fs.existsSync(dbPath)) {
+                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                if (!db.lidMap) db.lidMap = {};
+                db.lidMap[cleanAdmin] = newAdminLid;
+                db.lidMap[newAdminLid] = cleanAdmin;
+                fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
+            }
+        } catch (_) {}
+    }
+
     return true;
 }
 
