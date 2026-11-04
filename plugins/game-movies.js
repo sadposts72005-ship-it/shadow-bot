@@ -129,7 +129,10 @@ const handler = async (m, conn) => {
 
         // اختيار فيلم عشوائي من أكثر من 300 مقطع
         const selectedMovie = pool[Math.floor(Math.random() * pool.length)];
-        const audioPath = path.join(process.cwd(), 'assets', 'audio', 'movies', `${selectedMovie.id}.mp3`);
+        let audioPath = path.join(process.cwd(), 'assets', 'audio', 'movies', `${selectedMovie.id}.opus`);
+        if (!fs.existsSync(audioPath)) {
+            audioPath = path.join(process.cwd(), 'assets', 'audio', 'movies', `${selectedMovie.id}.mp3`);
+        }
 
         if (!fs.existsSync(audioPath)) {
             await delay(1000);
@@ -174,7 +177,7 @@ const handler = async (m, conn) => {
             const audioBuffer = fs.readFileSync(audioPath);
             await conn.sendMessage(id, {
                 audio: audioBuffer,
-                mimetype: 'audio/mp4',
+                mimetype: audioPath.endsWith('.opus') ? 'audio/ogg; codecs=opus' : 'audio/mpeg',
                 ptt: true
             }, { quoted: m });
         } catch (err) {
