@@ -1,9 +1,27 @@
 // plugins/image.js
 import axios from 'axios';
-import sharp from 'sharp';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 // ⏱️ دالة تأخير بسيطة
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+let cachedFfmpegBin = null;
+
+async function getFfmpegBin() {
+    if (cachedFfmpegBin) return cachedFfmpegBin;
+    try {
+        const ffStatic = (await import('ffmpeg-static')).default;
+        if (ffStatic && fs.existsSync(ffStatic)) {
+            cachedFfmpegBin = ffStatic;
+            return cachedFfmpegBin;
+        }
+    } catch (_) {}
+    cachedFfmpegBin = 'ffmpeg';
+    return cachedFfmpegBin;
+}
 
 /**
  * تنظيف وتوحيد الحروف العربية
@@ -95,51 +113,52 @@ async function generateAiImage(prompt) {
 }
 
 /**
- * وضع علامة مائية (Watermark) باسم البوت في الزاوية السفلية اليمنى
+ * وضع علامة مائية (Watermark) باسم البوت في الزاوية السفلية اليمنى عبر FFmpeg
  */
-async function applyWatermark(imgBuffer, botName = 'شادو بوت', isAi = false) {
-    try {
-        const meta = await sharp(imgBuffer).metadata();
-        const width = meta.width || 800;
-        const height = meta.height || 800;
+async function applyWatermark(imgBuffer, isAi = false) {
+    return new Promise(async (resolve) => {
+        const randId = Math.random().toString(36).substring(2, 8);
+        const tmpInput = path.join(os.tmpdir(), `wm_in_${Date.now()}_${randId}.jpg`);
+        const tmpOutput = path.join(os.tmpdir(), `wm_out_${Date.now()}_${randId}.jpg`);
+        const wmPath = path.join(process.cwd(), 'assets', isAi ? 'watermark_ai.png' : 'watermark.png');
 
-        // حساب أبعاد البادج ديناميكياً بناءً على حجم الصورة
-        const minDim = Math.min(width, height);
-        const badgeW = Math.round(Math.min(Math.max(minDim * 0.28, 150), 320));
-        const badgeH = Math.round(badgeW * 0.22);
-        const fontSize = Math.round(badgeH * 0.44);
-        const textY = Math.round(badgeH * 0.65);
-        const rx = Math.round(badgeH * 0.25);
-        const margin = Math.round(Math.max(minDim * 0.02, 12));
+        if (!fs.existsSync(wmPath)) return resolve(imgBuffer);
 
-        const icon = isAi ? '🎨' : '👑';
-        const tag = isAi ? `${botName} • AI` : botName;
-        const strokeColor = isAi ? 'rgba(255, 215, 0, 0.5)' : 'rgba(255, 255, 255, 0.35)';
+        try {
+            fs.writeFileSync(tmpInput, imgBuffer);
+            const ffmpegBin = await getFfmpegBin();
 
-        const svgBadge = Buffer.from(`
-            <svg width="${badgeW}" height="${badgeH}" xmlns="http://www.w3.org/2000/svg">
-                <rect x="0" y="0" width="${badgeW}" height="${badgeH}" rx="${rx}" ry="${rx}" fill="rgba(8, 10, 16, 0.8)" stroke="${strokeColor}" stroke-width="1.5" />
-                <text x="${badgeW / 2}" y="${textY}" font-size="${fontSize}" font-family="Arial, Segoe UI, Tahoma, sans-serif" font-weight="bold" fill="#ffffff" text-anchor="middle">${icon} ${tag}</text>
-            </svg>
-        `);
+            const ff = spawn(ffmpegBin, [
+                '-y',
+                '-i', tmpInput,
+                '-i', wmPath,
+                '-filter_complex', '[0:v][1:v]overlay=W-w-18:H-h-18',
+                '-q:v', '2',
+                tmpOutput
+            ]);
 
-        const top = Math.max(0, height - badgeH - margin);
-        const left = Math.max(0, width - badgeW - margin);
+            ff.on('close', (code) => {
+                try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
+                if (code === 0 && fs.existsSync(tmpOutput)) {
+                    try {
+                        const outBuf = fs.readFileSync(tmpOutput);
+                        try { fs.unlinkSync(tmpOutput); } catch (_) {}
+                        if (outBuf && outBuf.length > 0) return resolve(outBuf);
+                    } catch (_) {}
+                }
+                try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
+                resolve(imgBuffer);
+            });
 
-        const composited = await sharp(imgBuffer)
-            .composite([{
-                input: svgBadge,
-                top: top,
-                left: left
-            }])
-            .jpeg({ quality: 92 })
-            .toBuffer();
-
-        return composited;
-    } catch (err) {
-        console.error('⚠️ [Watermark Error, returning original]:', err?.message || err);
-        return imgBuffer;
-    }
+            ff.on('error', () => {
+                try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
+                try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
+                resolve(imgBuffer);
+            });
+        } catch (_) {
+            resolve(imgBuffer);
+        }
+    });
 }
 
 /**
@@ -209,8 +228,8 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
                 return true;
             }
 
-            // تطبيق توقيع وعلامة البوت المائية في الأسفل يمين
-            const finalImage = await applyWatermark(aiBuffer, botName, true);
+            // تطبيق توقيع وعلامة البوت المائية في الأسفل يمين عبر FFmpeg
+            const finalImage = await applyWatermark(aiBuffer, true);
 
             const caption = 
                 `🎨 *صورة بالذكاء الاصطناعي:* « ${cleanPrompt} »\n` +
@@ -242,7 +261,6 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
 
         // اختيار عشوائي من بين أفضل النتائج لضمان التنوع عند تكرار البحث
         const topPool = urls.slice(0, Math.min(8, urls.length));
-        // خلط النتائج
         for (let i = topPool.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [topPool[i], topPool[j]] = [topPool[j], topPool[i]];
@@ -261,8 +279,8 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             return true;
         }
 
-        // تطبيق توقيع وعلامة البوت المائية في الأسفل يمين
-        const finalImage = await applyWatermark(downloadedBuffer, botName, false);
+        // تطبيق توقيع وعلامة البوت المائية في الأسفل يمين عبر FFmpeg
+        const finalImage = await applyWatermark(downloadedBuffer, false);
 
         const caption = 
             `🖼️ *طلبك لصورة:* « ${query} »\n` +

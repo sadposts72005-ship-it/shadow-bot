@@ -13,8 +13,7 @@
     "@whiskeysockets/baileys": "^7.0.0-rc14",
     "axios": "^1.18.1",
     "node-webpmux": "^3.2.1",
-    "pino": "^10.3.1",
-    "sharp": "^0.33.5"
+    "pino": "^10.3.1"
   },
   "keywords": [],
   "author": "",
