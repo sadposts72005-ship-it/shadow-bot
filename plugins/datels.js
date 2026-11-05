@@ -4,6 +4,7 @@ import os from 'os';
 import { spawn } from 'child_process';
 import { loadSubBotsRegistry, updateSubBotHajj } from '../core/subbot.js';
 import handleStickerCommand from './sticker.js';
+import handleImageCommand from './image.js';
 
 const dbPath = path.join(process.cwd(), 'scramble_db.json');
 
@@ -888,6 +889,12 @@ const datelsHandler = {
             // =========================================================================
             const isStickerHandled = await handleStickerCommand(mek, currentConn, body);
             if (isStickerHandled) return true;
+
+            // =========================================================================
+            // 🖼️ [أمر الصور الشامل والذكاء الاصطناعي - جلب ورسم أي صورة مع توقيع البوت]
+            // =========================================================================
+            const isImageHandled = await handleImageCommand(mek, currentConn, body);
+            if (isImageHandled) return true;
 
             // =========================================================================
             // 🎵 [أمر الأغاني - بحث وعرض أي أغنية مع البوستر ورابط اليوتيوب]
@@ -1850,6 +1857,19 @@ export function getBotCommandExplanation(query, botName = 'شادو') {
                `• اكتب: *استيكر حقوق [اسمك]*\n` +
                `مثال: *استيكر حقوق أحمد* أو *ستيكر حقوق شادو*\n\n` +
                `🕵️‍♂️ *تعديل وسرقة حقوق أي ستيكر:* اعمل ريبلاي على أي ستيكر واكتب *استيكر حقوق [اسمك]* وهيغير حقوقه لاسمك فوراً!`;
+    }
+
+    // أمر الصور والذكاء الاصطناعي
+    if (/صوره|صورة|صور|photo|image|pic/.test(q)) {
+        return `🖼️ *شرح أمر الصور الشامل والذكاء الاصطناعي:* 🎨\n\n` +
+               `1️⃣ *طلب أي صورة في العالم:* \n` +
+               `• اكتب: *صوره [اسم أي شخص أو حاجة]*\n` +
+               `مثال: *صوره ميسي* | *صوره خلفيات انمي فخمة* | *صوره سيارات بورش*\n\n` +
+               `2️⃣ *توليد صورة بالذكاء الاصطناعي (AI):* \n` +
+               `• اكتب: *صوره ai [وصف الصورة اللي في خيالك]*\n` +
+               `مثال: *صوره ai قطة في الفضاء بنظارة شمس*\n` +
+               `مثال: *صوره تخيل قلعة عائمة في السحاب*\n\n` +
+               `✨ كل صورة بتنزل بأعلى جودة مع توقيع البوت الرسمي في الزاوية اليمنى بالأسفل! 👑`;
     }
 
     // 7. أوامر إدارة الجروب والمشرفين
