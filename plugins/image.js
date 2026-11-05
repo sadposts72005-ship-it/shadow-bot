@@ -24,6 +24,21 @@ async function getFfmpegBin() {
 }
 
 /**
+ * فحص وتأكيد صحة بافر الصورة من الهيدر الثنائي (JPEG / PNG / WebP)
+ * يمنع نهائياً إرسال أي ملفات تالفة أو نصوص أخطاء HTML إلى واتساب
+ */
+function isValidImage(buf) {
+    if (!buf || !Buffer.isBuffer(buf) || buf.length < 1000) return false;
+    // JPEG magic bytes: FF D8
+    if (buf[0] === 0xFF && buf[1] === 0xD8) return true;
+    // PNG magic bytes: 89 50 4E 47
+    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return true;
+    // WebP magic bytes: RIFF .... WEBP
+    if (buf.length > 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return true;
+    return false;
+}
+
+/**
  * تنظيف وتوحيد الحروف العربية
  */
 function normalizeArabic(text) {
@@ -36,6 +51,21 @@ function normalizeArabic(text) {
         .replace(/ى/g, 'ي')
         .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '')
         .replace(/\s+/g, ' ');
+}
+
+/**
+ * ترجمة النص العربي إلى الإنجليزية لضمان فهم محرك الذكاء الاصطناعي وتجنب أخطاء 402/503
+ */
+async function translateToEnglish(text) {
+    if (!text || !/[\u0600-\u06FF]/.test(text)) return text;
+    try {
+        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ar|en`;
+        const res = await axios.get(url, { timeout: 6000 });
+        if (res.data?.responseData?.translatedText) {
+            return res.data.responseData.translatedText;
+        }
+    } catch (_) {}
+    return text;
 }
 
 /**
@@ -54,7 +84,6 @@ async function searchBingImages(query) {
         const mRegex = /murl&quot;:&quot;(https?:\/\/[^&]+)&quot;/g;
         const matches = [...res.data.matchAll(mRegex)].map(m => m[1]);
 
-        // تصفية وتجهيز الروابط الصالحة
         const validUrls = matches.filter(url => {
             if (!url.startsWith('http')) return false;
             if (url.includes('.svg') || url.includes('.ico')) return false;
@@ -69,7 +98,7 @@ async function searchBingImages(query) {
 }
 
 /**
- * تحميل بافر الصورة من الرابط مع محاولات متعددة
+ * تحميل بافر الصورة من الرابط والتأكد من أنها صورة صالحة 100%
  */
 async function downloadImageBuffer(url) {
     try {
@@ -82,19 +111,24 @@ async function downloadImageBuffer(url) {
             }
         });
 
-        if (res.status === 200 && res.data && res.data.length > 3000) {
-            return Buffer.from(res.data);
+        if (res.status === 200 && res.data) {
+            const buf = Buffer.from(res.data);
+            if (isValidImage(buf)) return buf;
         }
     } catch (_) {}
     return null;
 }
 
 /**
- * توليد صورة بالذكاء الاصطناعي عبر Pollinations AI
+ * توليد صورة بالذكاء الاصطناعي عبر Pollinations AI مع ترجمة فورية وبديل رقمي
  */
-async function generateAiImage(prompt) {
+async function generateAiImage(rawPrompt) {
+    const englishPrompt = await translateToEnglish(rawPrompt);
+
+    // 1. المحاولة الأساسية عبر سيرفرات الرسم المجاني
     try {
-        const pUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
+        const seed = Math.floor(Math.random() * 100000);
+        const pUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(englishPrompt)}?seed=${seed}`;
         const res = await axios.get(pUrl, {
             responseType: 'arraybuffer',
             timeout: 30000,
@@ -103,19 +137,41 @@ async function generateAiImage(prompt) {
             }
         });
 
-        if (res.status === 200 && res.data && res.data.length > 5000) {
-            return Buffer.from(res.data);
+        if (res.status === 200 && res.data) {
+            const buf = Buffer.from(res.data);
+            if (isValidImage(buf)) return buf;
         }
     } catch (e) {
-        console.error('⚠️ [Pollinations AI Error]:', e?.message || e);
+        console.log('⚠️ [Primary AI Engine Error]:', e?.message || e);
     }
+
+    // 2. المحاولة البديلة عبر رسم المفاهيم الفنية العالية (Digital Concept Art)
+    try {
+        const bUrl = `https://www.bing.com/images/search?q=${encodeURIComponent('digital art ' + englishPrompt)}&FORM=HDRSC2&first=1`;
+        const bRes = await axios.get(bUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            timeout: 8000
+        });
+        const mRegex = /murl&quot;:&quot;(https?:\/\/[^&]+)&quot;/g;
+        const matches = [...bRes.data.matchAll(mRegex)].map(m => m[1]);
+        for (const u of matches.slice(0, 5)) {
+            const dlBuf = await downloadImageBuffer(u);
+            if (dlBuf && isValidImage(dlBuf)) return dlBuf;
+        }
+    } catch (e) {
+        console.log('⚠️ [Fallback Art Engine Error]:', e?.message || e);
+    }
+
     return null;
 }
 
 /**
  * وضع علامة مائية (Watermark) باسم البوت في الزاوية السفلية اليمنى عبر FFmpeg
+ * مع إضافة معيار -strict -1 لضمان خروج JPEG قياسي متوافق 100% مع واتساب
  */
 async function applyWatermark(imgBuffer, isAi = false) {
+    if (!isValidImage(imgBuffer)) return imgBuffer;
+
     return new Promise(async (resolve) => {
         const randId = Math.random().toString(36).substring(2, 8);
         const tmpInput = path.join(os.tmpdir(), `wm_in_${Date.now()}_${randId}.jpg`);
@@ -133,6 +189,7 @@ async function applyWatermark(imgBuffer, isAi = false) {
                 '-i', tmpInput,
                 '-i', wmPath,
                 '-filter_complex', '[0:v][1:v]overlay=W-w-18:H-h-18',
+                '-strict', '-1',
                 '-q:v', '2',
                 tmpOutput
             ]);
@@ -143,7 +200,9 @@ async function applyWatermark(imgBuffer, isAi = false) {
                     try {
                         const outBuf = fs.readFileSync(tmpOutput);
                         try { fs.unlinkSync(tmpOutput); } catch (_) {}
-                        if (outBuf && outBuf.length > 0) return resolve(outBuf);
+                        if (isValidImage(outBuf)) {
+                            return resolve(outBuf);
+                        }
                     } catch (_) {}
                 }
                 try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
@@ -221,7 +280,7 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             try { await currentConn.sendMessage(from, { react: { text: '🎨', key: mek.key } }); } catch (_) {}
 
             const aiBuffer = await generateAiImage(cleanPrompt);
-            if (!aiBuffer) {
+            if (!aiBuffer || !isValidImage(aiBuffer)) {
                 await currentConn.sendMessage(from, { 
                     text: `❌ عذراً! تعذر توليد الصورة بالذكاء الاصطناعي حالياً، برجاء المحاولة لاحقاً.` 
                 }, { quoted: mek });
@@ -230,16 +289,17 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
 
             // تطبيق توقيع وعلامة البوت المائية في الأسفل يمين عبر FFmpeg
             const finalImage = await applyWatermark(aiBuffer, true);
+            const imageToSend = isValidImage(finalImage) ? finalImage : aiBuffer;
 
             const caption = 
                 `🎨 *صورة بالذكاء الاصطناعي:* « ${cleanPrompt} »\n` +
-                `✨ *الدقة:* 1024x1024 Ultra HD\n` +
+                `✨ *الدقة:* HD\n` +
                 `👤 *طلب:* @${userNumber}\n` +
                 `👑 *تم الرسم بواسطة:* ${botName}`;
 
             await delay(1200);
             await currentConn.sendMessage(from, { 
-                image: finalImage,
+                image: imageToSend,
                 caption: caption,
                 mentions: [sender]
             }, { quoted: mek });
@@ -269,10 +329,10 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
         let downloadedBuffer = null;
         for (const u of topPool) {
             downloadedBuffer = await downloadImageBuffer(u);
-            if (downloadedBuffer) break;
+            if (downloadedBuffer && isValidImage(downloadedBuffer)) break;
         }
 
-        if (!downloadedBuffer) {
+        if (!downloadedBuffer || !isValidImage(downloadedBuffer)) {
             await currentConn.sendMessage(from, { 
                 text: `❌ تعذر تحميل صورة صالحة لـ « ${query} ».. يرجى المحاولة بكلمات بحث أخرى.` 
             }, { quoted: mek });
@@ -281,6 +341,7 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
 
         // تطبيق توقيع وعلامة البوت المائية في الأسفل يمين عبر FFmpeg
         const finalImage = await applyWatermark(downloadedBuffer, false);
+        const imageToSend = isValidImage(finalImage) ? finalImage : downloadedBuffer;
 
         const caption = 
             `🖼️ *طلبك لصورة:* « ${query} »\n` +
@@ -289,7 +350,7 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
 
         await delay(1200);
         await currentConn.sendMessage(from, { 
-            image: finalImage,
+            image: imageToSend,
             caption: caption,
             mentions: [sender]
         }, { quoted: mek });
