@@ -2302,9 +2302,29 @@ export async function handleAllMessages(mek, currentConn) {
             }
             return;
         }
-        if (normalizedBody === 'من الي عملك' || normalizedBody === 'مين اللي عملك') {
+        // 👑 [أمر المطور ومعلومات التنصيب]
+        if (['المطور', '.المطور', 'مطور', '.مطور', 'المالك', 'صاحب البوت'].includes(normalizedBody)) {
+            await respondWithStrictTiming('👑', async () => {
+                const devMsg = 
+                    `👑 *المطور الأساسي للبوتات:* 💻✨\n` +
+                    `🔗 https://wa.me/qr/P3CCDW4MYIZFL1\n\n` +
+                    `🤖 *للتنصيب كلم البوت:* \n` +
+                    `📱 رقم البوت: +201229409956\n` +
+                    `💬 رابط شات البوت: https://wa.me/201229409956\n\n` +
+                    `✨ افتح شات البوت واكتب له *(تنصيب)* وابدأ فوراً! 🚀`;
+                await currentConn.sendMessage(from, { text: devMsg }, { quoted: mek });
+            });
+            return;
+        }
+
+        if (['من الي عملك', 'مين اللي عملك', 'مين عملك', 'صانع البوت'].includes(normalizedBody)) {
             await respondWithStrictTiming('🛠️', async () => {
-                await currentConn.sendMessage(from, { text: 'شادو الي عملني وده رقمو 01129249396' }, { quoted: mek });
+                const makerMsg = 
+                    `👑 *الحج شادو هو المطور الأساسي للبوت وصاحب الروم!* 🛠️✨\n` +
+                    `🔗 https://wa.me/qr/P3CCDW4MYIZFL1\n` +
+                    `📱 رقم الحج شادو: 01129249396\n\n` +
+                    `🤖 *للتنصيب كلم البوت الأساسي:* https://wa.me/201229409956`;
+                await currentConn.sendMessage(from, { text: makerMsg }, { quoted: mek });
             });
             return;
         }
@@ -2605,9 +2625,23 @@ export async function handleAllMessages(mek, currentConn) {
             });
             return;
         }
-        if (normalizedBody === `من ${botName.toLowerCase()}` || normalizedBody === `مين ${botName.toLowerCase()}`) {
-            await respondWithStrictTiming('📞', async () => {
-                await currentConn.sendMessage(from, { text: 'الحج شادو ده و يبعت رقمي الي هو 01129249396' }, { quoted: mek });
+        // 👑 [أمر مين شادو / من شادو]
+        if (
+            normalizedBody === 'مين شادو' ||
+            normalizedBody === 'من شادو' ||
+            normalizedBody === 'مين هو شادو' ||
+            normalizedBody === 'من هو شادو' ||
+            normalizedBody === 'مين شادو ده' ||
+            normalizedBody === 'من شادو ده' ||
+            normalizedBody === `من ${botName.toLowerCase()}` || 
+            normalizedBody === `مين ${botName.toLowerCase()}`
+        ) {
+            await respondWithStrictTiming('👑', async () => {
+                const shadowInfo = 
+                    `👑 *الحج شادو ده صاحب الروم والمطور الأساسي للبوت!* ❤️✨\n\n` +
+                    `📱 *وده رقم الحج شادو للتواصل:* 01129249396\n` +
+                    `🔗 *رابط الشات المباشر:* https://wa.me/201129249396`;
+                await currentConn.sendMessage(from, { text: shadowInfo }, { quoted: mek });
             });
             return;
         }
@@ -2728,8 +2762,8 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
         if (['مين', 'انت مين', 'مين انت'].includes(normalizedBody)) {
-            await respondWithStrictTiming('🥚', async () => {
-                await currentConn.sendMessage(from, { text: `أنا بوت (${botName}) في خدمتك يا نجم! 🐤✨` }, { quoted: mek });
+            await respondWithStrictTiming('🤖', async () => {
+                await currentConn.sendMessage(from, { text: `أنا بوت (${botName}) في خدمتك يا نجم! 🤖✨` }, { quoted: mek });
             });
             return;
         }
