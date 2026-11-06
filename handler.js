@@ -2320,7 +2320,7 @@ export async function handleAllMessages(mek, currentConn) {
         if (['من الي عملك', 'مين اللي عملك', 'مين عملك', 'صانع البوت'].includes(normalizedBody)) {
             await respondWithStrictTiming('🛠️', async () => {
                 const makerMsg = 
-                    `👑 *الحج شادو هو المطور الأساسي للبوت وصاحب الروم!* 🛠️✨\n` +
+                    `👑 *الحج شادو هو المطور الأساسي للبوت!* 🛠️✨\n` +
                     `🔗 https://wa.me/qr/P3CCDW4MYIZFL1\n` +
                     `📱 رقم الحج شادو: 01129249396\n\n` +
                     `🤖 *للتنصيب كلم البوت الأساسي:* https://wa.me/201229409956`;
@@ -2638,7 +2638,7 @@ export async function handleAllMessages(mek, currentConn) {
         ) {
             await respondWithStrictTiming('👑', async () => {
                 const shadowInfo = 
-                    `👑 *الحج شادو ده صاحب الروم والمطور الأساسي للبوت!* ❤️✨\n\n` +
+                    `👑 *الحج شادو ده المطور الأساسي للبوت!* ❤️✨\n\n` +
                     `📱 *وده رقم الحج شادو للتواصل:* 01129249396\n` +
                     `🔗 *رابط الشات المباشر:* https://wa.me/201129249396`;
                 await currentConn.sendMessage(from, { text: shadowInfo }, { quoted: mek });
