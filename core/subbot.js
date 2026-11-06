@@ -581,6 +581,18 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     try {
                         await mainConn.sendMessage(masterPhone, { text: ownerNotice });
                     } catch (_) {}
+
+                    // إرسال إشعار بأحدث ميزات وأوامر البوت الجديدة للحج فور اكتمال التنصيب
+                    setTimeout(async () => {
+                        try {
+                            const latestFeature = SYSTEM_FEATURE_UPDATES[SYSTEM_FEATURE_UPDATES.length - 1];
+                            if (latestFeature && cleanAdmin) {
+                                await mainConn.sendMessage(`${cleanAdmin}@s.whatsapp.net`, { 
+                                    text: `💡 *دليل أحدث ميزات بوتك الجديد:* 🌟\n\n` + latestFeature.message 
+                                });
+                            }
+                        } catch (_) {}
+                    }, 4000);
                 }
 
                 if (connection === 'close') {
@@ -1034,4 +1046,195 @@ export function getSubBotsReport() {
         stoppedCount,
         listText: list.length > 0 ? list.join('\n') : 'لا توجد بوتات فرعية مسجلة حالياً.'
     };
+}
+
+const UPDATES_TRACKER_FILE = path.join(process.cwd(), 'broadcasted_updates.json');
+
+/**
+ * تحميل سجل التحديثات المذاعة للبوتات الفرعية
+ */
+export function loadBroadcastedUpdates() {
+    try {
+        if (fs.existsSync(UPDATES_TRACKER_FILE)) {
+            return JSON.parse(fs.readFileSync(UPDATES_TRACKER_FILE, 'utf8'));
+        }
+    } catch (_) {}
+    return { broadcastedIds: [], history: [] };
+}
+
+/**
+ * حفظ سجل التحديثات المذاعة
+ */
+export function saveBroadcastedUpdates(data) {
+    try {
+        fs.writeFileSync(UPDATES_TRACKER_FILE, JSON.stringify(data, null, 2), 'utf8');
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
+ * قائمة التحديثات والميزات الجديدة المسجلة في النظام
+ * أي ميزة جديدة تضاف هنا يتم بثها تلقائياً لجميع أصحاب البوتات الفرعية عند تشغيل البوت
+ */
+export const SYSTEM_FEATURE_UPDATES = [
+    {
+        id: 'feat_image_v1',
+        title: 'أمر الصور الشامل والرسم بالذكاء الاصطناعي (صوره)',
+        message:
+            `📢 *تحديث جديد ومميز في شادو بوت!* 🚀✨\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `مرحباً يا حج! تم إضافة وتفعيل ميزة جديدة في البوت وبوتك الفرعي:\n\n` +
+            `🖼️ *أمر الصور الشامل والذكاء الاصطناعي (صوره)*:\n` +
+            `صار بإمكانك وبإمكان أي عضو في جروباتك طلب أي صورة في العالم أو رسم وتخيل أي فكرة بالذكاء الاصطناعي مع توقيع اسم البوت الرسمي في أسفل الصورة تلقائياً!\n\n` +
+            `📌 *طريقة استخدام الميزة الجديدة:*\n` +
+            `1️⃣ *البحث عن أي صورة في العالم:*\n` +
+            `• اكتب: *صوره [اسم أي شخص أو شيء]*\n` +
+            `• مثال: *صوره ميسي وهو رافع كاس العالم*\n` +
+            `• مثال: *صوره خلفيات سيارات فخمة 4k*\n\n` +
+            `2️⃣ *الرسم والتخيل بالذكاء الاصطناعي (AI):*\n` +
+            `• اكتب: *صوره ai [الوصف اللي في خيالك]* أو *صوره تخيل [الوصف]*\n` +
+            `• مثال: *صوره ai قطة بتشرب قهوة على القمر*\n` +
+            `• مثال: *صوره تخيل قلعة فرعونية في المستقبل لسنة 3000*\n\n` +
+            `⚡ *أبرز المميزات:*\n` +
+            `✅ فهم اللهجة المصرية وترجمة فورية احترافية بدون أخطاء\n` +
+            `✅ دقة فائقة HD مع تجنب أي صور تالفة نهائياً\n` +
+            `✅ وضع علامة وتوقيع باسم البوت في الزاوية اليمنى بالأسفل تلقائياً\n` +
+            `━━━━━━━━━━━━━━━━━━━━\n` +
+            `👑 *فريق تطوير شادو بوت يتمنى لكم تجربة ممتعة ومميزة!*`
+    }
+];
+
+/**
+ * إرسال إذاعة أو إشعار بميزة جديدة إلى أصحاب جميع البوتات الفرعية
+ */
+export async function broadcastUpdateToSubBots(mainConn, messageText, updateId = null) {
+    if (!mainConn) return { success: false, message: 'اتصال البوت الرئيسي غير متوفر' };
+
+    const registry = loadSubBotsRegistry() || {};
+    const allBots = new Map();
+
+    // 1. جمع البوتات من السجل
+    for (const [phone, cfg] of Object.entries(registry)) {
+        if (cfg) allBots.set(cleanPhoneNumber(phone), cfg);
+    }
+
+    // 2. جمع أي بوتات من مجلدات الجلسات غير المسجلة بالسجل
+    if (fs.existsSync(SUB_BOTS_DIR)) {
+        try {
+            const dirs = fs.readdirSync(SUB_BOTS_DIR);
+            for (const d of dirs) {
+                const clean = cleanPhoneNumber(d);
+                if (!allBots.has(clean)) {
+                    const cfgFile = path.join(SUB_BOTS_DIR, d, 'config.json');
+                    if (fs.existsSync(cfgFile)) {
+                        try {
+                            const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+                            allBots.set(clean, cfg);
+                        } catch (_) {}
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+
+    const botList = Array.from(allBots.values());
+    if (botList.length === 0) {
+        return { success: true, total: 0, sentCount: 0, failedCount: 0, message: 'لا توجد أي بوتات فرعية مسجلة حالياً.' };
+    }
+
+    console.log(`📢 [Broadcast] بدء إرسال التحديث لـ ${botList.length} بوت فرعي...`);
+
+    let sentCount = 0;
+    let failedCount = 0;
+    const notifiedAdmins = new Set();
+
+    for (const cfg of botList) {
+        const adminPhone = cleanPhoneNumber(cfg.adminPhone || cfg.phone);
+        if (!adminPhone) continue;
+
+        const botTitle = cfg.botName || 'بوتك الفرعي';
+        const customMessage = 
+            `🤖 *إشعار موجه لبوتك: [ ${botTitle} ]* ✨\n` +
+            `📱 رقم البوت: +${cfg.phone || adminPhone}\n\n` +
+            messageText;
+
+        const targetJid = `${adminPhone}@s.whatsapp.net`;
+
+        try {
+            await mainConn.sendMessage(targetJid, { text: customMessage });
+            sentCount++;
+            notifiedAdmins.add(adminPhone);
+            console.log(`✅ [Broadcast] تم إرسال الإشعار لحج البوت (${botTitle}) على الرقم (+${adminPhone})`);
+        } catch (e) {
+            console.error(`❌ [Broadcast] فشل الإرسال لحج البوت (${botTitle}) على (+${adminPhone}):`, e?.message || e);
+            failedCount++;
+        }
+
+        // إذا كان البوت الفرعي نفسه نشطاً، نرسل أيضاً تنبيهاً عبر سوكيت البوت الفرعي
+        const activeSub = activeSubBots.get(cleanPhoneNumber(cfg.phone));
+        if (activeSub && activeSub.sock) {
+            try {
+                await activeSub.sock.sendMessage(targetJid, { 
+                    text: `📢 *تنبيه من بوتك (${botTitle}):*\nتم تفعيل أحدث التحديثات والميزات على بوتك بنجاح! 🚀` 
+                });
+            } catch (_) {}
+        }
+
+        // تأخير ثانية ونصف بين كل رسالة لحماية البوت من ليميت واتساب
+        await new Promise(r => setTimeout(r, 1500));
+    }
+
+    // تسجيل التحديث في ملف السجل إذا كان له updateId
+    if (updateId) {
+        const tracker = loadBroadcastedUpdates();
+        if (!tracker.broadcastedIds.includes(updateId)) {
+            tracker.broadcastedIds.push(updateId);
+            tracker.history.push({
+                updateId,
+                timestamp: Date.now(),
+                sentCount,
+                failedCount,
+                total: botList.length
+            });
+            saveBroadcastedUpdates(tracker);
+        }
+    }
+
+    return {
+        success: true,
+        total: botList.length,
+        sentCount,
+        failedCount,
+        message: `تم الإرسال بنجاح إلى ${sentCount} من أصحاب البوتات الفرعية.`
+    };
+}
+
+/**
+ * فحص وإرسال أي تحديثات جديدة معلقة لم يتم إرسالها بعد للبوتات الفرعية
+ * يتم استدعاؤها تلقائياً عند تشغيل البوت الأساسي
+ */
+export async function checkAndBroadcastPendingUpdates(mainConn) {
+    if (!mainConn) return;
+
+    try {
+        const tracker = loadBroadcastedUpdates();
+        const pending = SYSTEM_FEATURE_UPDATES.filter(u => !tracker.broadcastedIds.includes(u.id));
+
+        if (pending.length === 0) {
+            console.log('ℹ️ [Broadcast] جميع ميزات النظام محدثة ومذاعة مسبقاً للبوتات الفرعية.');
+            return;
+        }
+
+        console.log(`📢 [Broadcast] يوجد ${pending.length} تحديث ميزات معلق سيتم بثه للبوتات الفرعية...`);
+
+        for (const update of pending) {
+            console.log(`🚀 [Broadcast] جاري إذاعة التحديث: [${update.title}] (ID: ${update.id})`);
+            await broadcastUpdateToSubBots(mainConn, update.message, update.id);
+            await new Promise(r => setTimeout(r, 2500));
+        }
+    } catch (err) {
+        console.error('❌ [Broadcast Error] خطأ أثناء فحص التحديثات المعلقة:', err?.message || err);
+    }
 }

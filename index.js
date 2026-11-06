@@ -7,7 +7,7 @@ import { handleAllMessages } from './handler.js';
 // ⏰ استيراد دالة الأذكار التلقائية والترحيب من ملف الـ plugins
 import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
-import { initAllSubBots } from './core/subbot.js';
+import { initAllSubBots, checkAndBroadcastPendingUpdates } from './core/subbot.js';
 
 // 🌐 خادم ويب مصغر (HTTP Server) لإبقاء البوت نشطاً 24/7 على منصات السحاب (Render / Koyeb / UptimeRobot)
 const PORT = process.env.PORT || 3000;
@@ -186,6 +186,15 @@ async function startShadowBot() {
             } catch (err) {
                 console.error('❌ خطأ في تشغيل البوتات الفرعية:', err);
             }
+
+            // 📢 فحص وإذاعة أي تحديثات وميزات جديدة للبوتات الفرعية تلقائياً بعد استقرار الاتصال
+            setTimeout(async () => {
+                try {
+                    await checkAndBroadcastPendingUpdates(conn);
+                } catch (bErr) {
+                    console.error('❌ خطأ في إذاعة التحديثات للبوتات الفرعية:', bErr?.message || bErr);
+                }
+            }, 15000);
 
             // 🧹 تنظيف مجلد الـ Tmp تلقائياً عند اتصال البوت لتوفير المساحة
             if (global.setting.clearTmp) {

@@ -24,7 +24,8 @@ import {
     updateSubBotMainOwner,
     formatGenderText,
     activeSubBots,
-    subBotSentMsgIds
+    subBotSentMsgIds,
+    broadcastUpdateToSubBots
 } from './core/subbot.js';
 
 // 💤 خريطة حفظ حالة وتوقيت النوم المعزولة لكل بوت (سواء الأساسي أو الفرعي)
@@ -1352,11 +1353,67 @@ export async function handleAllMessages(mek, currentConn) {
                 `⚙️ *أوامر التحكم عن بُعد:* \n` +
                 `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
                 `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
-                `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*`;
+                `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*\n` +
+                `• لإذاعة تحديث للبوتات: *(اذاعة للبوتات <الرسالة>)*`;
 
             await respondWithStrictTiming('📊', async () => {
                 await currentConn.sendMessage(from, { text: dashText }, { quoted: mek });
             });
+            return;
+        }
+
+        // 📢 [أمر إذاعة ونشر التحديثات لجميع البوتات الفرعية - للحج شادو الأصلي حصرياً]
+        if (
+            normalizedBody.startsWith('اذاعة للبوتات') || 
+            normalizedBody.startsWith('إذاعة للبوتات') || 
+            normalizedBody.startsWith('نشر للبوتات') || 
+            normalizedBody.startsWith('اعلان للبوتات') || 
+            normalizedBody.startsWith('إعلان للبوتات') || 
+            normalizedBody.startsWith('تحديث للبوتات')
+        ) {
+            if (!isAbsoluteOwner) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (المتحكم المطلق)! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+
+            const broadcastText = body.replace(/^(اذاعة للبوتات|إذاعة للبوتات|نشر للبوتات|اعلان للبوتات|إعلان للبوتات|تحديث للبوتات)\s*/i, '').trim();
+
+            if (!broadcastText) {
+                const helpText = 
+                    `📢 *طريقة الإذاعة لجميع أصحاب البوتات الفرعية:* 👑\n\n` +
+                    `• اكتب: *اذاعة للبوتات [الرسالة أو الإعلان أو التحديث الجديد]*\n` +
+                    `• مثال: *اذاعة للبوتات تم إضافة أمر (صوره) بالذكاء الاصطناعي لرسم أي فكرة!*\n\n` +
+                    `⚡ سيقوم البوت بإرسال الإشعار فوراً في الخاص لجميع الحجاج أصحاب البوتات الفرعية المسجلة.`;
+                await respondWithStrictTiming('ℹ️', async () => {
+                    await currentConn.sendMessage(from, { text: helpText }, { quoted: mek });
+                });
+                return;
+            }
+
+            await respondWithStrictTiming('⏳', async () => {
+                await currentConn.sendMessage(from, { text: '⏳ جاري إرسال الإذاعة والتحديث لجميع أصحاب البوتات الفرعية... برجاء الانتظار ثوانٍ.' }, { quoted: mek });
+            });
+
+            const formattedMsg = 
+                `📢 *رسالة وإعلان هام من إدارة شادو بوت الأساسي* 👑\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `${broadcastText}\n` +
+                `━━━━━━━━━━━━━━━━━━━━\n` +
+                `✨ *مع تحيات الحج شادو وإدارة البوت.*`;
+
+            const result = await broadcastUpdateToSubBots(currentConn, formattedMsg);
+
+            const reportMsg = 
+                `╭━━━〔 📢 *تقرير إذاعة البوتات الفرعية* 〕━━━╮\n` +
+                `┃ 🤖 *إجمالي البوتات الفرعية:* ${result.total}\n` +
+                `┃ ✅ *تم الإرسال بنجاح إلى:* ${result.sentCount}\n` +
+                `┃ ❌ *فشل الإرسال إلى:* ${result.failedCount}\n` +
+                `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                `🎉 ${result.message}`;
+
+            await currentConn.sendMessage(from, { text: reportMsg }, { quoted: mek });
             return;
         }
 

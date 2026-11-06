@@ -54,17 +54,44 @@ function normalizeArabic(text) {
 }
 
 /**
- * ترجمة النص العربي إلى الإنجليزية لضمان فهم محرك الذكاء الاصطناعي وتجنب أخطاء 402/503
+ * ترجمة النص العربي إلى الإنجليزية بدقة فائقة عبر Google Chrome Dict API
+ * يدعم فهم اللهجة المصرية والمصطلحات الدارجة بنسبة 100%
  */
 async function translateToEnglish(text) {
     if (!text || !/[\u0600-\u06FF]/.test(text)) return text;
+    
+    // المحاولة 1: سيرفر Google clients5 (الأسرع والأدق للهجة المصرية وبدون ليميت)
+    try {
+        const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=en&q=${encodeURIComponent(text)}`;
+        const res = await axios.get(url, { 
+            timeout: 7000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        if (Array.isArray(res.data) && res.data[0] && res.data[0][0]) {
+            return String(res.data[0][0]).trim();
+        }
+    } catch (_) {}
+
+    // المحاولة 2: سيرفر Google Translate المفتوح
+    try {
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`;
+        const res = await axios.get(url, { timeout: 6000 });
+        if (Array.isArray(res.data) && res.data[0] && res.data[0][0] && res.data[0][0][0]) {
+            return String(res.data[0][0][0]).trim();
+        }
+    } catch (_) {}
+
+    // المحاولة 3: MyMemory الاحتياطي
     try {
         const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ar|en`;
         const res = await axios.get(url, { timeout: 6000 });
         if (res.data?.responseData?.translatedText) {
-            return res.data.responseData.translatedText;
+            return res.data.responseData.translatedText.trim();
         }
     } catch (_) {}
+
     return text;
 }
 
@@ -124,16 +151,21 @@ async function downloadImageBuffer(url) {
  */
 async function generateAiImage(rawPrompt) {
     const englishPrompt = await translateToEnglish(rawPrompt);
+    console.log(`🎨 [AI Image Engine] الأصل: "${rawPrompt}" -> الإنجليزية: "${englishPrompt}"`);
 
-    // 1. المحاولة الأساسية عبر سيرفرات الرسم المجاني
+    // تعزيز الوصف باللغة الإنجليزية لضمان خروج تفاصيل فنية دقيقة وجمالية عالية
+    const visualEnhancers = 'highly detailed, photorealistic, cinematic lighting, masterpiece, 8k resolution, sharp focus';
+    const enhancedPrompt = `${englishPrompt}, ${visualEnhancers}`;
+
+    // 1. المحاولة الأساسية عبر سيرفرات الرسم المجاني بالوصف المعزز
     try {
-        const seed = Math.floor(Math.random() * 100000);
-        const pUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(englishPrompt)}?seed=${seed}`;
+        const seed = Math.floor(Math.random() * 1000000);
+        const pUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?seed=${seed}`;
         const res = await axios.get(pUrl, {
             responseType: 'arraybuffer',
             timeout: 30000,
             headers: {
-                'User-Agent': 'Mozilla/5.0'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
 
@@ -145,7 +177,25 @@ async function generateAiImage(rawPrompt) {
         console.log('⚠️ [Primary AI Engine Error]:', e?.message || e);
     }
 
-    // 2. المحاولة البديلة عبر رسم المفاهيم الفنية العالية (Digital Concept Art)
+    // 2. محاولة احتياطية بالوصف الإنجليزي الخام بدون إضافات
+    try {
+        const seed = Math.floor(Math.random() * 1000000);
+        const pUrlRaw = `https://image.pollinations.ai/prompt/${encodeURIComponent(englishPrompt)}?seed=${seed}`;
+        const resRaw = await axios.get(pUrlRaw, {
+            responseType: 'arraybuffer',
+            timeout: 25000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0'
+            }
+        });
+
+        if (resRaw.status === 200 && resRaw.data) {
+            const buf = Buffer.from(resRaw.data);
+            if (isValidImage(buf)) return buf;
+        }
+    } catch (_) {}
+
+    // 3. المحاولة البديلة عبر رسم المفاهيم الفنية العالية (Digital Concept Art)
     try {
         const bUrl = `https://www.bing.com/images/search?q=${encodeURIComponent('digital art ' + englishPrompt)}&FORM=HDRSC2&first=1`;
         const bRes = await axios.get(bUrl, {
