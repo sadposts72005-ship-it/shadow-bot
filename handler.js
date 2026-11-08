@@ -1433,11 +1433,12 @@ export async function handleAllMessages(mek, currentConn) {
             });
 
             const formattedMsg = 
-                `📢 *رسالة وإعلان هام من إدارة شادو بوت الأساسي* 👑\n` +
+                `📢 *رسالة وإعلان تحديث هام من إدارة شادو بوت* 👑🤖\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n` +
-                `${broadcastText}\n` +
+                `${broadcastText}\n\n` +
+                `🧪 *تنبيه:* أي أوامر أو ميزات جديدة مضافة تكون تحت التجربة حالياً، يرجى تجربتها وإبلاغنا بأي ملاحظات! ✨\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n` +
-                `✨ *مع تحيات الحج شادو وإدارة البوت.*`;
+                `👑 *مع تحيات الحج شادو وإدارة البوت.*`;
 
             const result = await broadcastUpdateToSubBots(currentConn, formattedMsg);
 

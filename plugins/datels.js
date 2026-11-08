@@ -1439,24 +1439,6 @@ const datelsHandler = {
                     await handleCommandTiming('🇪🇬');
 
                     try {
-                        // التحقق من أن البوت مشرف (Admin) في الجروب لتفادي خطأ forbidden
-                        let groupMeta = null;
-                        try { groupMeta = await currentConn.groupMetadata(from); } catch (_) {}
-
-                        if (groupMeta) {
-                            const botNum = getCleanNumber(currentConn.user?.id);
-                            const botPart = groupMeta.participants?.find(p => getCleanNumber(p.id) === botNum);
-                            const isBotAdmin = botPart && (botPart.admin === 'admin' || botPart.admin === 'superadmin');
-
-                            if (!isBotAdmin) {
-                                await currentConn.sendMessage(from, { 
-                                    text: `⚠️ *عفواً يا فنان! البوت (${currentConn.botName || 'شادو'}) ليس مشرفاً (Admin) في هذا الجروب!* 👑\n\n` +
-                                          `📌 حتى يتمكن البوت من فحص وقبول طلبات الانضمام، يجب ترقية البوت لمشرف أولاً ثم إعادة كتابة الأمر.` 
-                                }, { quoted: mek });
-                                return true;
-                            }
-                        }
-
                         let requests = await currentConn.groupRequestParticipantsList(from);
                         if (!requests || requests.length === 0) {
                             await currentConn.sendMessage(from, { text: '📋 لا توجد أي طلبات انضمام معلقة في الجروب حالياً.' }, { quoted: mek });
@@ -1504,7 +1486,7 @@ const datelsHandler = {
                             await currentConn.sendMessage(from, { 
                                 text: `❌ *تعذر قبول الطلبات (Forbidden 403):*\n\n` +
                                       `1️⃣ تأكد من ترقية البوت لمشرف (Admin) في الجروب.\n` +
-                                      `2️⃣ تأكد من تفعيل خيار *(الموافقة على الأعضاء الجدد / Approve new participants)* في إعدادات الجروب.` 
+                                      `2️⃣ تأكد من تفعيل خيار *(الموافقة على الأعضاء الجدد / Approve new participants)* في إعدادات الجروب على واتساب.` 
                             }, { quoted: mek });
                         } else {
                             await currentConn.sendMessage(from, { 
@@ -1522,24 +1504,6 @@ const datelsHandler = {
                     await handleCommandTiming('⏳');
 
                     try {
-                        // التحقق من أن البوت مشرف في الجروب
-                        let groupMeta = null;
-                        try { groupMeta = await currentConn.groupMetadata(from); } catch (_) {}
-
-                        if (groupMeta) {
-                            const botNum = getCleanNumber(currentConn.user?.id);
-                            const botPart = groupMeta.participants?.find(p => getCleanNumber(p.id) === botNum);
-                            const isBotAdmin = botPart && (botPart.admin === 'admin' || botPart.admin === 'superadmin');
-
-                            if (!isBotAdmin) {
-                                await currentConn.sendMessage(from, { 
-                                    text: `⚠️ *عفواً يا فنان! البوت (${currentConn.botName || 'شادو'}) ليس مشرفاً (Admin) في هذا الجروب!* 👑\n\n` +
-                                          `📌 حتى يتمكن البوت من قبول طلبات الانضمام، يجب ترقية البوت لمشرف أولاً.` 
-                                }, { quoted: mek });
-                                return true;
-                            }
-                        }
-
                         let requests = await currentConn.groupRequestParticipantsList(from);
                         if (!requests || requests.length === 0) {
                             await currentConn.sendMessage(from, { text: '📋 لا توجد أي طلبات انضمام معلقة في الجروب حالياً.' }, { quoted: mek });
