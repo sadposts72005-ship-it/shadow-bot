@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
-import { loadSubBotsRegistry, updateSubBotHajj } from '../core/subbot.js';
+import { loadSubBotsRegistry, updateSubBotHajj, activeSubBots } from '../core/subbot.js';
 import handleStickerCommand from './sticker.js';
 import handleImageCommand from './image.js';
 
@@ -446,9 +446,43 @@ export function extractMessageBody(mek) {
            msg.text || '';
 }
 
+export function getCairoTimeParts() {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Africa/Cairo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    });
+    const parts = formatter.formatToParts(new Date());
+    const map = {};
+    for (const p of parts) {
+        map[p.type] = p.value;
+    }
+    let h = map.hour === '24' ? '00' : map.hour;
+    const hours = String(h).padStart(2, '0');
+    const minutes = String(map.minute).padStart(2, '0');
+    const currentTimeStr = `${hours}:${minutes}`;
+    const todayDateStr = `${map.year}-${map.month}-${map.day}`;
+    return {
+        hours,
+        minutes,
+        currentTimeStr,
+        todayDateStr,
+        hourNum: parseInt(hours, 10),
+        minNum: parseInt(minutes, 10)
+    };
+}
+
 async function fetchEgyptPrayerTimes() {
     try {
-        const response = await fetch('https://api.aladhan.com/v1/timingsByCity?city=Cairo&country=Egypt&method=5');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const response = await fetch('https://api.aladhan.com/v1/timingsByCity?city=Cairo&country=Egypt&method=5', { signal: controller.signal });
+        clearTimeout(timeoutId);
         const json = await response.json();
         if (json && json.code === 200 && json.data?.timings) {
             const timings = json.data.timings;
@@ -462,10 +496,18 @@ async function fetchEgyptPrayerTimes() {
                 [cleanTime(timings.Isha)]: "العشاء 🌃"
             };
             console.log("🕋 [Shadow Bot] تم تحديث مواعيد الصلاة بنجاح:", dynamicPrayers);
+            return;
         }
     } catch (error) {
-        dynamicPrayers = { "04:45": "الفجر 🌌", "12:40": "الظهر ☀️", "15:55": "العصر 🌤️", "18:20": "المغرب 🌅", "19:40": "العشاء 🌃" };
+        // Fallback في حال تعذر الاتصال بـ API
     }
+    dynamicPrayers = { 
+        "04:48": "الفجر 🌌", 
+        "11:39": "الظهر ☀️", 
+        "14:43": "العصر 🌤️", 
+        "17:02": "المغرب 🌅", 
+        "18:22": "العشاء 🌃" 
+    };
 }
 
 function getWelcomeMessage(userJid) {
@@ -491,85 +533,173 @@ function getWelcomeMessage(userJid) {
            `💡 لمعرفة كل الأوامر بالتفصيل اكتب في أي وقت كلمة: *اوامر* أو *أوامر* في الشات!`;
 }
 
-async function sendRemindersWithDelay(currentConn, groupIds, messageToSend, localDB) {
+let cachedGroupIds = [];
+let lastGroupFetchTime = 0;
+
+async function getParticipatingGroupIds(conn) {
+    if (!conn) return [];
+    const now = Date.now();
+    if (cachedGroupIds.length > 0 && (now - lastGroupFetchTime) < 5 * 60 * 1000) {
+        return cachedGroupIds;
+    }
+    try {
+        const groupsPromise = conn.groupFetchAllParticipating();
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 8000));
+        const groups = await Promise.race([groupsPromise, timeoutPromise]);
+        if (groups && typeof groups === 'object') {
+            cachedGroupIds = Object.keys(groups).filter(id => id && id.endsWith('@g.us'));
+            lastGroupFetchTime = now;
+            return cachedGroupIds;
+        }
+    } catch (_) {}
+
+    if (conn.chats) {
+        const chatGroups = Object.keys(conn.chats).filter(id => id && id.endsWith('@g.us'));
+        if (chatGroups.length > 0) {
+            cachedGroupIds = chatGroups;
+            return chatGroups;
+        }
+    }
+    return cachedGroupIds;
+}
+
+async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, sentGids = new Set()) {
     for (let gid of groupIds) {
-        if (!gid || localDB.bannedGroups.includes(gid)) continue;
+        if (!gid || !gid.endsWith('@g.us') || localDB.bannedGroups?.includes(gid)) continue;
+        if (sentGids.has(gid)) continue;
+
+        if (!conn || !conn.user?.id || (conn.ws && conn.ws.readyState !== 1)) {
+            break;
+        }
+
         try {
-            const cachedMetadata = currentConn.chats?.[gid]?.metadata || await currentConn.groupMetadata(gid).catch(() => null);
-            const participants = cachedMetadata?.participants || [];
+            sentGids.add(gid);
+            let participants = [];
+            if (conn.chats?.[gid]?.metadata?.participants) {
+                participants = conn.chats[gid].metadata.participants;
+            } else {
+                try {
+                    const metaPromise = conn.groupMetadata(gid);
+                    const metaTimeout = new Promise(resolve => setTimeout(() => resolve(null), 2500));
+                    const meta = await Promise.race([metaPromise, metaTimeout]);
+                    if (meta?.participants) participants = meta.participants;
+                } catch (_) {}
+            }
 
             if (participants.length === 0) {
-                await currentConn.sendMessage(gid, { text: messageToSend }).catch(() => {});
+                await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
             } else {
-                const mentions = participants.map(p => p.id);
+                const mentions = participants.map(p => p.id).filter(Boolean);
                 let finalTaggedMessage = `${messageToSend}\n\n🔔 تذكير للروم كله:\n`;
                 finalTaggedMessage += participants.map(mem => `@${mem.id.split('@')[0]}`).join(' ');
 
-                await currentConn.sendMessage(gid, { text: finalTaggedMessage, mentions: mentions }).catch(() => {});
+                await conn.sendMessage(gid, { text: finalTaggedMessage, mentions: mentions }).catch(() => {});
             }
-        } catch (err) {}
-        await delay(5000);
+        } catch (_) {}
+        await delay(2000);
     }
 }
 
+async function broadcastReminders(messageToSend, localDB) {
+    const sentGids = new Set();
+    const mainConn = activeRemindersConn;
+
+    if (mainConn && mainConn.user?.id) {
+        const mainGroups = await getParticipatingGroupIds(mainConn);
+        if (mainGroups.length > 0) {
+            await sendRemindersWithDelay(mainConn, mainGroups, messageToSend, localDB, sentGids);
+        }
+    }
+
+    // دعم بث الأذكار في جروبات البوتات الفرعية النشطة أيضاً بدون تكرار
+    try {
+        if (activeSubBots && activeSubBots.size > 0) {
+            for (const [subPhone, subData] of activeSubBots.entries()) {
+                const subSock = subData?.sock;
+                if (!subSock || !subSock.user?.id || (subSock.ws && subSock.ws.readyState !== 1)) continue;
+                const subGroups = await getParticipatingGroupIds(subSock);
+                const uniqueSubGroups = subGroups.filter(g => !sentGids.has(g));
+                if (uniqueSubGroups.length > 0) {
+                    await sendRemindersWithDelay(subSock, uniqueSubGroups, messageToSend, localDB, sentGids);
+                }
+            }
+        }
+    } catch (_) {}
+}
+
+let activeRemindersConn = null;
+let isRemindingInProgress = false;
+
 export async function startAutoReminders(currentConn) {
+    if (currentConn && currentConn.user?.id) {
+        activeRemindersConn = currentConn;
+    }
     if (cronStarted) return;
-    if (!currentConn?.user?.id) return;
     cronStarted = true;
 
-    await fetchEgyptPrayerTimes();
+    // جلب مواعيد الصلاة فوراً في الخلفية
+    fetchEgyptPrayerTimes().catch(() => {});
 
     let lastExecutedMinute = '';
 
     setInterval(async () => {
         try {
-            const now = new Date();
-            const EgyptTime = new Date(now.toLocaleString("en-US", { timeZone: "Africa/Cairo" }));
-            const hours = String(EgyptTime.getHours()).padStart(2, '0');
-            const minutes = String(EgyptTime.getMinutes()).padStart(2, '0');
-            const currentTimeStr = `${hours}:${minutes}`;
-            const todayDateStr = EgyptTime.toISOString().split('T')[0];
+            const conn = activeRemindersConn;
+            if (!conn || !conn.user?.id) return;
+            if (conn.ws && conn.ws.readyState !== 1) return;
+
+            if (isRemindingInProgress) return;
+
+            const { hours, minutes, currentTimeStr, todayDateStr, hourNum, minNum } = getCairoTimeParts();
 
             let localDB = loadLocalDB();
 
-            // 1. أذكار ومواقيت الصلاة
+            // فحص اليوم الجديد لتجديد قائمة الصلوات والأذكار
             if (!localDB.sentRemindersLog || localDB.sentRemindersLog.date !== todayDateStr) {
                 localDB.sentRemindersLog = { date: todayDateStr, list: [] };
                 saveLocalDB(localDB);
-                await fetchEgyptPrayerTimes();
+                fetchEgyptPrayerTimes().catch(() => {});
             }
 
+            // 1. أذكار ومواقيت الصلاة
             if (dynamicPrayers[currentTimeStr]) {
-                let tempLogKey = `prayer_${currentTimeStr}`;
-                if (!localDB.sentRemindersLog.list.includes(tempLogKey)) {
-                    localDB.sentRemindersLog.list.push(tempLogKey);
+                const prayerName = dynamicPrayers[currentTimeStr];
+                const prayerLogKey = `prayer_${todayDateStr}_${prayerName}`;
+
+                if (!localDB.sentRemindersLog.list.includes(prayerLogKey)) {
+                    localDB.sentRemindersLog.list.push(prayerLogKey);
                     saveLocalDB(localDB);
-                    let messageToSend = `🕌 *حان الآن موعد أذان ${dynamicPrayers[currentTimeStr]} حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️`;
-                    const groups = await currentConn.groupFetchAllParticipating().catch(() => ({}));
-                    const groupIds = Object.keys(groups);
-                    if (groupIds.length > 0) {
-                        sendRemindersWithDelay(currentConn, groupIds, messageToSend, localDB);
+
+                    isRemindingInProgress = true;
+                    try {
+                        let messageToSend = `🕌 *حان الآن موعد أذان ${prayerName} حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️`;
+                        await broadcastReminders(messageToSend, localDB);
+                    } finally {
+                        isRemindingInProgress = false;
                     }
                 }
             }
 
-            // 2. تذكير الصلاة على النبي ﷺ كل 3 ساعات
-            const hourNum = parseInt(hours, 10);
-            if (hourNum % 3 === 0 && minutes === '00') {
-                let salawatLogKey = `salawat_${todayDateStr}_${hours}`;
+            // 2. تذكير الصلاة على النبي ﷺ كل ساعتين بانتظام ودون انقطاع
+            // يرسل في الساعات الزوجية خلال أول 3 دقائق من الساعة (minNum <= 3) لضمان عدم تفويت الإرسال
+            if (hourNum % 2 === 0 && minNum <= 3) {
+                const salawatLogKey = `salawat_${todayDateStr}_${hours}`;
                 if (!localDB.sentRemindersLog.list.includes(salawatLogKey)) {
                     localDB.sentRemindersLog.list.push(salawatLogKey);
                     saveLocalDB(localDB);
-                    const salawatMessages = [
-                        `✨ *اللهم صلِّ وسلِّم وبارك على نبينا وحبيبنا محمد وعلى آله وصحبه أجمعين* ﷺ ❤️\n\nأكثروا من الصلاة والسلام على خير الأنام تُفرَج همومكم وتُغفَر ذنوبكم 🤲🤍`,
-                        `🌸 *صلوا على الحبيب المصطفى* ﷺ 🌸\n\n«إنَّ أوْلى النَّاسِ بي يَومَ القيامةِ أَكْثَرُهُم عليَّ صَلاةً» 🌿\nاللهم صلِّ وسلم وبارك على محمد وآله وصحبه أجمعين ❤️`,
-                        `🕊️ *تذكير بالصلاة على النبي محمد ﷺ* 🕊️\n\nاللهم صلّ على محمد وعلى آل محمد كما صليت على إبراهيم وعلى آل إبراهيم إنك حميد مجيد ✨\nلا تنس ذكر الله يا غالي 🤍`
-                    ];
-                    const randomSalawat = salawatMessages[Math.floor(Math.random() * salawatMessages.length)];
-                    const groups = await currentConn.groupFetchAllParticipating().catch(() => ({}));
-                    const groupIds = Object.keys(groups);
-                    if (groupIds.length > 0) {
-                        sendRemindersWithDelay(currentConn, groupIds, randomSalawat, localDB);
+
+                    isRemindingInProgress = true;
+                    try {
+                        const salawatMessages = [
+                            `✨ *اللهم صلِّ وسلِّم وبارك على نبينا وحبيبنا محمد وعلى آله وصحبه أجمعين* ﷺ ❤️\n\nأكثروا من الصلاة والسلام على خير الأنام تُفرَج همومكم وتُغفَر ذنوبكم 🤲🤍`,
+                            `🌸 *صلوا على الحبيب المصطفى* ﷺ 🌸\n\n«إنَّ أوْلى النَّاسِ بي يَومَ القيامةِ أَكْثَرُهُم عليَّ صَلاةً» 🌿\nاللهم صلِّ وسلم وبارك على محمد وآله وصحبه أجمعين ❤️`,
+                            `🕊️ *تذكير بالصلاة على النبي محمد ﷺ* 🕊️\n\nاللهم صلّ على محمد وعلى آل محمد كما صليت على إبراهيم وعلى آل إبراهيم إنك حميد مجيد ✨\nلا تنس ذكر الله يا غالي 🤍`,
+                            `🌟 *صلِّ على النبي وتبسم* ﷺ 🌟\n\n«من صلّى عليّ صلاة صلّى الله عليه بها عشراً» 🌿\nرطب لسانك وقلبك بالصلاة والسلام على رسول الله ﷺ 🤍`
+                        ];
+                        const randomSalawat = salawatMessages[Math.floor(Math.random() * salawatMessages.length)];
+                        await broadcastReminders(randomSalawat, localDB);
+                    } finally {
+                        isRemindingInProgress = false;
                     }
                 }
             }
@@ -585,8 +715,8 @@ export async function startAutoReminders(currentConn) {
                         // وقت القفل
                         if (sched.closeTime && sched.closeTime === currentTimeStr) {
                             try {
-                                await currentConn.groupSettingUpdate(gid, 'announcement');
-                                await currentConn.sendMessage(gid, {
+                                await conn.groupSettingUpdate(gid, 'announcement');
+                                await conn.sendMessage(gid, {
                                     text: `🔒 *حان موعد قفل المجموعة التلقائي المجدول (${currentTimeStr})!* ⏱️\nتم قفل الشات الآن بواسطة شادو بوت للمشرفين فقط. تصبحون على خير 🌙✨`
                                 }).catch(() => {});
                                 console.log(`🔒 [Scheduled Lock] Closed group: ${gid} at ${currentTimeStr}`);
@@ -598,8 +728,8 @@ export async function startAutoReminders(currentConn) {
                         // وقت الفتح
                         if (sched.openTime && sched.openTime === currentTimeStr) {
                             try {
-                                await currentConn.groupSettingUpdate(gid, 'not_announcement');
-                                await currentConn.sendMessage(gid, {
+                                await conn.groupSettingUpdate(gid, 'not_announcement');
+                                await conn.sendMessage(gid, {
                                     text: `🔓 *حان موعد فتح المجموعة التلقائي المجدول (${currentTimeStr})!* ⏱️\nتم فتح الشات الآن لجميع الأعضاء بواسطة شادو بوت. صباح الخير ويوم سعيد لكم جميعاً ☀️🎉`
                                 }).catch(() => {});
                                 console.log(`🔓 [Scheduled Open] Opened group: ${gid} at ${currentTimeStr}`);
@@ -611,7 +741,8 @@ export async function startAutoReminders(currentConn) {
                 }
             }
         } catch (e) {
-            console.error("Error in startAutoReminders loop:", e);
+            console.error("Error in startAutoReminders loop:", e?.message || e);
+            isRemindingInProgress = false;
         }
     }, 15000);
 }
@@ -710,6 +841,51 @@ const datelsHandler = {
                 await handleCommandTiming('🛑');
                 await currentConn.sendMessage(from, { text: '🛑 *بأمر من الحج شادو الأصلي.. جاري إيقاف البوت تماماً الآن! في رعاية الله.* 😴' }, { quoted: mek });
                 setTimeout(() => process.exit(0), 2000);
+                return true;
+            }
+
+            // 🕌 أوامر مواقيت الصلاة والأذان
+            if (['مواقيت الصلاة', 'مواعيد الصلاة', 'مواقيت الصلاه', 'مواعيد الصلاه', 'الاذان', 'الأذان', 'الصلوات'].includes(normalizedBody)) {
+                await handleCommandTiming('🕌');
+                const { todayDateStr } = getCairoTimeParts();
+                let prayerList = '';
+                for (const [time, name] of Object.entries(dynamicPrayers)) {
+                    prayerList += `• ${name}: *${time}*\n`;
+                }
+                const msg = 
+                    `╭━━━〔 🕌 *مواقيت الصلاة في مصر* 〕━━━╮\n` +
+                    `📅 التاريخ: ${todayDateStr}\n\n` +
+                    (prayerList || '• جاري تحديث المواعيد...\n') +
+                    `\n📢 *تنبيه:* يقوم البوت بالتنبيه تلقائياً في جميع الرومات عند حلول موعد كل صلاة.\n` +
+                    `🤍 *صلاتك حياتك فلا تؤخرها.. صَلِّ على النبي ﷺ*` +
+                    `\n╰━━━━━━━━━━━━━━━━━━━━╯`;
+                await currentConn.sendMessage(from, { text: msg }, { quoted: mek });
+                return true;
+            }
+
+            // 🌸 أمر الصلاة على النبي
+            if (['صلي علي النبي', 'صلي على النبي', 'صلوا على النبي', 'الصلاة على النبي', 'الصلاه علي النبي'].includes(normalizedBody)) {
+                await handleCommandTiming('🌸');
+                const salawatList = [
+                    `✨ *اللهم صلِّ وسلِّم وبارك على نبينا وحبيبنا محمد وعلى آله وصحبه أجمعين* ﷺ ❤️\n\nأكثروا من الصلاة والسلام على خير الأنام تُفرَج همومكم وتُغفَر ذنوبكم 🤲🤍`,
+                    `🌸 *صلوا على الحبيب المصطفى* ﷺ 🌸\n\n«إنَّ أوْلى النَّاسِ بي يَومَ القيامةِ أَكْثَرُهُم عليَّ صَلاةً» 🌿\nاللهم صلِّ وسلم وبارك على محمد وآله وصحبه أجمعين ❤️`,
+                    `🕊️ *اللهم صلّ على محمد وعلى آل محمد كما صليت على إبراهيم وعلى آل إبراهيم إنك حميد مجيد* ✨\nرطب لسانك وقلبك بذكر الحبيب ﷺ 🤍`
+                ];
+                const chosen = salawatList[Math.floor(Math.random() * salawatList.length)];
+                await currentConn.sendMessage(from, { text: chosen }, { quoted: mek });
+                return true;
+            }
+
+            // 🧪 أمر تجربة الأذان للحجاج والمالك
+            if (['تجربة الاذان', 'تجربه الاذان', 'تست الاذان', 'تست أذان'].includes(normalizedBody)) {
+                if (!isHajj) {
+                    await handleCommandTiming('❌');
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحجاج فقط لاختبار نظام الأذان!' }, { quoted: mek });
+                    return true;
+                }
+                await handleCommandTiming('🕌');
+                const testAdhan = `🕌 *[تجربة] حان الآن موعد أذان العصر حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️`;
+                await currentConn.sendMessage(from, { text: testAdhan }, { quoted: mek });
                 return true;
             }
 
