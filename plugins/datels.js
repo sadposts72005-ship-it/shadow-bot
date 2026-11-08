@@ -98,6 +98,31 @@ function getCleanNumber(jid) {
     return jid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
 }
 
+/**
+ * التحقق مما إذا كان المعرف أو الرقم مصرياً (+20 / 201...)
+ */
+export function isEgyptianNumber(numOrJid) {
+    if (!numOrJid) return false;
+    let clean = getCleanNumber(numOrJid);
+    if (!clean) return false;
+
+    // فحص الرقم المباشر (يبدأ بـ 20 ومكون من 11-12 رقماً أو يبدأ بـ 201)
+    if (clean.startsWith('20') && (clean.length === 12 || clean.length === 11 || clean.startsWith('201'))) {
+        return true;
+    }
+
+    // فحص في خريطة الـ LID
+    try {
+        const localDB = loadLocalDB();
+        const mapped = localDB?.lidMap?.[clean];
+        if (mapped && mapped.startsWith('20') && (mapped.length === 12 || mapped.length === 11 || mapped.startsWith('201'))) {
+            return true;
+        }
+    } catch (_) {}
+
+    return false;
+}
+
 function isUserInList(jid, list = []) {
     if (!jid || !Array.isArray(list)) return false;
     const cleanNum = getCleanNumber(jid);
@@ -1355,8 +1380,60 @@ const datelsHandler = {
                     return true;
                 }
 
-                // قبول طلبات الانضمام
-                if (isActualRoomAdminOrOwner && normalizedBody.startsWith('اقبل طلبات')) {
+                // قبول طلبات الانضمام لأرقام مصرية فقط (+20)
+                const isEgyptianJoinCmd = /^(?:\.|\/)?(اقبل|قبول)\s*(?:الطلبات|طلبات)\s*(?:مصري[هةين]*|مصر)(?:\s|$|\d)/i.test(normalizedBody);
+
+                if (isActualRoomAdminOrOwner && isEgyptianJoinCmd) {
+                    let countMatch = normalizedBody.match(/\d+/);
+                    let countArg = countMatch ? parseInt(countMatch[0], 10) : 50;
+                    stopRequestsControl[from] = false;
+                    await handleCommandTiming('🇪🇬');
+
+                    try {
+                        let requests = await currentConn.groupRequestParticipantsList(from);
+                        if (!requests || requests.length === 0) {
+                            await currentConn.sendMessage(from, { text: '📋 لا توجد أي طلبات انضمام معلقة في الجروب حالياً.' }, { quoted: mek });
+                            return true;
+                        }
+
+                        // تصفية أرقام مصر (+20) فقط
+                        let egyptianRequests = requests.filter(req => isEgyptianNumber(req.jid));
+                        if (egyptianRequests.length === 0) {
+                            await currentConn.sendMessage(from, { 
+                                text: `📋 تم فحص [ ${requests.length} ] طلب انضمام معلق، ولكن لا توجد أي أرقام مصرية (+20) بين الطلبات المعلقة! 🇪🇬` 
+                            }, { quoted: mek });
+                            return true;
+                        }
+
+                        let toAccept = egyptianRequests.slice(0, countArg);
+                        await currentConn.sendMessage(from, { 
+                            text: `🇪🇬 *جاري قبول [ ${toAccept.length} ] طلب انضمام مصري (+20)* من أصل [ ${egyptianRequests.length} ] طلب مصري معلق..\n\n` +
+                                  `🛑 اكتب *(وقف طلبات)* للإلغاء في أي وقت.` 
+                        }, { quoted: mek });
+
+                        let acceptedCount = 0;
+                        for (let req of toAccept) {
+                            if (stopRequestsControl[from]) break;
+                            try {
+                                await currentConn.groupRequestParticipantsUpdate(from, [req.jid], 'approve');
+                                acceptedCount++;
+                                await delay(1500);
+                            } catch (e) {}
+                        }
+
+                        await currentConn.sendMessage(from, { 
+                            text: `✅ *تم قبول [ ${acceptedCount} ] عضو بأرقام مصرية (+20) بنجاح في الجروب!* 🇪🇬🎉` 
+                        }, { quoted: mek });
+                    } catch (e) {
+                        await currentConn.sendMessage(from, { 
+                            text: `❌ حدث خطأ في معالجة طلبات الانضمام: ${e.message || 'تأكد من صلاحيات البوت'}` 
+                        }, { quoted: mek });
+                    }
+                    return true;
+                }
+
+                // قبول طلبات الانضمام العامة
+                if (isActualRoomAdminOrOwner && !isEgyptianJoinCmd && normalizedBody.startsWith('اقبل طلبات')) {
                     let countArg = parseInt(normalizedBody.replace(/[^0-9]/g, '')) || 50;
                     stopRequestsControl[from] = false;
                     await handleCommandTiming('⏳');
@@ -1884,6 +1961,8 @@ export function getBotCommandExplanation(query, botName = 'شادو') {
                `• *عدد الناس* ➔ إجمالي عدد الأعضاء بالجروب.\n` +
                `• *منشن [الرسالة]* ➔ منشن جماعي صاخب لكل الأعضاء.\n` +
                `• *اقبل طلبات [العدد]* ➔ قبول طلبات الانضمام المعلقة تلقائياً.\n` +
+               `• *اقبل طلبات مصري [العدد]* ➔ قبول طلبات الانضمام المعلقة للأرقام المصرية (+20) فقط.\n` +
+               `• *وقف طلبات* ➔ لإيقاف عملية قبول الطلبات المعلقة في أي وقت.\n` +
                `• حماية الروابط: البوت بيمسح أي روابط جروبات مخالفة تلقائياً!`;
     }
 
