@@ -365,8 +365,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     const finalGender = (gender === 'female' || gender === '2') ? 'female' : 'male';
     const finalPersonality = (personality === 'bad' || personality === 'toxic' || personality === '2') ? 'bad' : 'respectful';
 
-    if (!cleanPhone || cleanPhone.length < 10) {
-        await mainConn.sendMessage(notifyJid, { text: '❌ رقم الهاتف غير صالح. برجاء كتابة رقم صحيح (مثال: 01012345678 أو 201012345678).' }, { quoted: quotedMek });
+    if (!cleanPhone || cleanPhone.length < 10 || cleanPhone.length > 13) {
+        await mainConn.sendMessage(notifyJid, { text: '❌ رقم هاتف البوت غير صالح (+${cleanPhone})، يبدو أنه معرف مشفر (LID) وليس رقم شريحة هاتف حقيقي!\nبرجاء كتابة رقم الهاتف بالأرقام (مثال: 01012345678 أو 201012345678).' }, { quoted: quotedMek });
         return false;
     }
 

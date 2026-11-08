@@ -288,6 +288,102 @@ export function getMsgTimestamp(m) {
     return num;
 }
 
+/**
+ * 🔍 استخراج رقم الهاتف الحقيقي (PN) للمستخدم بدقة وتجاوز تشفير الـ LID
+ */
+async function resolveUserPhoneNumber(mek, currentConn, localDB) {
+    if (!mek) return null;
+    const from = mek.key?.remoteJid || '';
+    const sender = mek.key?.participant || from;
+    const cleanSender = getCleanNumber(sender);
+    const cleanFrom = getCleanNumber(from);
+
+    // 1. فحص remoteJidAlt أو participantAlt المرفقة مع الرسالة من بايلز (المصدر المباشر لرقم الشريحة)
+    const altJids = [
+        mek.key?.remoteJidAlt,
+        mek.key?.participantAlt,
+        mek.message?.extendedTextMessage?.contextInfo?.participantAlt,
+        mek.message?.extendedTextMessage?.contextInfo?.remoteJidAlt
+    ];
+    for (const alt of altJids) {
+        if (alt && typeof alt === 'string' && alt.endsWith('@s.whatsapp.net')) {
+            const p = cleanPhoneNumber(getCleanNumber(alt));
+            if (p && p.length >= 10 && p.length <= 13) {
+                if (cleanSender && cleanSender !== p && (cleanSender.length > 13 || sender.endsWith('@lid'))) {
+                    if (!localDB.lidMap) localDB.lidMap = {};
+                    localDB.lidMap[cleanSender] = p;
+                    localDB.lidMap[p] = cleanSender;
+                    saveLocalDB(localDB);
+                }
+                return p;
+            }
+        }
+    }
+
+    // 2. فحص ما إذا كان from أو sender رقماً حقيقياً وينتهي بـ @s.whatsapp.net
+    if (from.endsWith('@s.whatsapp.net')) {
+        const p = cleanPhoneNumber(cleanFrom);
+        if (p && p.length >= 10 && p.length <= 13) return p;
+    }
+    if (sender.endsWith('@s.whatsapp.net')) {
+        const p = cleanPhoneNumber(cleanSender);
+        if (p && p.length >= 10 && p.length <= 13) return p;
+    }
+
+    // 3. فحص قاعدة البيانات المحلية lidMap
+    if (localDB?.lidMap) {
+        const candidates = [cleanSender, cleanFrom];
+        for (const c of candidates) {
+            if (c && localDB.lidMap[c]) {
+                const mapped = cleanPhoneNumber(localDB.lidMap[c]);
+                if (mapped && mapped.length >= 10 && mapped.length <= 13) return mapped;
+            }
+        }
+    }
+
+    // 4. فحص سجل ربط LIDs الداخلي في بايلز (Baileys Signal Repository)
+    try {
+        const lidStore = currentConn?.signalRepository?.lidMapping;
+        if (lidStore && typeof lidStore.getPNForLID === 'function') {
+            const jidsToQuery = [
+                sender,
+                from,
+                `${cleanSender}@lid`,
+                `${cleanFrom}@lid`
+            ].filter(j => j && j.includes('lid'));
+
+            for (const jid of jidsToQuery) {
+                const pn = await lidStore.getPNForLID(jid);
+                if (pn) {
+                    const p = cleanPhoneNumber(getCleanNumber(pn));
+                    if (p && p.length >= 10 && p.length <= 13) {
+                        if (cleanSender && cleanSender !== p) {
+                            if (!localDB.lidMap) localDB.lidMap = {};
+                            localDB.lidMap[cleanSender] = p;
+                            localDB.lidMap[p] = cleanSender;
+                            saveLocalDB(localDB);
+                        }
+                        return p;
+                    }
+                }
+            }
+        }
+    } catch (_) {}
+
+    // 5. فحص سجل البوتات الفرعية sub_bots.json إذا كان المستخدم قد سجل مسبقاً برقم هاتف
+    try {
+        const registry = loadSubBotsRegistry();
+        for (const [phone, cfg] of Object.entries(registry)) {
+            if (cfg.adminLid === cleanSender || cfg.adminLid === cleanFrom || cfg.adminNumbers?.includes(cleanSender)) {
+                const p = cleanPhoneNumber(cfg.adminPhone || phone);
+                if (p && p.length >= 10 && p.length <= 13) return p;
+            }
+        }
+    } catch (_) {}
+
+    return null;
+}
+
 export async function handleAllMessages(mek, currentConn) {
     try {
         // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة أُرسلت قبل تشغيل البوت الحالي أو أثناء إغلاقه
@@ -1132,18 +1228,10 @@ export async function handleAllMessages(mek, currentConn) {
                     let targetBotPhone = '';
                     const isSelf = ['رقمي', 'نفسه', 'نفس الرقم', 'نفس رقمي', 'حسابي', 'ده', 'انا', 'أنا'].includes(normalizedBody);
                     if (isSelf) {
-                        let resolved = '';
-                        if (!sender.endsWith('@lid') && cleanSender.length <= 13) {
-                            resolved = cleanSender;
-                        } else if (localDB.lidMap?.[cleanSender]) {
-                            resolved = localDB.lidMap[cleanSender];
-                        } else if (from.endsWith('@s.whatsapp.net')) {
-                            resolved = getCleanNumber(from);
-                        } else if (mek.key?.remoteJid?.endsWith('@s.whatsapp.net')) {
-                            resolved = getCleanNumber(mek.key.remoteJid);
-                        }
-                        targetBotPhone = cleanPhoneNumber(resolved);
-                        if (!targetBotPhone || targetBotPhone.length < 10) {
+                        const resolved = await resolveUserPhoneNumber(mek, currentConn, localDB);
+                        if (resolved) {
+                            targetBotPhone = resolved;
+                        } else {
                             await respondWithStrictTiming('⚠️', async () => {
                                 await currentConn.sendMessage(from, { 
                                     text: '⚠️ حسابك يظهر برمز مشفر داخل واتساب (LID) تعذر استخراج رقم الشريحة منه تلقائياً لاستخراج كود الاقتران!\nبرجاء كتابة رقم هاتف البوت بالأرقام (مثال: 01012345678 أو 201012345678):' 
@@ -1155,7 +1243,7 @@ export async function handleAllMessages(mek, currentConn) {
                         targetBotPhone = cleanPhoneNumber(body);
                     }
 
-                    if (!targetBotPhone || targetBotPhone.length < 10) {
+                    if (!targetBotPhone || targetBotPhone.length < 10 || targetBotPhone.length > 13) {
                         await respondWithStrictTiming('⚠️', async () => {
                             await currentConn.sendMessage(from, { text: '❌ هذا الرقم غير صالح!\nبرجاء كتابة رقم هاتف البوت بشكل صحيح (مثال: 01012345678 أو 201012345678)\nأو اكتب (رقمي) لاستخدام رقمك الحالي:' }, { quoted: mek });
                         });
@@ -1187,25 +1275,16 @@ export async function handleAllMessages(mek, currentConn) {
                     const isSelf = ['رقمي', 'نفسي', 'نفسه', 'انا', 'أنا', 'نفس الرقم', 'حسابي', 'ده', 'نفس'].includes(normalizedBody);
 
                     if (isSelf) {
-                        let candidatePhone = '';
-                        if (!sender.endsWith('@lid') && cleanSender.length <= 13) {
-                            candidatePhone = cleanSender;
-                        } else if (localDB.lidMap?.[cleanSender]) {
-                            candidatePhone = localDB.lidMap[cleanSender];
-                        } else if (from.endsWith('@s.whatsapp.net')) {
-                            candidatePhone = getCleanNumber(from);
-                        } else if (mek.key?.remoteJid?.endsWith('@s.whatsapp.net')) {
-                            candidatePhone = getCleanNumber(mek.key.remoteJid);
-                        }
-
-                        if (sender.endsWith('@lid') || cleanSender.length > 13) {
-                            adminLid = cleanSender;
-                        }
-
-                        if (candidatePhone) {
-                            adminPhone = cleanPhoneNumber(candidatePhone);
+                        const resolvedPhone = await resolveUserPhoneNumber(mek, currentConn, localDB);
+                        if (resolvedPhone) {
+                            adminPhone = resolvedPhone;
+                        } else if (currentInstall.targetPhone && currentInstall.targetPhone.length <= 13) {
+                            adminPhone = currentInstall.targetPhone;
                         } else {
-                            adminPhone = cleanSender;
+                            adminPhone = cleanPhoneNumber(cleanSender);
+                        }
+
+                        if (sender.endsWith('@lid') || from.endsWith('@lid') || cleanSender.length > 13) {
                             adminLid = cleanSender;
                         }
                     } else {
@@ -1233,8 +1312,17 @@ export async function handleAllMessages(mek, currentConn) {
                         }
 
                         let cleaned = cleanPhoneNumber(rawAdmin) || getCleanNumber(rawAdmin);
-                        adminPhone = cleaned;
-                        adminLid = localDB.lidMap?.[cleaned] || '';
+                        if (cleaned && cleaned.length >= 10 && cleaned.length <= 13) {
+                            adminPhone = cleaned;
+                        } else {
+                            adminPhone = cleaned;
+                            if (rawAdmin.includes('@lid') || cleaned.length > 13) {
+                                adminLid = cleaned;
+                            }
+                        }
+                        if (!adminLid && localDB.lidMap?.[adminPhone]) {
+                            adminLid = localDB.lidMap[adminPhone];
+                        }
                     }
 
                     if (!adminPhone || adminPhone.length < 5) {
