@@ -954,6 +954,36 @@ export async function handleAllMessages(mek, currentConn) {
         // 🤖 [نظام التنصيب التفاعلي للبوتات الفرعية (Sub-Bots / JadiBot)]
         // =========================================================================
 
+        // 🗑️ فحص وجود تأكيد معلق لحذف بوت فرعي للحج شادو وسؤاله قبل إرسال الإشعار
+        if (isAbsoluteOwner && global.pendingSubBotDelete && global.pendingSubBotDelete.has(cleanSender)) {
+            const pendingDel = global.pendingSubBotDelete.get(cleanSender);
+            // مهلة التأكيد: 3 دقائق
+            if (Date.now() - pendingDel.time > 3 * 60 * 1000) {
+                global.pendingSubBotDelete.delete(cleanSender);
+            } else {
+                const normAns = normalizedBody.trim();
+                const isYes = ['نعم', 'اه', 'ايوه', 'ايوة', '1', 'ارسل', 'ابعت', 'بلغ'].includes(normAns);
+                const isNo = ['لا', 'لأ', 'بدون', 'بدون اشعار', '2', 'متبعتش'].includes(normAns);
+                const isCancel = ['الغاء', 'إلغاء', 'خروج', 'stop', 'cancel', '3'].includes(normAns);
+
+                if (isYes || isNo) {
+                    global.pendingSubBotDelete.delete(cleanSender);
+                    const shouldNotify = isYes;
+                    const res = await deleteSubBotRemote(pendingDel.phone, currentConn, shouldNotify);
+                    await respondWithStrictTiming('🗑️', async () => {
+                        await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
+                    });
+                    return;
+                } else if (isCancel) {
+                    global.pendingSubBotDelete.delete(cleanSender);
+                    await respondWithStrictTiming('❌', async () => {
+                        await currentConn.sendMessage(from, { text: `❌ تم إلغاء عملية حذف البوت الفرعي (+${pendingDel.phone}).` }, { quoted: mek });
+                    });
+                    return;
+                }
+            }
+        }
+
         // 1. فحص وجود عملية تنصيب جارية لهذا المستخدم (تتم حصرياً في الخاص)
         const cleanFrom = getCleanNumber(from);
         const installKey = installState.has(cleanSender) ? cleanSender : (installState.has(cleanFrom) ? cleanFrom : null);
@@ -1363,14 +1393,17 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         // 📢 [أمر إذاعة ونشر التحديثات لجميع البوتات الفرعية - للحج شادو الأصلي حصرياً]
-        if (
-            normalizedBody.startsWith('اذاعة للبوتات') || 
-            normalizedBody.startsWith('إذاعة للبوتات') || 
-            normalizedBody.startsWith('نشر للبوتات') || 
-            normalizedBody.startsWith('اعلان للبوتات') || 
-            normalizedBody.startsWith('إعلان للبوتات') || 
-            normalizedBody.startsWith('تحديث للبوتات')
-        ) {
+        const isBroadcastCmd = 
+            /^(?:\.|\/)?([إا]+ذاع[هة]|نشر|[إا]+علان|تحديث)\s*(للبوتات|للبوت|للبوتات الفرعي[هة])/i.test(body) ||
+            /^(?:\.|\/)?([إا]+ذاع[هة]|نشر|[إا]+علان|تحديث)\s*(للبوتات|للبوت|للبوتات الفرعي[هة])/i.test(normalizedBody) ||
+            normalizedBody.startsWith('اذاعه للبوتات') ||
+            normalizedBody.startsWith('اذاعة للبوتات') ||
+            normalizedBody.startsWith('إذاعة للبوتات') ||
+            normalizedBody.startsWith('نشر للبوتات') ||
+            normalizedBody.startsWith('اعلان للبوتات') ||
+            normalizedBody.startsWith('تحديث للبوتات');
+
+        if (isBroadcastCmd) {
             if (!isAbsoluteOwner) {
                 await respondWithStrictTiming('❌', async () => {
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (المتحكم المطلق)! 👑' }, { quoted: mek });
@@ -1378,7 +1411,10 @@ export async function handleAllMessages(mek, currentConn) {
                 return;
             }
 
-            const broadcastText = body.replace(/^(اذاعة للبوتات|إذاعة للبوتات|نشر للبوتات|اعلان للبوتات|إعلان للبوتات|تحديث للبوتات)\s*/i, '').trim();
+            const broadcastText = body
+                .replace(/^(?:\.|\/)?([إا]+ذاع[هة]|نشر|[إا]+علان|تحديث)\s*(للبوتات|للبوت|للبوتات الفرعي[هة]|الفرعية)\s*/i, '')
+                .replace(/^(اذاعة للبوتات|اذاعه للبوتات|إذاعة للبوتات|نشر للبوتات|اعلان للبوتات|إعلان للبوتات|تحديث للبوتات)\s*/i, '')
+                .trim();
 
             if (!broadcastText) {
                 const helpText = 
@@ -1674,9 +1710,47 @@ export async function handleAllMessages(mek, currentConn) {
                 await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم الذي تريد حذفه، مثال:\n(حذف تنصيب 201012345678)' }, { quoted: mek });
                 return;
             }
-            const res = await deleteSubBotRemote(targetPhone, currentConn, true);
-            await respondWithStrictTiming('🗑️', async () => {
-                await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
+
+            const cleanTarget = cleanPhoneNumber(targetPhone);
+            const registry = loadSubBotsRegistry();
+            const botData = registry[cleanTarget] || null;
+            const targetBotName = botData?.botName || cleanTarget;
+
+            // إذا حدد الحج خياره مباشرة مع الأمر (مثال: حذف تنصيب 201012345678 نعم أو لا)
+            const remaining = body.replace(/^(حذف تنصيب|الغاء تنصيب|إلغاء تنصيب)\s*/i, '').replace(targetPhone, '').trim();
+            const normRem = normalizeArabic(remaining);
+            if (['نعم', 'اه', 'ايوه', '1', 'ارسل', 'ابعت', 'بلغ'].includes(normRem)) {
+                const res = await deleteSubBotRemote(cleanTarget, currentConn, true);
+                await respondWithStrictTiming('🗑️', async () => {
+                    await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
+                });
+                return;
+            } else if (['لا', 'لأ', 'بدون', '2', 'متبعتش'].includes(normRem)) {
+                const res = await deleteSubBotRemote(cleanTarget, currentConn, false);
+                await respondWithStrictTiming('🗑️', async () => {
+                    await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
+                });
+                return;
+            }
+
+            // سؤال المالك أولاً للتأكيد وتخييره بين إرسال إشعار التحديث أو الحذف في صمت
+            if (!global.pendingSubBotDelete) global.pendingSubBotDelete = new Map();
+            global.pendingSubBotDelete.set(cleanSender, {
+                phone: cleanTarget,
+                botName: targetBotName,
+                time: Date.now()
+            });
+
+            const askText = 
+                `🗑️ *تأكيد حذف البوت الفرعي (+${cleanTarget}):* ⚠️\n` +
+                `🏷️ اسم البوت: *${targetBotName}*\n\n` +
+                `هل تريد إرسال إشعار لصاحب البوت بأنه تم حذفه لإجراء تحديثات جديدة؟\n\n` +
+                `1️⃣ اكتب: *نعم* ➔ لحذف البوت وإرسال رسالة التحديث لصاحبه.\n` +
+                `2️⃣ اكتب: *لا* ➔ لحذف البوت في صمت تام دون إرسال أي رسالة.\n` +
+                `3️⃣ اكتب: *الغاء* ➔ لإلغاء عملية الحذف.`;
+
+            await respondWithStrictTiming('❓', async () => {
+                await currentConn.sendMessage(from, { text: askText }, { quoted: mek });
             });
             return;
         }

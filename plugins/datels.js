@@ -103,11 +103,30 @@ function getCleanNumber(jid) {
  */
 export function isEgyptianNumber(numOrJid) {
     if (!numOrJid) return false;
+    if (typeof numOrJid === 'object') {
+        const candidates = [
+            numOrJid.phone_number,
+            numOrJid.phoneNumber,
+            numOrJid.phone,
+            numOrJid.user,
+            numOrJid.id,
+            numOrJid.jid
+        ].filter(Boolean);
+        for (const c of candidates) {
+            if (isEgyptianNumber(c)) return true;
+        }
+        return false;
+    }
+
     let clean = getCleanNumber(numOrJid);
     if (!clean) return false;
 
-    // فحص الرقم المباشر (يبدأ بـ 20 ومكون من 11-12 رقماً أو يبدأ بـ 201)
-    if (clean.startsWith('20') && (clean.length === 12 || clean.length === 11 || clean.startsWith('201'))) {
+    // فحص أرقام الموبايل المصرية (تبدأ بـ 201 ومكونة من 11-12 رقماً)
+    if (clean.startsWith('201') && (clean.length === 12 || clean.length === 11)) {
+        return true;
+    }
+    // فحص الأرقام الأرضية أو كود مصر الدولي عامة
+    if (clean.startsWith('20') && clean.length >= 10 && clean.length <= 13) {
         return true;
     }
 
@@ -115,10 +134,40 @@ export function isEgyptianNumber(numOrJid) {
     try {
         const localDB = loadLocalDB();
         const mapped = localDB?.lidMap?.[clean];
-        if (mapped && mapped.startsWith('20') && (mapped.length === 12 || mapped.length === 11 || mapped.startsWith('201'))) {
+        if (mapped && mapped.startsWith('20')) {
             return true;
         }
     } catch (_) {}
+
+    return false;
+}
+
+/**
+ * فحص المتقدم لطلب الانضمام بالكامل مع كشف الـ LID عبر السوكيت وقاعدة البيانات
+ */
+export async function isEgyptianParticipant(req, currentConn) {
+    if (!req) return false;
+    if (isEgyptianNumber(req)) return true;
+
+    const rawJid = req.jid || (typeof req === 'string' ? req : '');
+    const cleanId = getCleanNumber(rawJid);
+
+    // فحص خريطة الـ LID المخزنة محلياً
+    try {
+        const localDB = loadLocalDB();
+        const mapped = localDB?.lidMap?.[cleanId];
+        if (mapped && isEgyptianNumber(mapped)) return true;
+    } catch (_) {}
+
+    // فحص خريطة الـ LID في Baileys Signal Repository
+    if (rawJid && (rawJid.includes('@lid') || cleanId.length > 13)) {
+        try {
+            if (currentConn?.signalRepository?.lidMapping?.getPNForLID) {
+                const pn = await currentConn.signalRepository.lidMapping.getPNForLID(rawJid);
+                if (pn && isEgyptianNumber(pn)) return true;
+            }
+        } catch (_) {}
+    }
 
     return false;
 }
@@ -1390,17 +1439,42 @@ const datelsHandler = {
                     await handleCommandTiming('🇪🇬');
 
                     try {
+                        // التحقق من أن البوت مشرف (Admin) في الجروب لتفادي خطأ forbidden
+                        let groupMeta = null;
+                        try { groupMeta = await currentConn.groupMetadata(from); } catch (_) {}
+
+                        if (groupMeta) {
+                            const botNum = getCleanNumber(currentConn.user?.id);
+                            const botPart = groupMeta.participants?.find(p => getCleanNumber(p.id) === botNum);
+                            const isBotAdmin = botPart && (botPart.admin === 'admin' || botPart.admin === 'superadmin');
+
+                            if (!isBotAdmin) {
+                                await currentConn.sendMessage(from, { 
+                                    text: `⚠️ *عفواً يا فنان! البوت (${currentConn.botName || 'شادو'}) ليس مشرفاً (Admin) في هذا الجروب!* 👑\n\n` +
+                                          `📌 حتى يتمكن البوت من فحص وقبول طلبات الانضمام، يجب ترقية البوت لمشرف أولاً ثم إعادة كتابة الأمر.` 
+                                }, { quoted: mek });
+                                return true;
+                            }
+                        }
+
                         let requests = await currentConn.groupRequestParticipantsList(from);
                         if (!requests || requests.length === 0) {
                             await currentConn.sendMessage(from, { text: '📋 لا توجد أي طلبات انضمام معلقة في الجروب حالياً.' }, { quoted: mek });
                             return true;
                         }
 
-                        // تصفية أرقام مصر (+20) فقط
-                        let egyptianRequests = requests.filter(req => isEgyptianNumber(req.jid));
+                        // تصفية أرقام مصر (+20) سواء بالأرقام المباشرة أو بمعرفات الـ LID
+                        let egyptianRequests = [];
+                        for (let req of requests) {
+                            const isEg = await isEgyptianParticipant(req, currentConn);
+                            if (isEg) {
+                                egyptianRequests.push(req);
+                            }
+                        }
+
                         if (egyptianRequests.length === 0) {
                             await currentConn.sendMessage(from, { 
-                                text: `📋 تم فحص [ ${requests.length} ] طلب انضمام معلق، ولكن لا توجد أي أرقام مصرية (+20) بين الطلبات المعلقة! 🇪🇬` 
+                                text: `📋 تم فحص [ ${requests.length} ] طلب انضمام معلق، ولكن لم يتم العثور على أي أرقام مصرية (+20) بين الطلبات المعلقة! 🇪🇬` 
                             }, { quoted: mek });
                             return true;
                         }
@@ -1425,9 +1499,18 @@ const datelsHandler = {
                             text: `✅ *تم قبول [ ${acceptedCount} ] عضو بأرقام مصرية (+20) بنجاح في الجروب!* 🇪🇬🎉` 
                         }, { quoted: mek });
                     } catch (e) {
-                        await currentConn.sendMessage(from, { 
-                            text: `❌ حدث خطأ في معالجة طلبات الانضمام: ${e.message || 'تأكد من صلاحيات البوت'}` 
-                        }, { quoted: mek });
+                        const errMsg = e?.message || '';
+                        if (errMsg.includes('forbidden') || e?.output?.statusCode === 403) {
+                            await currentConn.sendMessage(from, { 
+                                text: `❌ *تعذر قبول الطلبات (Forbidden 403):*\n\n` +
+                                      `1️⃣ تأكد من ترقية البوت لمشرف (Admin) في الجروب.\n` +
+                                      `2️⃣ تأكد من تفعيل خيار *(الموافقة على الأعضاء الجدد / Approve new participants)* في إعدادات الجروب.` 
+                            }, { quoted: mek });
+                        } else {
+                            await currentConn.sendMessage(from, { 
+                                text: `❌ حدث خطأ في معالجة طلبات الانضمام: ${errMsg || 'تأكد من صلاحيات البوت'}` 
+                            }, { quoted: mek });
+                        }
                     }
                     return true;
                 }
@@ -1439,6 +1522,24 @@ const datelsHandler = {
                     await handleCommandTiming('⏳');
 
                     try {
+                        // التحقق من أن البوت مشرف في الجروب
+                        let groupMeta = null;
+                        try { groupMeta = await currentConn.groupMetadata(from); } catch (_) {}
+
+                        if (groupMeta) {
+                            const botNum = getCleanNumber(currentConn.user?.id);
+                            const botPart = groupMeta.participants?.find(p => getCleanNumber(p.id) === botNum);
+                            const isBotAdmin = botPart && (botPart.admin === 'admin' || botPart.admin === 'superadmin');
+
+                            if (!isBotAdmin) {
+                                await currentConn.sendMessage(from, { 
+                                    text: `⚠️ *عفواً يا فنان! البوت (${currentConn.botName || 'شادو'}) ليس مشرفاً (Admin) في هذا الجروب!* 👑\n\n` +
+                                          `📌 حتى يتمكن البوت من قبول طلبات الانضمام، يجب ترقية البوت لمشرف أولاً.` 
+                                }, { quoted: mek });
+                                return true;
+                            }
+                        }
+
                         let requests = await currentConn.groupRequestParticipantsList(from);
                         if (!requests || requests.length === 0) {
                             await currentConn.sendMessage(from, { text: '📋 لا توجد أي طلبات انضمام معلقة في الجروب حالياً.' }, { quoted: mek });
@@ -1460,7 +1561,16 @@ const datelsHandler = {
 
                         await currentConn.sendMessage(from, { text: `✅ تم قبول [ ${acceptedCount} ] عضو بنجاح في الجروب! 🎉` }, { quoted: mek });
                     } catch (e) {
-                        await currentConn.sendMessage(from, { text: `❌ حدث خطأ في معالجة طلبات الانضمام: ${e.message || 'تأكد من صلاحيات البوت'}` }, { quoted: mek });
+                        const errMsg = e?.message || '';
+                        if (errMsg.includes('forbidden') || e?.output?.statusCode === 403) {
+                            await currentConn.sendMessage(from, { 
+                                text: `❌ *تعذر قبول الطلبات (Forbidden 403):*\n\n` +
+                                      `1️⃣ تأكد من ترقية البوت لمشرف (Admin) في الجروب.\n` +
+                                      `2️⃣ تأكد من تفعيل خيار *(الموافقة على الأعضاء الجدد / Approve new participants)* في إعدادات الجروب.` 
+                            }, { quoted: mek });
+                        } else {
+                            await currentConn.sendMessage(from, { text: `❌ حدث خطأ في معالجة طلبات الانضمام: ${errMsg || 'تأكد من صلاحيات البوت'}` }, { quoted: mek });
+                        }
                     }
                     return true;
                 }

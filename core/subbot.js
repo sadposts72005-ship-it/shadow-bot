@@ -789,7 +789,12 @@ export async function deleteSubBotRemote(phone, mainConn = null, notifyOwner = f
         }
     } catch (_) {}
 
-    return { success: true, message: `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته بنجاح وإشعار المالك بالتحديثات!` };
+    return { 
+        success: true, 
+        message: notifyOwner 
+            ? `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته بنجاح وإرسال إشعار التحديث لصاحبه! ✅`
+            : `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته بنجاح في صمت تام دون إرسال أي إشعار لصاحبه! 🤫`
+    };
 }
 
 /**
