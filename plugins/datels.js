@@ -592,7 +592,7 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
             sentGids.add(gid);
             await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
         } catch (_) {}
-        await delay(1500); // 1.5 ثانية تأخير آمن وسريع للتوصيل
+        await delay(5000); // ⏱️ تأخير 5 ثوانٍ كاملة بين كل جروب وجروب لحماية الرقم من الحظر ومنع اسبام الرسائل
     }
 }
 
