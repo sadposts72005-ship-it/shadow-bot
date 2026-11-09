@@ -533,34 +533,52 @@ function getWelcomeMessage(userJid) {
            `💡 لمعرفة كل الأوامر بالتفصيل اكتب في أي وقت كلمة: *اوامر* أو *أوامر* في الشات!`;
 }
 
-let cachedGroupIds = [];
-let lastGroupFetchTime = 0;
-
-async function getParticipatingGroupIds(conn) {
+async function getParticipatingGroupIds(conn, localDB) {
     if (!conn) return [];
-    const now = Date.now();
-    if (cachedGroupIds.length > 0 && (now - lastGroupFetchTime) < 5 * 60 * 1000) {
-        return cachedGroupIds;
+    const groupsSet = new Set();
+
+    // 1. استخدام سجل الجروبات المعروفة المحفوظة مسبقاً في قاعدة البيانات
+    if (localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
+        for (const gid of localDB.knownGroups) {
+            if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
+                groupsSet.add(gid);
+            }
+        }
     }
+
+    // 2. فحص سجل الجروبات الخاص بالبوت الفرعي إن وجد
+    if (conn.subBotConfig?.knownGroups && Array.isArray(conn.subBotConfig.knownGroups)) {
+        for (const gid of conn.subBotConfig.knownGroups) {
+            if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
+                groupsSet.add(gid);
+            }
+        }
+    }
+
+    // 3. جلب الجروبات الإضافية المتصلة بالسوكيت مباشرة بمهلة أمان 6 ثوانٍ
     try {
         const groupsPromise = conn.groupFetchAllParticipating();
-        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 8000));
-        const groups = await Promise.race([groupsPromise, timeoutPromise]);
-        if (groups && typeof groups === 'object') {
-            cachedGroupIds = Object.keys(groups).filter(id => id && id.endsWith('@g.us'));
-            lastGroupFetchTime = now;
-            return cachedGroupIds;
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 6000));
+        const fetched = await Promise.race([groupsPromise, timeoutPromise]);
+        if (fetched && typeof fetched === 'object') {
+            let dbUpdated = false;
+            for (const gid of Object.keys(fetched)) {
+                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
+                    groupsSet.add(gid);
+                    if (localDB) {
+                        if (!localDB.knownGroups) localDB.knownGroups = [];
+                        if (!localDB.knownGroups.includes(gid)) {
+                            localDB.knownGroups.push(gid);
+                            dbUpdated = true;
+                        }
+                    }
+                }
+            }
+            if (dbUpdated && localDB) saveLocalDB(localDB);
         }
     } catch (_) {}
 
-    if (conn.chats) {
-        const chatGroups = Object.keys(conn.chats).filter(id => id && id.endsWith('@g.us'));
-        if (chatGroups.length > 0) {
-            cachedGroupIds = chatGroups;
-            return chatGroups;
-        }
-    }
-    return cachedGroupIds;
+    return Array.from(groupsSet);
 }
 
 async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, sentGids = new Set()) {
@@ -568,35 +586,13 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
         if (!gid || !gid.endsWith('@g.us') || localDB.bannedGroups?.includes(gid)) continue;
         if (sentGids.has(gid)) continue;
 
-        if (!conn || !conn.user?.id || (conn.ws && conn.ws.readyState !== 1)) {
-            break;
-        }
+        if (!conn || !conn.user?.id) break;
 
         try {
             sentGids.add(gid);
-            let participants = [];
-            if (conn.chats?.[gid]?.metadata?.participants) {
-                participants = conn.chats[gid].metadata.participants;
-            } else {
-                try {
-                    const metaPromise = conn.groupMetadata(gid);
-                    const metaTimeout = new Promise(resolve => setTimeout(() => resolve(null), 2500));
-                    const meta = await Promise.race([metaPromise, metaTimeout]);
-                    if (meta?.participants) participants = meta.participants;
-                } catch (_) {}
-            }
-
-            if (participants.length === 0) {
-                await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
-            } else {
-                const mentions = participants.map(p => p.id).filter(Boolean);
-                let finalTaggedMessage = `${messageToSend}\n\n🔔 تذكير للروم كله:\n`;
-                finalTaggedMessage += participants.map(mem => `@${mem.id.split('@')[0]}`).join(' ');
-
-                await conn.sendMessage(gid, { text: finalTaggedMessage, mentions: mentions }).catch(() => {});
-            }
+            await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
         } catch (_) {}
-        await delay(2000);
+        await delay(1500); // 1.5 ثانية تأخير آمن وسريع للتوصيل
     }
 }
 
@@ -605,7 +601,7 @@ async function broadcastReminders(messageToSend, localDB) {
     const mainConn = activeRemindersConn;
 
     if (mainConn && mainConn.user?.id) {
-        const mainGroups = await getParticipatingGroupIds(mainConn);
+        const mainGroups = await getParticipatingGroupIds(mainConn, localDB);
         if (mainGroups.length > 0) {
             await sendRemindersWithDelay(mainConn, mainGroups, messageToSend, localDB, sentGids);
         }
@@ -616,8 +612,8 @@ async function broadcastReminders(messageToSend, localDB) {
         if (activeSubBots && activeSubBots.size > 0) {
             for (const [subPhone, subData] of activeSubBots.entries()) {
                 const subSock = subData?.sock;
-                if (!subSock || !subSock.user?.id || (subSock.ws && subSock.ws.readyState !== 1)) continue;
-                const subGroups = await getParticipatingGroupIds(subSock);
+                if (!subSock || !subSock.user?.id) continue;
+                const subGroups = await getParticipatingGroupIds(subSock, localDB);
                 const uniqueSubGroups = subGroups.filter(g => !sentGids.has(g));
                 if (uniqueSubGroups.length > 0) {
                     await sendRemindersWithDelay(subSock, uniqueSubGroups, messageToSend, localDB, sentGids);
@@ -646,7 +642,6 @@ export async function startAutoReminders(currentConn) {
         try {
             const conn = activeRemindersConn;
             if (!conn || !conn.user?.id) return;
-            if (conn.ws && conn.ws.readyState !== 1) return;
 
             if (isRemindingInProgress) return;
 
@@ -667,27 +662,23 @@ export async function startAutoReminders(currentConn) {
                 const prayerLogKey = `prayer_${todayDateStr}_${prayerName}`;
 
                 if (!localDB.sentRemindersLog.list.includes(prayerLogKey)) {
-                    localDB.sentRemindersLog.list.push(prayerLogKey);
-                    saveLocalDB(localDB);
-
                     isRemindingInProgress = true;
                     try {
                         let messageToSend = `🕌 *حان الآن موعد أذان ${prayerName} حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️`;
                         await broadcastReminders(messageToSend, localDB);
+                        localDB.sentRemindersLog.list.push(prayerLogKey);
+                        saveLocalDB(localDB);
                     } finally {
                         isRemindingInProgress = false;
                     }
                 }
             }
 
-            // 2. تذكير الصلاة على النبي ﷺ كل ساعتين بانتظام ودون انقطاع
-            // يرسل في الساعات الزوجية خلال أول 3 دقائق من الساعة (minNum <= 3) لضمان عدم تفويت الإرسال
-            if (hourNum % 2 === 0 && minNum <= 3) {
+            // 2. تذكير الصلاة على النبي ﷺ كل ساعة بانتظام ودون انقطاع
+            // يرسل كل ساعة خلال أول 3 دقائق من الساعة (minNum <= 3) لضمان عدم تفويت الإرسال
+            if (minNum <= 3) {
                 const salawatLogKey = `salawat_${todayDateStr}_${hours}`;
                 if (!localDB.sentRemindersLog.list.includes(salawatLogKey)) {
-                    localDB.sentRemindersLog.list.push(salawatLogKey);
-                    saveLocalDB(localDB);
-
                     isRemindingInProgress = true;
                     try {
                         const salawatMessages = [
@@ -698,6 +689,8 @@ export async function startAutoReminders(currentConn) {
                         ];
                         const randomSalawat = salawatMessages[Math.floor(Math.random() * salawatMessages.length)];
                         await broadcastReminders(randomSalawat, localDB);
+                        localDB.sentRemindersLog.list.push(salawatLogKey);
+                        saveLocalDB(localDB);
                     } finally {
                         isRemindingInProgress = false;
                     }
@@ -807,11 +800,32 @@ const datelsHandler = {
                 mek.key.fromMe
             );
 
+            // 👑 فحص صاحب البوت (سواء شادو الأصلي للبوت الرئيسي أو الحج صاحب البوت الفرعي)
+            const isSubBot = Boolean(currentConn.isSubBot || currentConn.subBotConfig);
+            const subCfg = currentConn.subBotConfig || {};
+            const subAdminPhone = cleanPhoneNumber(subCfg.adminPhone) || subCfg.adminPhone || '';
+            const subAdminLid = subCfg.adminLid ? String(subCfg.adminLid).replace(/[^0-9]/g, '') : '';
+            const subAdminNumbers = Array.isArray(subCfg.adminNumbers) ? subCfg.adminNumbers : [];
+            const mappedSender = localDB.lidMap?.[cleanSenderNum] || '';
+            const senderCleanPhone = cleanPhoneNumber(cleanSenderNum);
+
+            const isSubBotOwner = isSubBot && (
+                (subAdminPhone && (cleanSenderNum === subAdminPhone || senderCleanPhone === subAdminPhone)) ||
+                (subAdminLid && (cleanSenderNum === subAdminLid || sender.includes(subAdminLid))) ||
+                (mappedSender && (mappedSender === subAdminPhone || mappedSender === subAdminLid || cleanPhoneNumber(mappedSender) === subAdminPhone)) ||
+                subAdminNumbers.includes(cleanSenderNum) ||
+                subAdminNumbers.includes(senderCleanPhone) ||
+                subAdminNumbers.includes(sender) ||
+                (subCfg.adminJid && (sender === subCfg.adminJid || cleanSenderNum === getCleanNumber(subCfg.adminJid))) ||
+                mek.isSubBotAdmin ||
+                mek.isSubBotMainOwner
+            );
+
             const isMainHajj = isAbsoluteOwner || isUserInList(sender, localDB.mainHajjUsers);
             const isHajj = isMainHajj || isUserInList(sender, localDB.hajjUsers) || mek.isSuperAdmin;
 
-            // تحديد المالك (يشمل مالك البوت الفرعي أو الحج شادو الأصلي)
-            const isBotOwner = isAbsoluteOwner || mek.isBotOwner || mek.isSubBotAdmin || isMainHajj;
+            // تحديد المالك (الحج شادو للبوت الرئيسي، أو صاحب البوت الفرعي للبوت الفرعي)
+            const isBotOwner = isAbsoluteOwner || isSubBotOwner || mek.isBotOwner || isMainHajj;
 
             // استخراج النص من الرسالة
             const body = extractMessageBody(mek);
@@ -876,20 +890,44 @@ const datelsHandler = {
                 return true;
             }
 
-            // 🧪 أمر تجربة الأذان للحجاج والمالك
-            if (['تجربة الاذان', 'تجربه الاذان', 'تست الاذان', 'تست أذان'].includes(normalizedBody)) {
-                if (!isHajj) {
+            // 🧪 أوامر تجربة الأذان والصلاة على النبي فوراً لجميع الجروبات
+            if (['ارسل الاذان', 'أرسل الأذان', 'تست الاذان', 'تجربة الاذان', 'تجربه الاذان', 'تذكير الصلاة الان', 'تذكير الصلاه الان'].includes(normalizedBody)) {
+                if (!isHajj && !isBotOwner) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحجاج فقط لاختبار نظام الأذان!' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحجاج فقط لاختبار نظام الأذان والتذكيرات!' }, { quoted: mek });
                     return true;
                 }
                 await handleCommandTiming('🕌');
-                const testAdhan = `🕌 *[تجربة] حان الآن موعد أذان العصر حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️`;
-                await currentConn.sendMessage(from, { text: testAdhan }, { quoted: mek });
+                const testAdhan = `🕌 *حان الآن موعد أذان العصر حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️`;
+                await broadcastReminders(testAdhan, localDB);
+                await currentConn.sendMessage(from, { text: '✅ تم إرسال تذكير الأذان الآن لجميع الرومات بنجاح وبسرعة فائقة! 🚀' }, { quoted: mek });
+                return true;
+            }
+
+            if (['ارسل الصلاة على النبي', 'ارسل الصلاه علي النبي', 'تذكير الصلاة على النبي الان'].includes(normalizedBody)) {
+                if (!isHajj && !isBotOwner) {
+                    await handleCommandTiming('❌');
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحجاج فقط!' }, { quoted: mek });
+                    return true;
+                }
+                await handleCommandTiming('🌸');
+                const testSalawat = `✨ *اللهم صلِّ وسلِّم وبارك على نبينا وحبيبنا محمد وعلى آله وصحبه أجمعين* ﷺ ❤️\n\nأكثروا من الصلاة والسلام على خير الأنام تُفرَج همومكم وتُغفَر ذنوبكم 🤲🤍`;
+                await broadcastReminders(testSalawat, localDB);
+                await currentConn.sendMessage(from, { text: '✅ تم إرسال تذكير الصلاة على النبي الآن لجميع الرومات بنجاح! 🌸' }, { quoted: mek });
                 return true;
             }
 
             const waGroupRegex = /(?:https?:\/\/)?chat\.whatsapp\.com\/([a-zA-Z0-9]{20,26})/i;
+
+            // تحديد جهة إرسال طلب الموافقة على الدخول (مالك البوت الفرعي للبوت الفرعي، أو الحج شادو للبوت الرئيسي)
+            let approvalTargetJid = ownerFullJid;
+            if (isSubBot && subAdminPhone) {
+                approvalTargetJid = `${subAdminPhone}@s.whatsapp.net`;
+            } else if (isSubBot && subCfg.adminJid) {
+                approvalTargetJid = subCfg.adminJid;
+            } else if (isSubBot && subAdminLid) {
+                approvalTargetJid = `${subAdminLid}@lid`;
+            }
 
             // =========================================================================
             // 📥 1️⃣ [أمر ادخل جروب / انضمام للحج الأساسي حصرياً]
@@ -951,10 +989,11 @@ const datelsHandler = {
                         }
                     }
                 } else {
-                    await currentConn.sendMessage(from, { text: `⏳ *لحظة يا غالي..* \nأستأذن *الحج المالك* 👑 الأول أدخل ولا لأ!` }, { quoted: mek });
-                    pendingGroupRequests[cleanSenderNum] = { sender: sender, link: fullLink };
+                    const ownerNameDisplay = (isSubBot && subAdminPhone) ? `الحج المالك (+${subAdminPhone})` : 'الحج شادو';
+                    await currentConn.sendMessage(from, { text: `⏳ *لحظة يا غالي..* \nأستأذن *${ownerNameDisplay}* 👑 الأول أدخل ولا لأ!` }, { quoted: mek });
+                    pendingGroupRequests[cleanSenderNum] = { sender: sender, link: fullLink, subBotPhone: currentConn.subBotPhone };
 
-                    let textToOwner = `📩 *طلب انضمام لجروب جديد وصل في الخاص!* 🕵️‍♂️\n\n` +
+                    let textToOwner = `📩 *طلب انضمام لجروب جديد وصل لبوتك (${botName})!* 🤖\n\n` +
                                      `👤 *من العضو:* @${cleanSenderNum}\n` +
                                      `🔗 *رابط الجروب:* ${fullLink}\n\n` +
                                      `👇 *للموافقة أرسل:* \n` +
@@ -962,9 +1001,26 @@ const datelsHandler = {
                                      `👇 *للرفض أرسل:* \n` +
                                      `رفض ${cleanSenderNum}`;
 
-                    await currentConn.sendMessage(ownerFullJid, { text: textToOwner, mentions: [sender] }).catch(() => {});
+                    await currentConn.sendMessage(approvalTargetJid, { text: textToOwner, mentions: [sender] }).catch(() => {});
                 }
                 return true;
+            }
+
+            // أمر رفض طلب الانضمام لمالك البوت
+            if (normalizedBody.startsWith('رفض ') || normalizedBody.startsWith('ارفض ')) {
+                if (isBotOwner) {
+                    const targetUser = body.replace(/^(رفض|ارفض)\s*/i, '').replace(/[^0-9]/g, '');
+                    if (targetUser && pendingGroupRequests[targetUser]) {
+                        const req = pendingGroupRequests[targetUser];
+                        delete pendingGroupRequests[targetUser];
+                        await handleCommandTiming('🚫');
+                        await currentConn.sendMessage(from, { text: `🚫 تم رفض طلب الانضمام للرقم (+${targetUser}) بنجاح.` }, { quoted: mek });
+                        if (req.sender) {
+                            await currentConn.sendMessage(req.sender, { text: `❌ اعتذر الحج المالك عن انضمام البوت لهذا الجروب حالياً يا غالي.` }).catch(() => {});
+                        }
+                        return true;
+                    }
+                }
             }
 
             // فحص حظر المستخدم

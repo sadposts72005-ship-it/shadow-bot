@@ -467,7 +467,21 @@ export async function handleAllMessages(mek, currentConn) {
             if (subBotConfig.callName) currentConn.callName = subBotConfig.callName;
         }
 
-        // 🔍 تحديث خريطة الـ LID من أعضاء الجروب تلقائياً لتجاوز قيود تشفير واتساب للـ LID
+        // 🔍 تحديث خريطة الـ LID وتسجيل الجروبات النشطة تلقائياً
+        if (isRealGroup) {
+            if (!localDB.knownGroups) localDB.knownGroups = [];
+            if (!localDB.knownGroups.includes(from)) {
+                localDB.knownGroups.push(from);
+                saveLocalDB(localDB);
+            }
+            if (subBotConfig) {
+                if (!subBotConfig.knownGroups) subBotConfig.knownGroups = [];
+                if (!subBotConfig.knownGroups.includes(from)) {
+                    subBotConfig.knownGroups.push(from);
+                }
+            }
+        }
+
         if (isRealGroup && (sender.endsWith('@lid') || cleanSender.length > 13)) {
             try {
                 const groupMeta = await currentConn.groupMetadata(from).catch(() => null);
@@ -1084,7 +1098,7 @@ export async function handleAllMessages(mek, currentConn) {
         const cleanFrom = getCleanNumber(from);
         const installKey = installState.has(cleanSender) ? cleanSender : (installState.has(cleanFrom) ? cleanFrom : null);
 
-        if (installKey) {
+        if (installKey && !currentConn.isSubBot) {
             const currentInstall = installState.get(installKey);
 
             // التحقق من انتهاء مهلة الجلسة (10 دقائق)
@@ -1106,6 +1120,15 @@ export async function handleAllMessages(mek, currentConn) {
 
                 // الخطوة 1: اختيار اسم البوت الرسمي
                 if (currentInstall.step === 1) {
+                    if (['تنصيب', '.تنصيب', 'بوت فرعي', 'جديد بوت', 'jadibot'].includes(normalizedBody)) {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { 
+                                text: '⚠️ *كلمة (تنصيب) ليست اسماً للبوت!*\nبرجاء كتابة الاسم الرسمي الذي تريده لبوتك (مثال: إمبراطور الظلام / الصقر / الفهد / شادو 2):' 
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
+
                     // إزالة علامات التنسيق من الأطراف فقط مع الحفاظ على كل الزخارف والتشكيل والرموز والإيموجي
                     const chosenName = body.trim().replace(/^[*_~`]+|[*_~`]+$/g, '').trim().slice(0, 60);
                     if (!chosenName || chosenName.length < 1) {
@@ -1395,7 +1418,7 @@ export async function handleAllMessages(mek, currentConn) {
                     `📱 *رقم البوت الأساسي:*\n` +
                     `+201229409956\n` +
                     `🔗 *رابط الشات المباشر مع البوت الأساسي:*\n` +
-                    `https://wa.me/201229409956\n\n` +
+                    `https://wa.me/201229409956?text=تنصيب\n\n` +
                     `✨ *طريقة التنصيب:*\n` +
                     `1️⃣ افتح الرابط واكتب للبوت الأساسي كلمة *(تنصيب)*.\n` +
                     `2️⃣ اتبع خطوات التنصيب (اسم البوت، ذكر أو أنثى، شخصية محترمة أو قليلة الأدب، ورقمك).\n` +
