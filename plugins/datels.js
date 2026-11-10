@@ -590,7 +590,23 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
 
         try {
             sentGids.add(gid);
-            await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
+
+            let participants = [];
+            try {
+                const metaPromise = conn.groupMetadata(gid);
+                const metaTimeout = new Promise(resolve => setTimeout(() => resolve(null), 3000));
+                const meta = await Promise.race([metaPromise, metaTimeout]);
+                if (meta?.participants) participants = meta.participants;
+            } catch (_) {}
+
+            if (participants && participants.length > 0) {
+                const mentions = participants.map(p => p.id).filter(Boolean);
+                const tagList = participants.map(mem => `@${mem.id.split('@')[0].split(':')[0]}`).join(' ');
+                const finalTaggedMessage = `${messageToSend}\n\n🔔 تذكير لجميع الأعضاء:\n${tagList}`;
+                await conn.sendMessage(gid, { text: finalTaggedMessage, mentions: mentions }).catch(() => {});
+            } else {
+                await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
+            }
         } catch (_) {}
         await delay(5000); // ⏱️ تأخير 5 ثوانٍ كاملة بين كل جروب وجروب لحماية الرقم من الحظر ومنع اسبام الرسائل
     }

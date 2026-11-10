@@ -2564,32 +2564,43 @@ export async function handleAllMessages(mek, currentConn) {
             }
             
             const partsList = parts;
-            userProfileData.name = partsList[0] || 'عضو جديد';
-            userProfileData.age = partsList[1] || 'غير مسجل';
-            userProfileData.status = partsList[2] || 'غير مسجل';
-            userProfileData.bio = partsList[3] || 'لا يوجد بايو حالياً';
+            let regName = partsList[0] ? partsList[0].replace(/^(الاسم|الاسم\s*:|اسم\s*:)\s*/i, '').trim() : 'عضو جديد';
+            let regAge = partsList[1] ? partsList[1].replace(/^(السن|العمر|السن\s*:|العمر\s*:)\s*/i, '').trim() : 'غير مسجل';
+            let regStatus = partsList[2] ? partsList[2].replace(/^(الحالة|الحاله|الحالة\s*الاجتماعية|الحاله\s*الاجتماعيه)\s*:\s*/i, '').trim() : 'غير مسجل';
+            let regBio = partsList[3] ? partsList[3].replace(/^(البايو|نبذة|نبذه|الوصف)\s*:\s*/i, '').trim() : 'لا يوجد بايو حالياً';
+
+            userProfileData.name = regName || 'عضو جديد';
+            userProfileData.age = regAge || 'غير مسجل';
+            userProfileData.status = regStatus || 'غير مسجل';
+            userProfileData.bio = regBio || 'لا يوجد بايو حالياً';
             userProfileData.joinedAt = userProfileData.joinedAt || getArabicDateTime();
             userProfileData.hasRegistered = true;
+
+            if (isAbsoluteOwner || isMainHajj) {
+                userProfileData.isInfinite = true;
+                userProfileData.points = 999999999999;
+                userProfileData.level = 999;
+            }
 
             // مزامنة فورية على كل المعرفات
             localDB.users[standardSenderJid] = { ...userProfileData };
             localDB.users[`${cleanSender}@lid`] = { ...userProfileData };
+            localDB.users[sender] = { ...userProfileData };
             let mappedSender = localDB.lidMap?.[cleanSender];
             if (mappedSender) {
                 localDB.users[`${mappedSender}@s.whatsapp.net`] = { ...userProfileData };
                 localDB.users[`${mappedSender}@lid`] = { ...userProfileData };
             }
 
-            // تثبيت بيانات الحج الأصلي الملكية
+            for (const key of Object.keys(localDB.users)) {
+                let cleanKey = getCleanNumber(key);
+                if (cleanKey === cleanSender || (mappedSender && cleanKey === mappedSender)) {
+                    localDB.users[key] = { ...userProfileData };
+                }
+            }
+
+            // تثبيت رتبة ونقاط الحج الأصلي الملكية دون التعدي على الاسم أو البيانات المسجلة
             if (isAbsoluteOwner) {
-                userProfileData.name = 'شادو';
-                userProfileData.age = '21';
-                userProfileData.status = 'مرتبط';
-                userProfileData.bio = 'Me and Zuzu always ❤️';
-                userProfileData.isInfinite = true;
-                userProfileData.points = 999999999999;
-                userProfileData.level = 999;
-                userProfileData.joinedAt = '١٣‏/٠٧‏/٢٠٢٦، ٠٦:٤٦:٤٨ م';
                 localDB.users['194961618301016@s.whatsapp.net'] = { ...userProfileData };
                 localDB.users['201129249396@s.whatsapp.net'] = { ...userProfileData };
                 localDB.users['194961618301016@lid'] = { ...userProfileData };
@@ -2655,13 +2666,15 @@ export async function handleAllMessages(mek, currentConn) {
             }
 
             if (isTargetOriginalHajj) {
-                targetData.name = 'شادو';
-                targetData.age = '21';
-                targetData.status = 'مرتبط';
-                targetData.bio = 'Me and Zuzu always ❤️';
+                if (!targetData.hasRegistered) {
+                    targetData.name = targetData.name || 'شادو';
+                    targetData.age = targetData.age || '21';
+                    targetData.status = targetData.status || 'مرتبط';
+                    targetData.bio = targetData.bio || 'Me and Zuzu always ❤️';
+                    targetData.joinedAt = targetData.joinedAt || '١٣‏/٠٧‏/٢٠٢٦، ٠٦:٤٦:٤٨ م';
+                }
                 targetData.points = 999999999999;
                 targetData.level = 999;
-                targetData.joinedAt = '١٣‏/٠٧‏/٢٠٢٦، ٠٦:٤٦:٤٨ م';
                 targetData.isInfinite = true;
             }
 
