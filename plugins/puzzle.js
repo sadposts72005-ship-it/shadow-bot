@@ -107,7 +107,7 @@ const puzzleHandler = {
 
         const msgClean = text ? text.trim().toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي') : "";
         
-        const isStart = command === 'بازل';
+        const isStart = command === 'بازل' || /^(بازل|puzzle|لعبة بازل|لعبه بازل|لعبة البازل|لعبه البازل|ابدأ بازل|ابدا بازل|جيم بازل)$/i.test(command || msgClean);
         const isCancel = command === 'الغاء' || msgClean.includes('الغي') || msgClean.includes('الغاء');
         const isHint = command === 'تلميح' || msgClean.includes('تلميح');
         const isMove = command === 'move' || ['فوق', 'تحت', 'يمين', 'شمال'].includes(msgClean);
@@ -129,7 +129,7 @@ const puzzleHandler = {
                 hintsUsed: 0, mode: chosenMode, shapes: randomShapes
             });
 
-            const activeBotName = conn.botName || 'الشادو';
+            const activeBotName = client?.botName || 'الشادو';
             let txt = `🧩 *جيم بازل ${activeBotName} الأسطوري بدأ!* 📊\n`;
             txt += `*━━━━━━━━━━━━━━━━━━━━━*\n\n`;
             txt += `🎯 المود الحالي: *[ مود الـ${chosenMode === 'اشكال' ? 'أشكال عشوائية 🎲' : 'أرقام سريعة 🔢'} ]*\n\n`;
@@ -162,33 +162,27 @@ const puzzleHandler = {
 
         // 2️⃣ أمر إلغاء بازل
         if (isCancel) {
-            const isHajj = m.isSuperAdmin; 
+            const isHajj = m.isSuperAdmin || m.isBotOwner || m.isAbsoluteOwner; 
             if (game.creator !== sender && !isHajj) {
                 return client.sendMessage(from, { text: "❌ معلش يا فنان.. اللي شغل اللعبة بس هو اللي يقدر يلغيها! 🤫" }, { quoted: m });
             }
             puzzleGames.delete(from);
 
-            await gameDelay(2000); 
-            await client.sendMessage(from, { react: { text: "🛑", key: m.key } });
-            await gameDelay(3000); 
+            await client.sendMessage(from, { react: { text: "🛑", key: m.key } }).catch(() => {});
             return await client.sendMessage(from, { text: "🛑 تم إلغاء جيم البازل بنجاح بناءً على طلبكم. نراكم في تحدي آخر! 🧩" }, { quoted: m });
         }
 
         // 3️⃣ أمر تلميح بازل
         if (isHint) {
             if (game.hintsUsed >= 3) {
-                await gameDelay(2000);
-                await client.sendMessage(from, { react: { text: "❌", key: m.key } });
-                await gameDelay(3000);
+                await client.sendMessage(from, { react: { text: "❌", key: m.key } }).catch(() => {});
                 return await client.sendMessage(from, { text: "⚠️ عذراً يا فنان! لقد استهلكت جميع التلميحات المتاحة لك في هذا الجيم (3/3). 🤔" }, { quoted: m });
             }
 
             game.hintsUsed++;
             const hintText = generateHint(game.board, game.emptyPos, game.mode, game.shapes) + `\n\n📊 تلميحاتك المستخدمة: (${game.hintsUsed}/3)`;
 
-            await gameDelay(2000);
-            await client.sendMessage(from, { react: { text: "🔍", key: m.key } });
-            await gameDelay(3000);
+            await client.sendMessage(from, { react: { text: "🔍", key: m.key } }).catch(() => {});
             return await client.sendMessage(from, { text: hintText }, { quoted: m });
         }
 
@@ -225,12 +219,7 @@ const puzzleHandler = {
                 const currentStatus = game.board.flat().join("");
                 const winningStatus = "12345678⬛";
 
-                // انتظر ثانيتين -> رياكت 🎮
-                await gameDelay(2000);
-                await client.sendMessage(from, { react: { text: "🎮", key: m.key } });
-                
-                // انتظر 3 ثواني -> ابعت التحديث واللوحة الهدف
-                await gameDelay(3000);
+                await client.sendMessage(from, { react: { text: "🎮", key: m.key } }).catch(() => {});
 
                 if (currentStatus === winningStatus) {
                     puzzleGames.delete(from);

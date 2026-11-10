@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
-import { loadSubBotsRegistry, updateSubBotHajj, activeSubBots } from '../core/subbot.js';
+import { loadSubBotsRegistry, updateSubBotHajj, activeSubBots, cleanPhoneNumber } from '../core/subbot.js';
 import handleStickerCommand from './sticker.js';
 import handleImageCommand from './image.js';
 
@@ -85,6 +85,29 @@ function convertArabicNumbers(text) {
     if (!text) return '';
     const arabicNums = ['٠', '١', '٢', '٣', '٤', '٥', '٦', '٧', '٨', '٩'];
     return text.replace(/[٠-٩]/g, (w) => arabicNums.indexOf(w));
+}
+
+// 🗄️ ذاكرة التخزين المؤقت لبيانات الجروبات لسرعة الاستجابة ومنع الـ Rate-limit
+const groupMetaCache = new Map();
+const GROUP_META_CACHE_TTL = 30000;
+
+async function getCachedGroupMetadata(conn, gid) {
+    if (!conn || !gid || !gid.endsWith('@g.us')) return null;
+    const now = Date.now();
+    const cached = groupMetaCache.get(gid);
+    if (cached && (now - cached.timestamp < GROUP_META_CACHE_TTL) && cached.data) {
+        return cached.data;
+    }
+    try {
+        const metaPromise = conn.groupMetadata(gid);
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 4000));
+        const data = await Promise.race([metaPromise, timeoutPromise]);
+        if (data && data.participants) {
+            groupMetaCache.set(gid, { data, timestamp: now });
+            return data;
+        }
+    } catch (_) {}
+    return cached?.data || null;
 }
 
 function cleanUserJid(jid) {
@@ -837,11 +860,12 @@ const datelsHandler = {
                 mek.isSubBotMainOwner
             );
 
+            const isSubBotAdmin = isSubBotOwner || Boolean(mek.isSubBotAdmin);
             const isMainHajj = isAbsoluteOwner || isUserInList(sender, localDB.mainHajjUsers);
             const isHajj = isMainHajj || isUserInList(sender, localDB.hajjUsers) || mek.isSuperAdmin;
 
             // تحديد المالك (الحج شادو للبوت الرئيسي، أو صاحب البوت الفرعي للبوت الفرعي)
-            const isBotOwner = isAbsoluteOwner || isSubBotOwner || mek.isBotOwner || isMainHajj;
+            const isBotOwner = isAbsoluteOwner || isSubBotOwner || isSubBotAdmin || Boolean(mek.isBotOwner) || isMainHajj;
 
             // استخراج النص من الرسالة
             const body = extractMessageBody(mek);
@@ -1043,7 +1067,7 @@ const datelsHandler = {
             if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return true;
 
             // جلب معلومات الجروب والمشرفين
-            let groupMetadata = isGroup ? await currentConn.groupMetadata(from).catch(() => null) : null;
+            let groupMetadata = isGroup ? await getCachedGroupMetadata(currentConn, from) : null;
             let participants = groupMetadata?.participants || [];
 
             // مزامنة وتعلم معرّفات الـ LID والأرقام تلقائياً
@@ -1069,20 +1093,34 @@ const datelsHandler = {
                 if (changed) saveLocalDB(localDB);
             }
 
-            let groupAdmins = participants
-                .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
-                .map(p => getCleanNumber(p.id));
+            const groupAdminsSet = new Set();
+            for (const p of participants) {
+                if (p.admin === 'admin' || p.admin === 'superadmin') {
+                    const c1 = getCleanNumber(p.id);
+                    const c2 = getCleanNumber(p.lid);
+                    const c3 = getCleanNumber(p.phoneNumber || p.phone_number);
+                    if (c1) groupAdminsSet.add(c1);
+                    if (c2) groupAdminsSet.add(c2);
+                    if (c3) groupAdminsSet.add(c3);
+                    if (c1 && localDB.lidMap?.[c1]) groupAdminsSet.add(localDB.lidMap[c1]);
+                    if (c2 && localDB.lidMap?.[c2]) groupAdminsSet.add(localDB.lidMap[c2]);
+                    if (c3 && localDB.lidMap?.[c3]) groupAdminsSet.add(localDB.lidMap[c3]);
+                }
+            }
+            const groupAdmins = Array.from(groupAdminsSet);
 
-            let isSenderAdmin = groupAdmins.includes(cleanSenderNum) || (localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum]));
+            let isSenderAdmin = groupAdmins.includes(cleanSenderNum) || 
+                                (localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum])) ||
+                                (senderCleanPhone && groupAdmins.includes(senderCleanPhone));
             let creatorMember = participants.find(p => p.admin === 'superadmin');
             let groupCreatorRaw = creatorMember ? getCleanNumber(creatorMember.id) : '';
 
-            // أوامر الإشراف للمشرفين والحج الأساسي فقط
-            const isActualRoomAdminOrOwner = isAbsoluteOwner || isMainHajj || (cleanSenderNum === groupCreatorRaw) || isSenderAdmin;
+            // أوامر الإشراف للمشرفين، مالك البوت، والحج الأساسي
+            const isActualRoomAdminOrOwner = isAbsoluteOwner || isMainHajj || isBotOwner || (cleanSenderNum === groupCreatorRaw) || isSenderAdmin;
 
             // فحص أدمن التنبيه المعين في هذا الجروب
             const groupWarnGivers = localDB.warnGivers?.[from] || {};
-            const isWarnAdmin = isActualRoomAdminOrOwner || Object.keys(groupWarnGivers).some(k => {
+            const isWarnAdmin = isActualRoomAdminOrOwner || isBotOwner || Object.keys(groupWarnGivers).some(k => {
                 let cleanK = getCleanNumber(k);
                 return cleanK === cleanSenderNum || (localDB.lidMap?.[cleanSenderNum] && cleanK === localDB.lidMap[cleanSenderNum]);
             });
@@ -1419,7 +1457,7 @@ const datelsHandler = {
             // =========================================================================
             if (isGroup) {
                 // قفل الجروب
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'قفل' || normalizedBody === 'قفل الجروب' || normalizedBody === 'قفل الروم')) {
+                if (isActualRoomAdminOrOwner && /^(قفل|اقفل|غلق|قفل الجروب|اقفل الجروب|قفل الروم|اقفل الروم|غلق الجروب|غلق الروم)$/i.test(normalizedBody)) {
                     if (groupMetadata?.announce) {
                         await handleCommandTiming('⚠️');
                         await currentConn.sendMessage(from, { text: '⚠️ المجموعة مقفولة بالفعل للمشرفين فقط يا فنان! 🔒' }, { quoted: mek });
@@ -1428,6 +1466,7 @@ const datelsHandler = {
                     await handleCommandTiming('🔒');
                     try {
                         await currentConn.groupSettingUpdate(from, 'announcement');
+                        groupMetaCache.delete(from);
                         await currentConn.sendMessage(from, { text: '🔒 *تم قفل المجموعة بنجاح!* \nالمشرفين فقط هم من يمكنهم إرسال الرسائل الآن.' }, { quoted: mek });
                     } catch (e) {
                         await currentConn.sendMessage(from, { text: '❌ تأكد أن البوت مشرف بالجروب لتنفيذ الأمر!' }, { quoted: mek });
@@ -1436,7 +1475,7 @@ const datelsHandler = {
                 }
 
                 // فتح الجروب
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'فتح' || normalizedBody === 'فتح الجروب' || normalizedBody === 'فتح الروم')) {
+                if (isActualRoomAdminOrOwner && /^(فتح|افتح|فتح الجروب|افتح الجروب|فتح الروم|افتح الروم)$/i.test(normalizedBody)) {
                     if (groupMetadata && !groupMetadata.announce) {
                         await handleCommandTiming('⚠️');
                         await currentConn.sendMessage(from, { text: '⚠️ المجموعة مفتوحة بالفعل لجميع الأعضاء يا فنان! 🔓' }, { quoted: mek });
@@ -1445,6 +1484,7 @@ const datelsHandler = {
                     await handleCommandTiming('🔓');
                     try {
                         await currentConn.groupSettingUpdate(from, 'not_announcement');
+                        groupMetaCache.delete(from);
                         await currentConn.sendMessage(from, { text: '🔓 *تم فتح المجموعة بنجاح!* \nيمكن لجميع الأعضاء إرسال الرسائل الآن.' }, { quoted: mek });
                     } catch (e) {
                         await currentConn.sendMessage(from, { text: '❌ تأكد أن البوت مشرف بالجروب لتنفيذ الأمر!' }, { quoted: mek });
@@ -1540,7 +1580,7 @@ const datelsHandler = {
                 }
 
                 // رفع أدمن
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('رفع ادمن') || normalizedBody.startsWith('ترقيه') || normalizedBody.startsWith('ترقية'))) {
+                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('رفع ادمن') || normalizedBody.startsWith('رفع مشرف') || normalizedBody.startsWith('ترقيه') || normalizedBody.startsWith('ترقية'))) {
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
@@ -1556,6 +1596,7 @@ const datelsHandler = {
                     await handleCommandTiming('👑');
                     try {
                         await currentConn.groupParticipantsUpdate(from, [target], 'promote');
+                        groupMetaCache.delete(from);
                         await currentConn.sendMessage(from, { text: `👑 *تمت الترقية بنجاح!* \nتم رفع @${targetNum} مشرفاً في المجموعة. 🛡️`, mentions: [target] }, { quoted: mek });
                     } catch (e) {
                         await currentConn.sendMessage(from, { text: '❌ تعذر رفع المشرف. تأكد أن البوت مشرف ولديه الصلاحيات الكافية!' }, { quoted: mek });
@@ -1564,7 +1605,7 @@ const datelsHandler = {
                 }
 
                 // تنزيل أدمن
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('نزل ادمن') || normalizedBody.startsWith('تنزيل'))) {
+                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('نزل ادمن') || normalizedBody.startsWith('نزل مشرف') || normalizedBody.startsWith('تنزيل ادمن') || normalizedBody.startsWith('تنزيل مشرف') || normalizedBody.startsWith('تنزيل') || normalizedBody.startsWith('سحب الاشراف'))) {
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
@@ -1590,6 +1631,7 @@ const datelsHandler = {
                     await handleCommandTiming('📉');
                     try {
                         await currentConn.groupParticipantsUpdate(from, [target], 'demote');
+                        groupMetaCache.delete(from);
                         await currentConn.sendMessage(from, { text: `📉 *تم تنزيل الرتبة بنجاح!* \nتم سحب الإشراف من @${targetNum}.`, mentions: [target] }, { quoted: mek });
                     } catch (e) {
                         await currentConn.sendMessage(from, { text: '❌ تعذر تنزيل المشرف. تأكد من صلاحيات البوت!' }, { quoted: mek });
@@ -1598,7 +1640,7 @@ const datelsHandler = {
                 }
 
                 // طرد عضو
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('طرد') || normalizedBody.startsWith('كيك'))) {
+                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('طرد') || normalizedBody.startsWith('اطرد') || normalizedBody.startsWith('كيك'))) {
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
@@ -1614,6 +1656,7 @@ const datelsHandler = {
                     await handleCommandTiming('👋');
                     try {
                         await currentConn.groupParticipantsUpdate(from, [target], 'remove');
+                        groupMetaCache.delete(from);
                         await currentConn.sendMessage(from, { text: `👋 *تم الطرد بنجاح!* \nمع السلامة يا @${targetNum}، الجروب أنظف من غيرك. 🚪`, mentions: [target] }, { quoted: mek });
                     } catch (e) {
                         await currentConn.sendMessage(from, { text: '❌ تعذر طرد العضو. تأكد أن البوت مشرف بالجروب!' }, { quoted: mek });
@@ -1645,7 +1688,7 @@ const datelsHandler = {
                 }
 
                 // رابط الجروب
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'لينك' || normalizedBody === 'اللينك' || normalizedBody === 'رابط' || normalizedBody === 'الرابط')) {
+                if (isActualRoomAdminOrOwner && /^(لينك|اللينك|رابط|الرابط|لينك الجروب|اللينك الجروب|رابط الجروب|الرابط الجروب|لينك الروم|رابط الروم)$/i.test(normalizedBody)) {
                     await handleCommandTiming('🔗');
                     try {
                         let code = await currentConn.groupInviteCode(from);
@@ -1653,6 +1696,27 @@ const datelsHandler = {
                     } catch (e) {
                         await currentConn.sendMessage(from, { text: '❌ تعذر استخراج الرابط. تأكد أن البوت مشرف بالجروب!' }, { quoted: mek });
                     }
+                    return true;
+                }
+
+                // معلومات الجروب
+                if (['معلومات الجروب', 'تفاصيل الجروب', 'معلومات الروم', 'تفاصيل الروم'].includes(normalizedBody)) {
+                    await handleCommandTiming('📋');
+                    let subject = groupMetadata?.subject || 'بدون اسم';
+                    let desc = groupMetadata?.desc || 'لا يوجد وصف حالياً';
+                    let membersCount = participants.length;
+                    let adminsCount = groupAdmins.length;
+                    let isLocked = !!groupMetadata?.announce;
+                    let isWelcome = !localDB.disabledWelcomes?.includes(from);
+                    let infoText = `╭━━━〔 📋 *معلومات الجروب* 〕━━━╮\n\n` +
+                                   `🏷️ *اسم الجروب:* ${subject}\n` +
+                                   `👥 *عدد الأعضاء:* ${membersCount} عضو\n` +
+                                   `🛡️ *عدد المشرفين:* ${adminsCount} مشرف\n` +
+                                   `🔒 *حالة الإرسال:* ${isLocked ? 'مقفول للمشرفين فقط 🔒' : 'مفتوح للجميع 🔓'}\n` +
+                                   `👋 *الترحيب التلقائي:* ${isWelcome ? 'مفعل ✅' : 'معطل ❌'}\n\n` +
+                                   `📝 *الوصف:* \n${desc}\n` +
+                                   `╰━━━━━━━━━━━━━━━━━━━━╯`;
+                    await currentConn.sendMessage(from, { text: infoText }, { quoted: mek });
                     return true;
                 }
 
@@ -1798,8 +1862,20 @@ const datelsHandler = {
                 // =========================================================================
                 // ⚠️ 6️⃣ [نظام التنبيهات والأدمن المعين]
                 // =========================================================================
+                // فحص تنبيهاتي الشخصية (لكل الأعضاء)
+                if (['تنبيهاتي', 'انذاراتي', 'تحذيراتي', 'كم تنبيهاتي', 'كم انذاراتي'].includes(normalizedBody)) {
+                    await handleCommandTiming('📊');
+                    let myWarns = localDB.warns?.[from]?.[cleanSenderNum] || 0;
+                    let msgWarns = `📊 *سجل تنبيهاتك في هذا الجروب:* \n\n` +
+                                   `👤 الحساب: @${cleanSenderNum}\n` +
+                                   `⚠️ عدد التنبيهات: [ ${myWarns}/4 ]\n\n` +
+                                   (myWarns === 0 ? `✨ عاش يا نجم! سجلك نظيف 100% ومفيش أي مخالفات.` : `⚠️ احترس يا غالي، عند وصولك لـ 4 تنبيهات بيتم طردك تلقائياً! 🚪`);
+                    await currentConn.sendMessage(from, { text: msgWarns, mentions: [sender] }, { quoted: mek });
+                    return true;
+                }
+
                 // إعطاء تنبيه
-                if (isWarnAdmin && (normalizedBody.startsWith('تنبيه') || normalizedBody.startsWith('انذار'))) {
+                if (isWarnAdmin && (normalizedBody.startsWith('تنبيه') || normalizedBody.startsWith('انذار') || normalizedBody.startsWith('إنذار') || normalizedBody.startsWith('تحذير'))) {
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
@@ -1830,6 +1906,7 @@ const datelsHandler = {
                         saveLocalDB(localDB);
                         try {
                             await currentConn.groupParticipantsUpdate(from, [target], 'remove');
+                            groupMetaCache.delete(from);
                             await currentConn.sendMessage(from, {
                                 text: `🚨 *وصلت 4 تنبيهات!* \nتم طرد @${targetNum} تلقائياً لمخالفة قوانين المجموعة! 🚪`,
                                 mentions: [target]
@@ -1849,8 +1926,8 @@ const datelsHandler = {
                     return true;
                 }
 
-                // تصفير التنبيهات
-                if (isWarnAdmin && (normalizedBody.startsWith('الغي التنبيهات') || normalizedBody.startsWith('صفر التنبيهات') || normalizedBody.startsWith('حذف التنبيهات'))) {
+                // تصفير وإلغاء التنبيهات
+                if (isWarnAdmin && (normalizedBody.startsWith('الغي التنبيهات') || normalizedBody.startsWith('الغاء التنبيهات') || normalizedBody.startsWith('صفر التنبيهات') || normalizedBody.startsWith('تصفير التنبيهات') || normalizedBody.startsWith('حذف التنبيهات') || normalizedBody.startsWith('مسح التنبيهات') || normalizedBody.startsWith('الغي الانذارات') || normalizedBody.startsWith('صفر الانذارات') || normalizedBody.startsWith('حذف الانذارات'))) {
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
