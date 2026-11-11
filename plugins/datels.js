@@ -292,10 +292,21 @@ function extractTarget(mek, bodyText = '') {
     const mentioned = mek.message?.extendedTextMessage?.contextInfo?.mentionedJid;
     if (mentioned && mentioned.length > 0) return mentioned[0];
 
-    // 3. Extracted phone number or LID from text
-    const cleanNumbersInText = (bodyText || '').match(/[0-9]{8,16}/g);
+    // 3. Extracted phone number or LID from text (يدعم الأرقام العربية والإنجليزية والمسافات)
+    const converted = convertArabicNumbers(bodyText || '');
+    const cleanNumbersInText = converted.match(/[0-9]{8,16}/g);
     if (cleanNumbersInText && cleanNumbersInText.length > 0) {
         let num = cleanNumbersInText[0];
+        if (num.startsWith('01') && num.length === 11) {
+            num = '2' + num;
+        }
+        return num.length > 14 ? `${num}@lid` : `${num}@s.whatsapp.net`;
+    }
+
+    // فحص إضافي للأرقام التي قد تحتوي على مسافات أو رموز
+    const digitsOnly = converted.replace(/[^0-9]/g, '');
+    if (digitsOnly.length >= 10 && digitsOnly.length <= 16) {
+        let num = digitsOnly;
         if (num.startsWith('01') && num.length === 11) {
             num = '2' + num;
         }
@@ -993,7 +1004,7 @@ const datelsHandler = {
                 // مهلة الجلسة 5 دقائق
                 if (now - session.timestamp > 300000) {
                     salawatSessions.delete(from);
-                } else if (session.sender === sender || isHajj || isBotOwner) {
+                } else if (getCleanNumber(session.sender) === cleanSenderNum || isHajj || isBotOwner || isActualRoomAdminOrOwner) {
                     // أمر الإلغاء أثناء المحادثة التفاعلية
                     if (['الغاء', 'إلغاء', 'خروج', 'قف', 'وقف', 'ستوب', 'cancel'].includes(normalizedBody)) {
                         salawatSessions.delete(from);
@@ -1010,6 +1021,8 @@ const datelsHandler = {
 
                         if (isUnlimited) {
                             chosenCount = -1;
+                        } else if (cleanedText.includes('مره') && !cleanedText.match(/[0-9]/)) {
+                            chosenCount = 1;
                         } else {
                             const parsed = parseInt(cleanedText.replace(/[^0-9]/g, ''));
                             if (!parsed || isNaN(parsed) || parsed <= 0) {
@@ -1161,14 +1174,13 @@ const datelsHandler = {
                 return true;
             }
 
-            // 🌸 أمر تحديد وضبط الصلاة على النبي في الجروب (حصري للحج فقط)
-            const isSalawatSetupCmd = /^(تحديد صلاه|تحديد الصلاه|تحديد الصلاة|ضبط صلاه|ضبط الصلاة|تعديل صلاه|تعديل الصلاة)$/i.test(normalizedBody) ||
-                                      /^(تحديد صلاه|تحديد الصلاه|تحديد الصلاة|ضبط صلاه|ضبط الصلاة|تعديل صلاه|تعديل الصلاة)\s+/i.test(normalizedBody);
+            // 🌸 أمر تحديد وضبط الصلاة على النبي في الجروب (حصري للحج والمالك والمشرفين)
+            const isSalawatSetupCmd = /^(تحديد|تعديل|ضبط)\s*(?:الصلوات|الصلاة|الصلاه|صلاة|صلاه)(?:\s*(?:على|علي|ع|في)?\s*(?:النبي|الرسول|الحبيب))?/i.test(normalizedBody);
 
             if (isSalawatSetupCmd) {
-                if (!isHajj && !isBotOwner) {
+                if (!isHajj && !isBotOwner && !isActualRoomAdminOrOwner) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج فقط! 👑🌸' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج والمشرفين فقط! 👑🌸' }, { quoted: mek });
                     return true;
                 }
 
@@ -1178,7 +1190,9 @@ const datelsHandler = {
                     return true;
                 }
 
-                const rawArgs = normalizedBody.replace(/^(تحديد صلاه|تحديد الصلاه|تحديد الصلاة|ضبط صلاه|ضبط الصلاة|تعديل صلاه|تعديل الصلاة)/i, '').trim();
+                const rawArgs = normalizedBody
+                    .replace(/^(تحديد|تعديل|ضبط)\s*(?:الصلوات|الصلاة|الصلاه|صلاة|صلاه)(?:\s*(?:على|علي|ع|في)?\s*(?:النبي|الرسول|الحبيب))?/i, '')
+                    .trim();
                 const parts = cleanArabicNumbers(rawArgs).split(/\s+/).filter(Boolean);
 
                 // إذا أرسل الحج الأمر كاملاً في سطر واحد (مثال: تحديد صلاه 10 4 أو تحديد صلاه دائم 5)
@@ -1239,11 +1253,13 @@ const datelsHandler = {
                 return true;
             }
 
-            // 🛑 أمر إلغاء وإيقاف الصلاة على النبي في الجروب (حصري للحج فقط)
-            if (['الغاء صلاه', 'إلغاء صلاه', 'الغاء الصلاه', 'إلغاء الصلاة', 'ايقاف صلاه', 'إيقاف صلاه', 'تعطيل صلاه', 'ايقاف الصلاه'].includes(normalizedBody)) {
-                if (!isHajj && !isBotOwner) {
+            // 🛑 أمر إلغاء وإيقاف الصلاة على النبي في الجروب
+            const isSalawatCancelCmd = /^(الغاء|إلغاء|ايقاف|إيقاف|تعطيل)\s*(?:الصلوات|الصلاة|الصلاه|صلاة|صلاه)(?:\s*(?:على|علي|ع|في)?\s*(?:النبي|الرسول|الحبيب))?$/i.test(normalizedBody);
+
+            if (isSalawatCancelCmd) {
+                if (!isHajj && !isBotOwner && !isActualRoomAdminOrOwner) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج فقط! 👑🌸' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج والمشرفين فقط! 👑🌸' }, { quoted: mek });
                     return true;
                 }
 
@@ -2115,10 +2131,34 @@ const datelsHandler = {
                 }
 
                 // أمر ضيف (إضافة عضو للجروب عبر البوت أو إرسال دعوة له في الخاص إذا كان قافل الإضافة)
-                if (isActualRoomAdminOrOwner && /^(ضيف|اضف|اضافة|اضافه|add)\b/i.test(normalizedBody)) {
+                if ((isActualRoomAdminOrOwner || isHajj || isBotOwner) && /^(ضيف|اضف|اضافة|اضافه|add)(?:\s+|$)/i.test(normalizedBody)) {
                     // 1. التأكد أن البوت مشرف بالجروب
-                    const myClean = getCleanNumber(currentConn.user?.id);
-                    const isBotAdminInGroup = groupAdmins.includes(myClean);
+                    let myPhone = getCleanNumber(currentConn.user?.id);
+                    let myLid = getCleanNumber(currentConn.user?.lid);
+                    let isBotAdminInGroup = groupAdmins.includes(myPhone) || 
+                                            (myLid && groupAdmins.includes(myLid)) ||
+                                            (localDB.lidMap?.[myPhone] && groupAdmins.includes(localDB.lidMap[myPhone])) ||
+                                            (myLid && localDB.lidMap?.[myLid] && groupAdmins.includes(localDB.lidMap[myLid]));
+
+                    if (!isBotAdminInGroup) {
+                        try {
+                            const freshMeta = await currentConn.groupMetadata(from);
+                            if (freshMeta?.participants) {
+                                groupMetaCache.set(from, { data: freshMeta, timestamp: Date.now() });
+                                for (const p of freshMeta.participants) {
+                                    if (p.admin === 'admin' || p.admin === 'superadmin') {
+                                        const c1 = getCleanNumber(p.id);
+                                        const c2 = getCleanNumber(p.lid);
+                                        if (c1 === myPhone || c1 === myLid || c2 === myPhone || c2 === myLid) {
+                                            isBotAdminInGroup = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (_) {}
+                    }
+
                     if (!isBotAdminInGroup) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ لازم ترقي البوت مشرف (Admin) في الجروب الأول عشان يقدر يضيف أعضاء!' }, { quoted: mek });
@@ -2127,6 +2167,15 @@ const datelsHandler = {
 
                     // 2. استخراج الرقم
                     let target = extractTarget(mek, body);
+                    if (!target) {
+                        const rawClean = convertArabicNumbers(body).replace(/^(ضيف|اضف|اضافة|اضافه|add)/i, '').replace(/[^0-9]/g, '');
+                        if (rawClean && rawClean.length >= 10 && rawClean.length <= 15) {
+                            let num = rawClean;
+                            if (num.startsWith('01') && num.length === 11) num = '2' + num;
+                            target = `${num}@s.whatsapp.net`;
+                        }
+                    }
+
                     if (!target) {
                         await handleCommandTiming('⚠️');
                         await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم اللي عايز تضيفه بعد الأمر، مثال:\n*(ضيف 01012345678)* أو *(ضيف 201012345678)*' }, { quoted: mek });

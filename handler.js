@@ -1094,8 +1094,62 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
-        // 1. فحص وجود عملية تنصيب جارية لهذا المستخدم (تتم حصرياً في الخاص)
+        // 🔄 فحص وجود استفسار معلق لكود اقتران منتهي (عايز كود تاني ولا تلغي العملية)
         const cleanFrom = getCleanNumber(from);
+        const retryKey = (global.pendingPairingRetry && (
+            (cleanSender && global.pendingPairingRetry.has(cleanSender) ? cleanSender : null) ||
+            (cleanFrom && global.pendingPairingRetry.has(cleanFrom) ? cleanFrom : null)
+        )) || null;
+
+        if (retryKey && !currentConn.isSubBot) {
+            const retryData = global.pendingPairingRetry.get(retryKey);
+            const normAns = normalizedBody.trim();
+            const wantsNewCode = ['كود تاني', 'كود جديد', 'تاني', 'جديد', 'كود', '1', 'اه', 'نعم', 'ايوه', 'ايوة', 'ارسل كود', 'واحد'].includes(normAns);
+            const wantsCancel = ['الغاء', 'إلغاء', 'لا', 'لأ', 'خروج', 'stop', 'cancel', '2', 'اتنين', 'اثنين'].includes(normAns);
+
+            if (wantsNewCode) {
+                if (retryData.autoCancelTimer) clearTimeout(retryData.autoCancelTimer);
+                global.pendingPairingRetry.delete(retryData.adminPhone);
+                if (retryData.notifyJid) global.pendingPairingRetry.delete(getCleanNumber(retryData.notifyJid));
+                global.pendingPairingRetry.delete(retryKey);
+
+                await respondWithStrictTiming('🔄', async () => {
+                    await currentConn.sendMessage(from, { text: '🔄 *أمرك! جاري استخراج كود اقتران جديد الآن، انتظر ثوانٍ...* ⏳' }, { quoted: mek });
+                });
+
+                requestSubBotPairing(
+                    retryData.targetPhone,
+                    retryData.botName,
+                    retryData.callName,
+                    retryData.adminPhone,
+                    retryData.adminLid,
+                    retryData.gender,
+                    retryData.personality,
+                    currentConn,
+                    from,
+                    mek
+                );
+                return;
+            } else if (wantsCancel) {
+                if (retryData.autoCancelTimer) clearTimeout(retryData.autoCancelTimer);
+                global.pendingPairingRetry.delete(retryData.adminPhone);
+                if (retryData.notifyJid) global.pendingPairingRetry.delete(getCleanNumber(retryData.notifyJid));
+                global.pendingPairingRetry.delete(retryKey);
+
+                try {
+                    if (fs.existsSync(retryData.sessionDir)) {
+                        fs.rmSync(retryData.sessionDir, { recursive: true, force: true });
+                    }
+                } catch (_) {}
+
+                await respondWithStrictTiming('🛑', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ *تم إلغاء عملية التنصيب بنجاح.*' }, { quoted: mek });
+                });
+                return;
+            }
+        }
+
+        // 1. فحص وجود عملية تنصيب جارية لهذا المستخدم (تتم حصرياً في الخاص)
         const installKey = installState.has(cleanSender) ? cleanSender : (installState.has(cleanFrom) ? cleanFrom : null);
 
         if (installKey && !currentConn.isSubBot) {

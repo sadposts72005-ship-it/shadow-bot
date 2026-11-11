@@ -457,26 +457,70 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                     }
                                 }, 120000);
 
-                                // ⏱️ إلغاء الجلسة بعد 3 دقائق (180 ثانية) لانتهاء الوقت
+                                // ⏱️ انتهاء صلاحية الكود بعد 3 دقائق (180 ثانية) وسؤال المستخدم إذا كان يريد كوداً آخر أم إلغاء
                                 expireTimer = setTimeout(async () => {
                                     if (!isConnected && (!sock.authState?.creds?.registered)) {
                                         isExpired = true;
-                                        try {
-                                            const expireMsg = 
-                                                `❌ *تم إلغاء جلسة التنصيب لانتهاء صلاحية كود الاقتران!* ⌛\n\n` +
-                                                `انتهت المهلة المحددة لربط البوت (${botName} - +${cleanPhone}) وأصبح الكود غير صالح.\n` +
-                                                `🔄 برجاء إعادة التنصيب مرة أخرى بكتابة أمر: *(تنصيب)*`;
-                                            await mainConn.sendMessage(notifyJid, { text: expireMsg }, { quoted: quotedMek });
-                                        } catch (_) {}
 
                                         try {
-                                            sock.end(new Error('Pairing code expired'));
+                                            sock.end(new Error('Pairing code 3m timeout'));
                                         } catch (_) {}
+
+                                        const retryKey = cleanAdmin || getCleanNumber(notifyJid) || cleanPhone;
+                                        const retryMsg = 
+                                            `⌛ *انتهت صلاحية كود الاقتران الحالي (3 دقائق)!* ⌛\n\n` +
+                                            `❓ *عايز كود تاني ولا تلغي العملية؟*\n\n` +
+                                            `1️⃣ اكتب *(كود تاني)* أو *(1)* لاستخراج كود اقتران جديد 🔄\n` +
+                                            `2️⃣ اكتب *(الغاء)* أو *(2)* لإلغاء عملية التنصيب ❌\n\n` +
+                                            `⏱️ _الرسالة دي هتقعد 5 دقائق، لو مردتش البوت هيلغي العملية تلقائياً._`;
+
                                         try {
-                                            if (fs.existsSync(sessionDir)) {
-                                                fs.rmSync(sessionDir, { recursive: true, force: true });
-                                            }
+                                            await mainConn.sendMessage(notifyJid, { text: retryMsg }, { quoted: quotedMek });
                                         } catch (_) {}
+
+                                        // تايمر الـ 5 دقائق للإلغاء التلقائي في حال عدم الرد
+                                        const autoCancelTimer = setTimeout(async () => {
+                                            if (global.pendingPairingRetry && (global.pendingPairingRetry.has(retryKey) || global.pendingPairingRetry.has(cleanAdmin))) {
+                                                global.pendingPairingRetry.delete(retryKey);
+                                                if (cleanAdmin) global.pendingPairingRetry.delete(cleanAdmin);
+                                                if (notifyJid) global.pendingPairingRetry.delete(getCleanNumber(notifyJid));
+
+                                                try {
+                                                    if (fs.existsSync(sessionDir)) {
+                                                        fs.rmSync(sessionDir, { recursive: true, force: true });
+                                                    }
+                                                } catch (_) {}
+
+                                                try {
+                                                    const autoCancelMsg = `❌ *تم إلغاء عملية التنصيب تلقائياً لعدم الرد خلال 5 دقائق.* ⌛`;
+                                                    await mainConn.sendMessage(notifyJid, { text: autoCancelMsg });
+                                                } catch (_) {}
+                                            }
+                                        }, 5 * 60 * 1000);
+
+                                        if (!global.pendingPairingRetry) global.pendingPairingRetry = new Map();
+                                        const retryData = {
+                                            targetPhone: cleanPhone,
+                                            botName,
+                                            callName: finalCallName,
+                                            gender: finalGender,
+                                            personality: finalPersonality,
+                                            adminPhone: cleanAdmin,
+                                            adminLid: cleanLid,
+                                            sessionDir,
+                                            notifyJid,
+                                            quotedMek,
+                                            mainConn,
+                                            autoCancelTimer,
+                                            createdAt: Date.now()
+                                        };
+
+                                        global.pendingPairingRetry.set(retryKey, retryData);
+                                        if (cleanAdmin) global.pendingPairingRetry.set(cleanAdmin, retryData);
+                                        if (notifyJid) {
+                                             const notifyClean = getCleanNumber(notifyJid);
+                                             if (notifyClean) global.pendingPairingRetry.set(notifyClean, retryData);
+                                        }
                                     }
                                 }, 180000);
                             }
@@ -491,6 +535,11 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     isConnected = true;
                     if (warnTimer) clearTimeout(warnTimer);
                     if (expireTimer) clearTimeout(expireTimer);
+                    if (global.pendingPairingRetry) {
+                        global.pendingPairingRetry.delete(cleanAdmin);
+                        global.pendingPairingRetry.delete(cleanPhone);
+                        if (notifyJid) global.pendingPairingRetry.delete(getCleanNumber(notifyJid));
+                    }
                     subBotStartTime = Math.floor(Date.now() / 1000);
                     sock.subBotStartTime = subBotStartTime;
                     console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
@@ -581,18 +630,6 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     try {
                         await mainConn.sendMessage(masterPhone, { text: ownerNotice });
                     } catch (_) {}
-
-                    // إرسال إشعار بأحدث ميزات وأوامر البوت الجديدة للحج فور اكتمال التنصيب
-                    setTimeout(async () => {
-                        try {
-                            const latestFeature = SYSTEM_FEATURE_UPDATES[SYSTEM_FEATURE_UPDATES.length - 1];
-                            if (latestFeature && cleanAdmin) {
-                                await mainConn.sendMessage(`${cleanAdmin}@s.whatsapp.net`, { 
-                                    text: `💡 *دليل أحدث ميزات بوتك الجديد:* 🌟\n\n` + latestFeature.message 
-                                });
-                            }
-                        } catch (_) {}
-                    }, 4000);
                 }
 
                 if (connection === 'close') {
@@ -1240,28 +1277,8 @@ export async function broadcastUpdateToSubBots(mainConn, messageText, updateId =
 
 /**
  * فحص وإرسال أي تحديثات جديدة معلقة لم يتم إرسالها بعد للبوتات الفرعية
- * يتم استدعاؤها تلقائياً عند تشغيل البوت الأساسي
+ * (تم تعطيل الإرسال التلقائي بناء على رغبة المطور، والاعتماد على أمر الإذاعة اليدوي)
  */
 export async function checkAndBroadcastPendingUpdates(mainConn) {
-    if (!mainConn) return;
-
-    try {
-        const tracker = loadBroadcastedUpdates();
-        const pending = SYSTEM_FEATURE_UPDATES.filter(u => !tracker.broadcastedIds.includes(u.id));
-
-        if (pending.length === 0) {
-            console.log('ℹ️ [Broadcast] جميع ميزات النظام محدثة ومذاعة مسبقاً للبوتات الفرعية.');
-            return;
-        }
-
-        console.log(`📢 [Broadcast] يوجد ${pending.length} تحديث ميزات معلق سيتم بثه للبوتات الفرعية...`);
-
-        for (const update of pending) {
-            console.log(`🚀 [Broadcast] جاري إذاعة التحديث: [${update.title}] (ID: ${update.id})`);
-            await broadcastUpdateToSubBots(mainConn, update.message, update.id);
-            await new Promise(r => setTimeout(r, 2500));
-        }
-    } catch (err) {
-        console.error('❌ [Broadcast Error] خطأ أثناء فحص التحديثات المعلقة:', err?.message || err);
-    }
+    return;
 }
