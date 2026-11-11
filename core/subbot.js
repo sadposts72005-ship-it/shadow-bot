@@ -430,18 +430,23 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                     `┃ 🎭 *الشخصية:* ${finalPersonality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم 😇✨'}\n` +
                                     `┃ 📱 *رقم البوت:* +${cleanPhone}\n` +
                                     `┃ 👑 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (LID: ${cleanLid})` : ''}\n` +
-                                    `┃ 🔑 *كود الاقتران:* *${code}*\n` +
+                                    `┃ 🔑 *كود الاقتران:* \`${code}\`\n` +
                                     `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
                                     `📌 *طريقة الربط بالهاتف:* \n` +
                                     `1️⃣ افتح واتساب من الهاتف صاحب الرقم (+${cleanPhone}).\n` +
                                     `2️⃣ اضغط على الثلاث نقاط (⋮) ⬅️ *الأجهزة المرتبطة*.\n` +
                                     `3️⃣ اضغط *ربط جهاز*.\n` +
                                     `4️⃣ اضغط *الربط باستخدام رقم الهاتف بدلاً من ذلك*.\n` +
-                                    `5️⃣ أدخل الكود أعلاه: *${code}*\n\n` +
+                                    `5️⃣ انسخ الكود من الرسالة التالية وأدخله مباشرة.\n\n` +
+                                    `📋👇 *تم إرسال الكود في الرسالة التالية بمفرده لنسخه بنقرة واحدة بسهولة!* 👇\n\n` +
                                     `⏳ *الكود صالح لمدة 3 دقائق فقط.*\n` +
                                     `⚠️ سيصلك إشعار تنبيه قبل دقيقة من انتهاء الوقت إذا لم تقم بالربط!`;
 
                                 await mainConn.sendMessage(notifyJid, { text: pairMsg }, { quoted: quotedMek });
+
+                                // 📋 إرسال الكود في رسالة منفصلة مخصصة لنسخه بنقرة واحدة
+                                await new Promise(r => setTimeout(r, 800));
+                                await mainConn.sendMessage(notifyJid, { text: `${code}` });
 
                                 // ⏱️ تنبيه بعد دقيقتين (120 ثانية) بأن المتبقي دقيقة واحدة فقط
                                 warnTimer = setTimeout(async () => {
@@ -450,9 +455,10 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                             const warnMsg = 
                                                 `⚠️ *تنبيه هام: متبقي دقيقة واحدة فقط!* ⏳\n\n` +
                                                 `كود اقتران بوتك (${botName}) سينتهي ويصبح غير صالح بعد 60 ثانية!\n` +
-                                                `📱 برجاء ربط الكود في واتساب الآن قبل انتهاء الوقت:\n` +
-                                                `🔑 الكود: *${code}*`;
+                                                `📱 الكود مُرسل في الرسالة التالية لنسخه فوراً:`;
                                             await mainConn.sendMessage(notifyJid, { text: warnMsg }, { quoted: quotedMek });
+                                            await new Promise(r => setTimeout(r, 600));
+                                            await mainConn.sendMessage(notifyJid, { text: `${code}` });
                                         } catch (_) {}
                                     }
                                 }, 120000);
