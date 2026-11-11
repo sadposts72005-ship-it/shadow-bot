@@ -996,6 +996,68 @@ const datelsHandler = {
                 await delay(DELAYS.textReply);
             }
 
+            // فحص حظر المستخدم
+            if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return true;
+
+            // جلب معلومات الجروب والمشرفين
+            let groupMetadata = isGroup ? await getCachedGroupMetadata(currentConn, from) : null;
+            let participants = groupMetadata?.participants || [];
+
+            // مزامنة وتعلم معرّفات الـ LID والأرقام تلقائياً
+            if (participants && Array.isArray(participants) && participants.length > 0) {
+                if (!localDB.lidMap) localDB.lidMap = {};
+                let changed = false;
+                for (const p of participants) {
+                    let phone = '';
+                    let lid = '';
+                    if (p.id?.endsWith('@s.whatsapp.net')) phone = getCleanNumber(p.id);
+                    else if (p.id?.endsWith('@lid')) lid = getCleanNumber(p.id);
+                    if (p.lid?.endsWith('@lid')) lid = getCleanNumber(p.lid);
+                    else if (p.lid?.endsWith('@s.whatsapp.net')) phone = getCleanNumber(p.lid);
+
+                    if (phone && lid) {
+                        if (localDB.lidMap[phone] !== lid || localDB.lidMap[lid] !== phone) {
+                            localDB.lidMap[phone] = lid;
+                            localDB.lidMap[lid] = phone;
+                            changed = true;
+                        }
+                    }
+                }
+                if (changed) saveLocalDB(localDB);
+            }
+
+            const groupAdminsSet = new Set();
+            for (const p of participants) {
+                if (p.admin === 'admin' || p.admin === 'superadmin') {
+                    const c1 = getCleanNumber(p.id);
+                    const c2 = getCleanNumber(p.lid);
+                    const c3 = getCleanNumber(p.phoneNumber || p.phone_number);
+                    if (c1) groupAdminsSet.add(c1);
+                    if (c2) groupAdminsSet.add(c2);
+                    if (c3) groupAdminsSet.add(c3);
+                    if (c1 && localDB.lidMap?.[c1]) groupAdminsSet.add(localDB.lidMap[c1]);
+                    if (c2 && localDB.lidMap?.[c2]) groupAdminsSet.add(localDB.lidMap[c2]);
+                    if (c3 && localDB.lidMap?.[c3]) groupAdminsSet.add(localDB.lidMap[c3]);
+                }
+            }
+            const groupAdmins = Array.from(groupAdminsSet);
+
+            let isSenderAdmin = groupAdmins.includes(cleanSenderNum) || 
+                                (localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum])) ||
+                                (senderCleanPhone && groupAdmins.includes(senderCleanPhone));
+            let creatorMember = participants.find(p => p.admin === 'superadmin');
+            let groupCreatorRaw = creatorMember ? getCleanNumber(creatorMember.id) : '';
+
+            // أوامر الإشراف للمشرفين، مالك البوت، والحج الأساسي
+            const isActualRoomAdminOrOwner = isAbsoluteOwner || isMainHajj || isBotOwner || (cleanSenderNum === groupCreatorRaw) || isSenderAdmin;
+
+            // فحص أدمن التنبيه المعين في هذا الجروب
+            const groupWarnGivers = localDB.warnGivers?.[from] || {};
+            const isWarnAdmin = isActualRoomAdminOrOwner || isBotOwner || Object.keys(groupWarnGivers).some(k => {
+                let cleanK = getCleanNumber(k);
+                return cleanK === cleanSenderNum || (localDB.lidMap?.[cleanSenderNum] && cleanK === localDB.lidMap[cleanSenderNum]);
+            });
+
             // 🌸 متابعة جلسة التحديد التفاعلي للصلاة على النبي في الجروب
             if (from && from.endsWith('@g.us') && salawatSessions.has(from)) {
                 const session = salawatSessions.get(from);
@@ -1426,67 +1488,7 @@ const datelsHandler = {
                 }
             }
 
-            // فحص حظر المستخدم
-            if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return true;
 
-            // جلب معلومات الجروب والمشرفين
-            let groupMetadata = isGroup ? await getCachedGroupMetadata(currentConn, from) : null;
-            let participants = groupMetadata?.participants || [];
-
-            // مزامنة وتعلم معرّفات الـ LID والأرقام تلقائياً
-            if (participants && Array.isArray(participants) && participants.length > 0) {
-                if (!localDB.lidMap) localDB.lidMap = {};
-                let changed = false;
-                for (const p of participants) {
-                    let phone = '';
-                    let lid = '';
-                    if (p.id?.endsWith('@s.whatsapp.net')) phone = getCleanNumber(p.id);
-                    else if (p.id?.endsWith('@lid')) lid = getCleanNumber(p.id);
-                    if (p.lid?.endsWith('@lid')) lid = getCleanNumber(p.lid);
-                    else if (p.lid?.endsWith('@s.whatsapp.net')) phone = getCleanNumber(p.lid);
-
-                    if (phone && lid) {
-                        if (localDB.lidMap[phone] !== lid || localDB.lidMap[lid] !== phone) {
-                            localDB.lidMap[phone] = lid;
-                            localDB.lidMap[lid] = phone;
-                            changed = true;
-                        }
-                    }
-                }
-                if (changed) saveLocalDB(localDB);
-            }
-
-            const groupAdminsSet = new Set();
-            for (const p of participants) {
-                if (p.admin === 'admin' || p.admin === 'superadmin') {
-                    const c1 = getCleanNumber(p.id);
-                    const c2 = getCleanNumber(p.lid);
-                    const c3 = getCleanNumber(p.phoneNumber || p.phone_number);
-                    if (c1) groupAdminsSet.add(c1);
-                    if (c2) groupAdminsSet.add(c2);
-                    if (c3) groupAdminsSet.add(c3);
-                    if (c1 && localDB.lidMap?.[c1]) groupAdminsSet.add(localDB.lidMap[c1]);
-                    if (c2 && localDB.lidMap?.[c2]) groupAdminsSet.add(localDB.lidMap[c2]);
-                    if (c3 && localDB.lidMap?.[c3]) groupAdminsSet.add(localDB.lidMap[c3]);
-                }
-            }
-            const groupAdmins = Array.from(groupAdminsSet);
-
-            let isSenderAdmin = groupAdmins.includes(cleanSenderNum) || 
-                                (localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum])) ||
-                                (senderCleanPhone && groupAdmins.includes(senderCleanPhone));
-            let creatorMember = participants.find(p => p.admin === 'superadmin');
-            let groupCreatorRaw = creatorMember ? getCleanNumber(creatorMember.id) : '';
-
-            // أوامر الإشراف للمشرفين، مالك البوت، والحج الأساسي
-            const isActualRoomAdminOrOwner = isAbsoluteOwner || isMainHajj || isBotOwner || (cleanSenderNum === groupCreatorRaw) || isSenderAdmin;
-
-            // فحص أدمن التنبيه المعين في هذا الجروب
-            const groupWarnGivers = localDB.warnGivers?.[from] || {};
-            const isWarnAdmin = isActualRoomAdminOrOwner || isBotOwner || Object.keys(groupWarnGivers).some(k => {
-                let cleanK = getCleanNumber(k);
-                return cleanK === cleanSenderNum || (localDB.lidMap?.[cleanSenderNum] && cleanK === localDB.lidMap[cleanSenderNum]);
-            });
 
             // =========================================================================
             // 🛡️ 2️⃣ [مسح الروابط بالجروبات ومكافحة السبام]
@@ -2127,110 +2129,6 @@ const datelsHandler = {
                     tagText += `\n` + participants.map(p => `@${getCleanNumber(p.id)}`).join(' ');
 
                     await currentConn.sendMessage(from, { text: tagText, mentions: mentionsList }, { quoted: mek });
-                    return true;
-                }
-
-                // أمر ضيف (إضافة عضو للجروب عبر البوت أو إرسال دعوة له في الخاص إذا كان قافل الإضافة)
-                if ((isActualRoomAdminOrOwner || isHajj || isBotOwner) && /^(ضيف|اضف|اضافة|اضافه|add)(?:\s+|$)/i.test(normalizedBody)) {
-                    // 1. التأكد أن البوت مشرف بالجروب
-                    let myPhone = getCleanNumber(currentConn.user?.id);
-                    let myLid = getCleanNumber(currentConn.user?.lid);
-                    let isBotAdminInGroup = groupAdmins.includes(myPhone) || 
-                                            (myLid && groupAdmins.includes(myLid)) ||
-                                            (localDB.lidMap?.[myPhone] && groupAdmins.includes(localDB.lidMap[myPhone])) ||
-                                            (myLid && localDB.lidMap?.[myLid] && groupAdmins.includes(localDB.lidMap[myLid]));
-
-                    if (!isBotAdminInGroup) {
-                        try {
-                            const freshMeta = await currentConn.groupMetadata(from);
-                            if (freshMeta?.participants) {
-                                groupMetaCache.set(from, { data: freshMeta, timestamp: Date.now() });
-                                for (const p of freshMeta.participants) {
-                                    if (p.admin === 'admin' || p.admin === 'superadmin') {
-                                        const c1 = getCleanNumber(p.id);
-                                        const c2 = getCleanNumber(p.lid);
-                                        if (c1 === myPhone || c1 === myLid || c2 === myPhone || c2 === myLid) {
-                                            isBotAdminInGroup = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (_) {}
-                    }
-
-                    if (!isBotAdminInGroup) {
-                        await handleCommandTiming('❌');
-                        await currentConn.sendMessage(from, { text: '❌ لازم ترقي البوت مشرف (Admin) في الجروب الأول عشان يقدر يضيف أعضاء!' }, { quoted: mek });
-                        return true;
-                    }
-
-                    // 2. استخراج الرقم
-                    let target = extractTarget(mek, body);
-                    if (!target) {
-                        const rawClean = convertArabicNumbers(body).replace(/^(ضيف|اضف|اضافة|اضافه|add)/i, '').replace(/[^0-9]/g, '');
-                        if (rawClean && rawClean.length >= 10 && rawClean.length <= 15) {
-                            let num = rawClean;
-                            if (num.startsWith('01') && num.length === 11) num = '2' + num;
-                            target = `${num}@s.whatsapp.net`;
-                        }
-                    }
-
-                    if (!target) {
-                        await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم اللي عايز تضيفه بعد الأمر، مثال:\n*(ضيف 01012345678)* أو *(ضيف 201012345678)*' }, { quoted: mek });
-                        return true;
-                    }
-
-                    let targetNum = getCleanNumber(target);
-                    let targetJid = targetNum.length > 14 ? `${targetNum}@lid` : `${targetNum}@s.whatsapp.net`;
-
-                    // فحص وجود العضو بالفعل
-                    if (participants.some(p => getCleanNumber(p.id) === targetNum || (p.lid && getCleanNumber(p.lid) === targetNum))) {
-                        await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} متواجد بالفعل في هذا الجروب!`, mentions: [targetJid] }, { quoted: mek });
-                        return true;
-                    }
-
-                    await handleCommandTiming('➕');
-                    try {
-                        const res = await currentConn.groupParticipantsUpdate(from, [targetJid], 'add');
-                        groupMetaCache.delete(from);
-
-                        const status = res?.[0]?.status;
-                        if (status === '200') {
-                            await currentConn.sendMessage(from, { text: `✅ *تمت إضافة العضو @${targetNum} بنجاح إلى المجموعة!* 🎉`, mentions: [targetJid] }, { quoted: mek });
-                        } else if (status === '409') {
-                            await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} متواجد بالفعل في الجروب!` }, { quoted: mek });
-                        } else {
-                            // الشخص قافل الإضافة التلقائية (403 أو 408)
-                            let inviteCode = await currentConn.groupInviteCode(from).catch(() => null);
-                            if (inviteCode) {
-                                let inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
-                                let groupName = groupMetadata?.subject || 'الجروب';
-                                let inviteMsg = `👋 *مرحباً بك يا غالي!*\n\n` +
-                                                `تمت دعوتك من قِبل إدارة جروب *(${groupName})* للانضمام.\n` +
-                                                `🔗 *رابط الانضمام للجروب:* \n${inviteLink}\n\n` +
-                                                `نورنا يا نجم! ✨`;
-                                await currentConn.sendMessage(targetJid, { text: inviteMsg }).catch(() => {});
-                                await currentConn.sendMessage(from, { 
-                                    text: `📩 *الشخص قافل ميزة الإضافة المباشرة في إعدادات خصوصية حسابه!* \nتم إرسال رابط دعوة الجروب له في الخاص تلقائياً لينضم. 🚀`, 
-                                    mentions: [targetJid] 
-                                }, { quoted: mek });
-                            } else {
-                                await currentConn.sendMessage(from, { text: `❌ تعذر إضافة العضو (@${targetNum}).` }, { quoted: mek });
-                            }
-                        }
-                    } catch (err) {
-                        try {
-                            let inviteCode = await currentConn.groupInviteCode(from);
-                            let inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
-                            await currentConn.sendMessage(targetJid, { text: `👋 تمت دعوتك للانضمام إلى الجروب عبر الرابط التالي: \n${inviteLink}` }).catch(() => {});
-                            await currentConn.sendMessage(from, { text: `📩 الشخص قافل الإضافة، وتم إرسال رابط دعوة الجروب له في الخاص بنجاح! 🚀` }, { quoted: mek });
-                        } catch (_) {
-                            await currentConn.sendMessage(from, { text: '❌ تعذر إضافة العضو. تأكد من صحة الرقم ومن صلاحيات البوت!' }, { quoted: mek });
-                        }
-                    }
                     return true;
                 }
 
