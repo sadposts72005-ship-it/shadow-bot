@@ -2012,7 +2012,7 @@ const datelsHandler = {
                 }
 
                 // حذف رسالة
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'حذف' || normalizedBody === 'احذف')) {
+                if (isActualRoomAdminOrOwner && ['حذف', 'احذف', 'مسح', 'امسح', 'ديليت', 'delete'].includes(normalizedBody)) {
                     const ctxInfo = mek.message?.extendedTextMessage?.contextInfo;
                     if (!ctxInfo || !ctxInfo.stanzaId) {
                         await handleCommandTiming('⚠️');
@@ -2020,6 +2020,7 @@ const datelsHandler = {
                         return true;
                     }
                     try {
+                        // 1. حذف الرسالة المقصودة (المشار إليها بالريبلاي)
                         await currentConn.sendMessage(from, {
                             delete: {
                                 remoteJid: from,
@@ -2028,6 +2029,17 @@ const datelsHandler = {
                                 participant: ctxInfo.participant
                             }
                         });
+
+                        // 2. حذف رسالة العضو التي تحتوي على كلمة (حذف / احذف) ليبقى الشات نظيفاً تماماً
+                        await delay(300);
+                        await currentConn.sendMessage(from, {
+                            delete: {
+                                remoteJid: from,
+                                fromMe: Boolean(mek.key?.fromMe),
+                                id: mek.key?.id,
+                                participant: mek.key?.participant || sender
+                            }
+                        }).catch(() => {});
                     } catch (e) {
                         await currentConn.sendMessage(from, { text: '❌ تعذر حذف الرسالة. تأكد أن البوت مشرف بالجروب!' }, { quoted: mek });
                     }
