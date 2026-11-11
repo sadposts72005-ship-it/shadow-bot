@@ -2252,7 +2252,7 @@ export async function handleAllMessages(mek, currentConn) {
         let isGameCommand = /^(كوره|كورة|لعبة الكورة|لعبة كوره|كيف لعب كوره|كيف العب كوره|طريقه كوره|تلميح كوره|تلميح كورة|الغاء كوره|الغاء كورة|ايقاف كوره|احزر|احذر|لعبة احزر|لعبة احذر|كيف لعب احزر|كيف العب احزر|طريقه احزر|شراء تلميح احزر|الغاء احزر|الغاء احذر|رتب|ترتيب|لعبة رتب|كيف لعب رتب|كيف العب رتب|طريقه رتب|شراء تلميح رتب|الغاء رتب|xo|الخروج|انسحاب|اكس|او|اكس او|صراحه|صراحة|بكاسه|بكاسة|انضمام بكاسه|انضمام بكاسة|خروج بكاسه|خروج بكاسة|ابدأ بكاسه|ابدأ بكاسة|تصويت|خلصت|تخمين|تكملة|تكمله|الغاء بكاسه|الغاء بكاسة|بازل|puzzle|لعبة بازل|لعبه بازل|لعبة البازل|لعبه البازل|ابدأ بازل|ابدا بازل|جيم بازل|فوق|تحت|يمين|شمال|تلميح بازل|الغاء بازل|تلميح البازل|الغاء البازل)$/i.test(normalizedBody) || (tttCommandCheck && tttCommandCheck.test(textLower));
 
         if (!isRealGroup) {
-            let isBakasaActive = global.bakasa && global.bakasa[from];
+            let isBakasaActive = (currentConn.bakasa && currentConn.bakasa[from] && currentConn.bakasa[from].status !== 'off') || (global.bakasa && global.bakasa[from] && global.bakasa[from].status !== 'off');
             if (isGameCommand || (currentConn.obito && currentConn.obito[from]) || (currentConn.scramble && currentConn.scramble[from]) || (currentConn.gameSolo && currentConn.gameSolo[from]) || (currentConn.game && currentConn.game[from]) || isBakasaActive) {
                 await respondWithStrictTiming('⚠️', async () => {
                     await currentConn.sendMessage(from, { text: '⚠️ الألعاب دي بتشتغل جوه الجروبات بس يا نجم! ⚽🎮' }, { quoted: mek });
@@ -2354,13 +2354,13 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        let bakasaState = global.bakasa && global.bakasa[from];
+        let bakasaState = (currentConn.bakasa && currentConn.bakasa[from]) || (global.bakasa && global.bakasa[from]);
         let isBakasaActive = bakasaState && bakasaState.status !== 'off';
         let isBakasaExplicitCmd = normalizedBody.startsWith('بكاسه') || normalizedBody.startsWith('بكاسة');
         
         let isBakasaSubCmd = false;
         if (isBakasaActive) {
-            if (/^(انضمام|خروج|ابدأ|ابدا|بدا|خلصت|إلغاء|الغاء|تكملة|تكمله|كمل|\.)$/i.test(normalizedBody)) {
+            if (/^(انضمام|خروج|ابدأ|ابدا|بدا|خلصت|إلغاء|الغاء|قف|وقف|ايقاف|ستوب|تكملة|تكمله|كمل|\.)$/i.test(normalizedBody)) {
                 isBakasaSubCmd = true;
             } else if (normalizedBody.startsWith('تصويت') || normalizedBody.startsWith('تخمين')) {
                 isBakasaSubCmd = true;
@@ -2473,7 +2473,10 @@ export async function handleAllMessages(mek, currentConn) {
                 const isQuotingMenu = quotedText.includes('قائمة أوامر') || quotedText.includes('Bot Menu') || quotedText.includes('اختر رقم القسم');
                 const { recentMenuChats } = await import('./plugins/menu.js');
                 const isRecentMenu = recentMenuChats.has(from) && (Date.now() - recentMenuChats.get(from) < 180000);
-                if (isQuotingMenu || isRecentMenu) {
+                let isGameActiveInRoom = isBakasaActive || (currentConn.gameSolo && currentConn.gameSolo[from]) || (currentConn.game && currentConn.game[from]) || (currentConn.obito && currentConn.obito[from]);
+                if (isGameActiveInRoom && /^[1-9]$/.test(normalizedBody)) {
+                    shouldExecuteMenu = false;
+                } else if (isQuotingMenu || isRecentMenu) {
                     shouldExecuteMenu = true;
                 }
             }

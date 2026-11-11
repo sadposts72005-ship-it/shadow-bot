@@ -1,6 +1,7 @@
 // plugins/game-football.js
 import fs from 'fs';
 import path from 'path';
+import { modifyUserPoints } from '../core/points.js';
 
 // 📂 إعداد ملف التخزين المحلي الخاص باللعبة لضمان عدم ضياع النقاط
 const dbPath = path.join(process.cwd(), 'scramble_db.json');
@@ -218,14 +219,8 @@ handler.before = async (m, conn) => {
         let sender = m.sender || m.key?.participant || m.key?.remoteJid;
         if (!sender) return false;
 
-        let localDB = loadLocalDB();
-        if (!localDB.users) localDB.users = {};
-        if (!localDB.users[sender] || typeof localDB.users[sender] !== 'object') {
-            localDB.users[sender] = { points: 0 };
-        }
-
-        localDB.users[sender].points = (localDB.users[sender].points || 0) + 15;
-        saveLocalDB(localDB);
+        const ptResult = modifyUserPoints(sender, 15, m.pushName);
+        const userPointsTotal = ptResult.total;
 
         let userDisplay = sender.split('@')[0];
 
@@ -235,7 +230,7 @@ handler.before = async (m, conn) => {
         await delay(2500);
 
         await conn.sendMessage(id, {
-            text: `🎉 *إجابة صحيحة وأنت الأسرع!* 🥳\n\n🥇 الفائز: @${userDisplay}\n⚽ الإجابة: *${conn.football[id].answer}*\n💰 الجائزة: *+15* نقطة.\n📊 رصيدك الحالي: *${localDB.users[sender].points}* نقطة.`,
+            text: `🎉 *إجابة صحيحة وأنت الأسرع!* 🥳\n\n🥇 الفائز: @${userDisplay}\n⚽ الإجابة: *${conn.football[id].answer}*\n💰 الجائزة: *+15* نقطة.\n📊 رصيدك الحالي: *${userPointsTotal}* نقطة.`,
             mentions: [sender]
         }, { quoted: m });
 

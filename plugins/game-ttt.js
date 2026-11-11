@@ -310,9 +310,11 @@ handler.before = async (m, conn) => {
 
     if (result) {
         if (result !== 'draw') {
-            let winnerJid = (result === '❌') ? game.p1 : (game.mode === 'pvp' ? game.p2 : null);
-            if (winnerJid) {
-                modifyUserPoints(winnerJid, 100);
+            const p1Jid = game.players?.p1 || game.p1;
+            const p2Jid = game.players?.p2 || game.p2;
+            let winnerJid = (result === '❌') ? p1Jid : (game.mode === 'pvp' ? p2Jid : null);
+            if (winnerJid && winnerJid !== 'bot') {
+                modifyUserPoints(winnerJid, 100, m.pushName);
             }
         }
         await waitAndReact(conn, id, m);
@@ -333,7 +335,10 @@ handler.before = async (m, conn) => {
         }
         result = checkWinner(game.board);
         if (result && result !== 'draw' && result === '❌') {
-            modifyUserPoints(game.p1, 100);
+            const p1Jid = game.players?.p1 || game.p1 || sender;
+            if (p1Jid && p1Jid !== 'bot') {
+                modifyUserPoints(p1Jid, 100, m.pushName);
+            }
         }
         await waitAndReact(conn, id, m);
         await sendBoard(conn, id, game.board, m, 'bot', result);

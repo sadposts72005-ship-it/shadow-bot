@@ -1705,7 +1705,8 @@ const datelsHandler = {
                     let subject = groupMetadata?.subject || 'بدون اسم';
                     let desc = groupMetadata?.desc || 'لا يوجد وصف حالياً';
                     let membersCount = participants.length;
-                    let adminsCount = groupAdmins.length;
+                    let actualAdminsList = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin');
+                    let adminsCount = actualAdminsList.length;
                     let isLocked = !!groupMetadata?.announce;
                     let isWelcome = !localDB.disabledWelcomes?.includes(from);
                     let infoText = `╭━━━〔 📋 *معلومات الجروب* 〕━━━╮\n\n` +
@@ -1728,16 +1729,100 @@ const datelsHandler = {
                     return true;
                 }
 
-                // منشن جماعي
+                // منشن مخفي (تنبيه جميع الأعضاء دون إظهار أرقامهم في الرسالة)
+                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('منشن مخفي') || normalizedBody.startsWith('تاغ مخفي') || normalizedBody.startsWith('تاج مخفي') || normalizedBody.startsWith('مخفي') || normalizedBody.startsWith('تنبيه مخفي'))) {
+                    await handleCommandTiming('👻');
+                    let customMsg = body.replace(/^(منشن\s*مخفي|تاغ\s*مخفي|تاج\s*مخفي|مخفي|تنبيه\s*مخفي)\s*/i, '').trim();
+                    let mentionsList = participants.map(p => p.id).filter(Boolean);
+                    let ghostText = customMsg 
+                        ? `👻 *[ تنبيه مخفي للجميع ]* 🔔\n\n${customMsg}`
+                        : `👻 *[ تنبيه لجميع أعضاء الروم ]* 🔔`;
+
+                    await currentConn.sendMessage(from, { text: ghostText, mentions: mentionsList }, { quoted: mek });
+                    return true;
+                }
+
+                // منشن جماعي ظاهر
                 if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('منشن') || normalizedBody.startsWith('تاغ') || normalizedBody.startsWith('تاج'))) {
                     await handleCommandTiming('📢');
                     let customMsg = body.replace(/^(منشن|تاغ|تاج)\s*/i, '').trim();
-                    let mentionsList = participants.map(p => p.id);
+                    let mentionsList = participants.map(p => p.id).filter(Boolean);
                     let tagText = `📢 *منشن جماعي لجميع الأعضاء:* 📢\n`;
                     if (customMsg) tagText += `\n💬 *الرسالة:* ${customMsg}\n`;
                     tagText += `\n` + participants.map(p => `@${getCleanNumber(p.id)}`).join(' ');
 
                     await currentConn.sendMessage(from, { text: tagText, mentions: mentionsList }, { quoted: mek });
+                    return true;
+                }
+
+                // أمر ضيف (إضافة عضو للجروب عبر البوت أو إرسال دعوة له في الخاص إذا كان قافل الإضافة)
+                if (isActualRoomAdminOrOwner && /^(ضيف|اضف|اضافة|اضافه|add)\b/i.test(normalizedBody)) {
+                    // 1. التأكد أن البوت مشرف بالجروب
+                    const myClean = getCleanNumber(currentConn.user?.id);
+                    const isBotAdminInGroup = groupAdmins.includes(myClean);
+                    if (!isBotAdminInGroup) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ لازم ترقي البوت مشرف (Admin) في الجروب الأول عشان يقدر يضيف أعضاء!' }, { quoted: mek });
+                        return true;
+                    }
+
+                    // 2. استخراج الرقم
+                    let target = extractTarget(mek, body);
+                    if (!target) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم اللي عايز تضيفه بعد الأمر، مثال:\n*(ضيف 01012345678)* أو *(ضيف 201012345678)*' }, { quoted: mek });
+                        return true;
+                    }
+
+                    let targetNum = getCleanNumber(target);
+                    let targetJid = targetNum.length > 14 ? `${targetNum}@lid` : `${targetNum}@s.whatsapp.net`;
+
+                    // فحص وجود العضو بالفعل
+                    if (participants.some(p => getCleanNumber(p.id) === targetNum || (p.lid && getCleanNumber(p.lid) === targetNum))) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} متواجد بالفعل في هذا الجروب!`, mentions: [targetJid] }, { quoted: mek });
+                        return true;
+                    }
+
+                    await handleCommandTiming('➕');
+                    try {
+                        const res = await currentConn.groupParticipantsUpdate(from, [targetJid], 'add');
+                        groupMetaCache.delete(from);
+
+                        const status = res?.[0]?.status;
+                        if (status === '200') {
+                            await currentConn.sendMessage(from, { text: `✅ *تمت إضافة العضو @${targetNum} بنجاح إلى المجموعة!* 🎉`, mentions: [targetJid] }, { quoted: mek });
+                        } else if (status === '409') {
+                            await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} متواجد بالفعل في الجروب!` }, { quoted: mek });
+                        } else {
+                            // الشخص قافل الإضافة التلقائية (403 أو 408)
+                            let inviteCode = await currentConn.groupInviteCode(from).catch(() => null);
+                            if (inviteCode) {
+                                let inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
+                                let groupName = groupMetadata?.subject || 'الجروب';
+                                let inviteMsg = `👋 *مرحباً بك يا غالي!*\n\n` +
+                                                `تمت دعوتك من قِبل إدارة جروب *(${groupName})* للانضمام.\n` +
+                                                `🔗 *رابط الانضمام للجروب:* \n${inviteLink}\n\n` +
+                                                `نورنا يا نجم! ✨`;
+                                await currentConn.sendMessage(targetJid, { text: inviteMsg }).catch(() => {});
+                                await currentConn.sendMessage(from, { 
+                                    text: `📩 *الشخص قافل ميزة الإضافة المباشرة في إعدادات خصوصية حسابه!* \nتم إرسال رابط دعوة الجروب له في الخاص تلقائياً لينضم. 🚀`, 
+                                    mentions: [targetJid] 
+                                }, { quoted: mek });
+                            } else {
+                                await currentConn.sendMessage(from, { text: `❌ تعذر إضافة العضو (@${targetNum}).` }, { quoted: mek });
+                            }
+                        }
+                    } catch (err) {
+                        try {
+                            let inviteCode = await currentConn.groupInviteCode(from);
+                            let inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
+                            await currentConn.sendMessage(targetJid, { text: `👋 تمت دعوتك للانضمام إلى الجروب عبر الرابط التالي: \n${inviteLink}` }).catch(() => {});
+                            await currentConn.sendMessage(from, { text: `📩 الشخص قافل الإضافة، وتم إرسال رابط دعوة الجروب له في الخاص بنجاح! 🚀` }, { quoted: mek });
+                        } catch (_) {
+                            await currentConn.sendMessage(from, { text: '❌ تعذر إضافة العضو. تأكد من صحة الرقم ومن صلاحيات البوت!' }, { quoted: mek });
+                        }
+                    }
                     return true;
                 }
 

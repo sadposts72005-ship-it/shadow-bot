@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { modifyUserPoints } from '../core/points.js';
 
 const puzzleGames = new Map();
 
@@ -192,26 +193,50 @@ const puzzleHandler = {
             let { row, col } = game.emptyPos;
             let moveDirection = msgClean;
 
-            if (moveDirection === 'فوق' && row > 0) {
-                game.board[row][col] = game.board[row - 1][col]; 
-                game.board[row - 1][col] = "⬛"; 
-                game.emptyPos.row--; 
-                moved = true;
-            } else if (moveDirection === 'تحت' && row < 2) {
-                game.board[row][col] = game.board[row + 1][col];
-                game.board[row + 1][col] = "⬛"; 
-                game.emptyPos.row++; 
-                moved = true;
-            } else if (moveDirection === 'يمين' && col > 0) {
-                game.board[row][col] = game.board[row][col - 1]; 
-                game.board[row][col - 1] = "⬛"; 
-                game.emptyPos.col--; 
-                moved = true;
-            } else if (moveDirection === 'شمال' && col < 2) {
-                game.board[row][col] = game.board[row][col + 1]; 
-                game.board[row][col + 1] = "⬛"; 
-                game.emptyPos.col++; 
-                moved = true;
+            if (moveDirection === 'فوق') {
+                if (row > 0) {
+                    game.board[row][col] = game.board[row - 1][col]; 
+                    game.board[row - 1][col] = "⬛"; 
+                    game.emptyPos.row--; 
+                    moved = true;
+                } else {
+                    await client.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
+                    await gameDelay(1000);
+                    return await client.sendMessage(from, { text: "⚠️ الفراغ في أقصى الأعلى (فوق) بالفعل ومفيش قطعة فوقيه! جرب اتجاه تاني (تحت أو يمين أو شمال)." }, { quoted: m });
+                }
+            } else if (moveDirection === 'تحت') {
+                if (row < 2) {
+                    game.board[row][col] = game.board[row + 1][col];
+                    game.board[row + 1][col] = "⬛"; 
+                    game.emptyPos.row++; 
+                    moved = true;
+                } else {
+                    await client.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
+                    await gameDelay(1000);
+                    return await client.sendMessage(from, { text: "⚠️ الفراغ في أقصى الأسفل (تحت) بالفعل ومفيش قطعة تحتيه! جرب اتجاه تاني (فوق أو يمين أو شمال)." }, { quoted: m });
+                }
+            } else if (moveDirection === 'يمين') {
+                if (col > 0) {
+                    game.board[row][col] = game.board[row][col - 1]; 
+                    game.board[row][col - 1] = "⬛"; 
+                    game.emptyPos.col--; 
+                    moved = true;
+                } else {
+                    await client.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
+                    await gameDelay(1000);
+                    return await client.sendMessage(from, { text: "⚠️ الفراغ في أقصى اليمين بالفعل ومفيش قطعة على يمينه! جرب اتجاه تاني (فوق أو تحت أو شمال)." }, { quoted: m });
+                }
+            } else if (moveDirection === 'شمال') {
+                if (col < 2) {
+                    game.board[row][col] = game.board[row][col + 1]; 
+                    game.board[row][col + 1] = "⬛"; 
+                    game.emptyPos.col++; 
+                    moved = true;
+                } else {
+                    await client.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
+                    await gameDelay(1000);
+                    return await client.sendMessage(from, { text: "⚠️ الفراغ في أقصى الشمال بالفعل ومفيش قطعة على شماله! جرب اتجاه تاني (فوق أو تحت أو يمين)." }, { quoted: m });
+                }
             }
 
             if (moved) {
@@ -220,28 +245,13 @@ const puzzleHandler = {
                 const winningStatus = "12345678⬛";
 
                 await client.sendMessage(from, { react: { text: "🎮", key: m.key } }).catch(() => {});
+                await gameDelay(1000);
 
                 if (currentStatus === winningStatus) {
                     puzzleGames.delete(from);
 
-                    try {
-                        const dbPath = path.join(process.cwd(), 'scramble_db.json');
-                        if (fs.existsSync(dbPath)) {
-                            let db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-                            if (!db.users) db.users = {};
-                            let cleanSender = sender.split('@')[0].split(':')[0] + '@s.whatsapp.net';
-                            if (!db.users[cleanSender]) {
-                                db.users[cleanSender] = { name: m.pushName || 'عضو جديد', points: 1000, level: 1, isInfinite: false };
-                            }
-                            if (!db.users[cleanSender].isInfinite) {
-                                db.users[cleanSender].points = (db.users[cleanSender].points || 0) + 500;
-                                db.users[cleanSender].level = (db.users[cleanSender].level || 1) + 1;
-                            }
-                            fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf-8');
-                        }
-                    } catch (e) {
-                        console.error("Error saving puzzle points:", e);
-                    }
+                    // إضافة 500 نقطة للفائز وتسجيلها فوراً في البروفايل
+                    modifyUserPoints(sender, 500, m.pushName);
                     
                     let winMsg = `🎉 *طررررش! فوز ساحق، تم ترتيب البازل بنجاح!* 🎉\n`;
                     winMsg += `*━━━━━━━━━━━━━━━━━━━━━*\n\n`;

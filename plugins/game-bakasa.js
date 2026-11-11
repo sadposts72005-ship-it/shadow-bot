@@ -92,6 +92,7 @@ const handler = async (mek, currentConn) => {
     let firstWord = args[0] || '';
 
     if (!currentConn.bakasa) currentConn.bakasa = {};
+    global.bakasa = currentConn.bakasa;
     if (!currentConn.pmUsers) currentConn.pmUsers = new Set();
     if (!currentConn.bakasa[from]) {
         currentConn.bakasa[from] = {
@@ -129,7 +130,7 @@ const handler = async (mek, currentConn) => {
     }
 
     // إذا تم تحديد اسم بوت في أمر الفتح (مثل: بكاسة شادو أو بكاسة سوسو)، يتأكد البوت أنه هو المعني
-    if (isExplicitBakasa && args[1] && (args[1] !== 'شرح' && args[1] !== 'فتح' && args[1] !== 'الغاء' && args[1] !== 'إلغاء' && !matchCategory(args.slice(1).join(' ')))) {
+    if (isExplicitBakasa && args[1] && (args[1] !== 'شرح' && args[1] !== 'فتح' && args[1] !== 'الغاء' && args[1] !== 'إلغاء' && args[1] !== 'قف' && args[1] !== 'وقف' && !matchCategory(args.slice(1).join(' ')))) {
         const targetName = args[1];
         const isMe = targetName === botNameNorm || (callNameNorm && targetName === callNameNorm);
         if (!isMe && (targetName === 'شادو' || targetName.length >= 2)) {
@@ -543,14 +544,14 @@ const handler = async (mek, currentConn) => {
     }
 
     // --- 9. إلغاء وتصفير الروم ---
-    if (subCommand === 'إلغاء' || subCommand === 'الغاء' || (isExplicitBakasa && (args[1] === 'الغاء' || args[1] === 'إلغاء'))) {
+    if (subCommand === 'إلغاء' || subCommand === 'الغاء' || subCommand === 'قف' || subCommand === 'وقف' || subCommand === 'ايقاف' || subCommand === 'ستوب' || subCommand === 'خروج' || (isExplicitBakasa && (args[1] === 'الغاء' || args[1] === 'إلغاء' || args[1] === 'قف' || args[1] === 'وقف' || args[1] === 'خروج'))) {
         game.status = 'off';
         game.players = [];
         game.playerNumbers = {};
         game.nextPlayers = [];
         game.votes = {};
         game.category = 'all';
-        return currentConn.sendMessage(from, { text: '🛑 تم إلغاء لعبة بكاسة وتصفير الروم بنجاح.' }, { quoted: mek });
+        return currentConn.sendMessage(from, { text: '🛑 تم إيقاف وإلغاء لعبة بكاسة وتصفير الروم بنجاح.' }, { quoted: mek });
     }
 };
 

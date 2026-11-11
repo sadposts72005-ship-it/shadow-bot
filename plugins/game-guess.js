@@ -1,6 +1,7 @@
 // plugins/game-guess.js
 import fs from 'fs';
 import path from 'path';
+import { modifyUserPoints, getUserPoints } from '../core/points.js';
 
 // 📂 إعداد ملف التخزين المحلي الخاص بلعبة احزر لضمان عدم ضياع النقاط
 const dbPath = path.join(process.cwd(), 'guess_db.json');
@@ -161,10 +162,11 @@ handler.before = async (m, conn) => {
     // 2️⃣ شراء تلميح
     if (normalizedBody === 'شراء تلميح احزر') {
         await triggerEffects();
-        if (!userGameData.points || userGameData.points < 5000) {
-            await conn.sendMessage(id, { text: `❌ رصيدك مش كفاية يا بطل! محتاج 5000 نقطة. (رصيدك الحالي: ${userGameData.points || 0})` }, { quoted: m });
+        const currentPts = getUserPoints(sender);
+        if (currentPts < 5000) {
+            await conn.sendMessage(id, { text: `❌ رصيدك مش كفاية يا بطل! محتاج 5000 نقطة. (رصيدك الحالي: ${currentPts})` }, { quoted: m });
         } else {
-            userGameData.points -= 5000;
+            modifyUserPoints(sender, -5000, m.pushName);
             userGameData.hintsCountGuess = 0;
             userGameData.lastHintTimeGuess = Date.now();
             saveLocalDB(localDB);
@@ -188,12 +190,13 @@ handler.before = async (m, conn) => {
 
         if ((userGameData.hintsCountGuess || 0) >= 6) {
             let timeLeft = Math.ceil((oneHour - (now - userGameData.lastHintTimeGuess)) / (60 * 1000));
-            let canBuy = (userGameData.points >= 5000);
+            let currentPts = getUserPoints(sender);
+            let canBuy = (currentPts >= 5000);
 
             let outOfHintsText = `🛑 *تـلـمـيـحـاتـك خـلصـت* 🛑\n\n` +
                 `استخدمت الـ 6 تلميحات المتاحة ليك في لعبة احزر.\n\n` +
                 `⏱️ هتتجدد تلقائياً بعد: *${timeLeft}* دقيقة.\n` +
-                `💰 رصيدك الحالي في اللعبة: *${userGameData.points || 0}* نقطة.\n\n` +
+                `💰 رصيدك الحالي في اللعبة: *${currentPts}* نقطة.\n\n` +
                 `${canBuy ? '✅ تقدر تشتري 6 تلميحات جديدة بـ 5000 نقطة!\n💡 اكتب ( *شراء تلميح احزر* ) لتأكيد العملية.' : '❌ محتاج 5000 نقطة عشان تشتري تلميحات جديدة.'}`;
 
             await conn.sendMessage(id, { text: outOfHintsText }, { quoted: m });
@@ -243,10 +246,11 @@ handler.before = async (m, conn) => {
     let botAnswer = normalizeArabic(conn.obito[cleanId].correctAnswer);
 
     if (playerAnswer === botAnswer) {
-        userGameData.points = (userGameData.points || 0) + 500;
+        const res = modifyUserPoints(sender, 500, m.pushName);
+        const totalPts = res.total ?? res.points ?? 500;
         clearTimeout(conn.obito[cleanId].timer);
 
-        let successText = `✅ *إجـابـة صـحـيـحـة* ✅\n\nكفو يا أسطورة! حزرت الشخصية صح 🎉\n\n🎭 *الشخصية:* ${conn.obito[cleanId].correctAnswer}\n🎁 *جائزتك:* +500 نقطة\n📊 *إجمالي نقاطك:* ${userGameData.points} نقطة`;
+        let successText = `✅ *إجـابـة صـحـيـحـة* ✅\n\nكفو يا أسطورة! حزرت الشخصية صح 🎉\n\n🎭 *الشخصية:* ${conn.obito[cleanId].correctAnswer}\n🎁 *جائزتك:* +500 نقطة\n📊 *إجمالي نقاطك:* ${totalPts} نقطة`;
         
         await triggerEffects();
         await conn.sendMessage(id, { text: successText }, { quoted: m });
