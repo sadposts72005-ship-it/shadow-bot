@@ -18,6 +18,9 @@ import {
     getSubBotsReport,
     cleanPhoneNumber,
     loadSubBotsRegistry,
+    loadSavedBotProfiles,
+    saveSavedBotProfile,
+    removeSavedBotProfile,
     updateSubBotName,
     updateSubBotCallName,
     updateSubBotHajj,
@@ -1104,7 +1107,7 @@ export async function handleAllMessages(mek, currentConn) {
         if (retryKey && !currentConn.isSubBot) {
             const retryData = global.pendingPairingRetry.get(retryKey);
             const normAns = normalizedBody.trim();
-            const wantsNewCode = ['كود تاني', 'كود جديد', 'تاني', 'جديد', 'كود', '1', 'اه', 'نعم', 'ايوه', 'ايوة', 'ارسل كود', 'واحد'].includes(normAns);
+            const wantsNewCode = ['تجديد', 'تجديد الكود', 'جدد', 'كود تاني', 'كود جديد', 'تاني', 'جديد', 'كود', '1', 'اه', 'نعم', 'ايوه', 'ايوة', 'ارسل كود', 'واحد'].includes(normAns);
             const wantsCancel = ['الغاء', 'إلغاء', 'لا', 'لأ', 'خروج', 'stop', 'cancel', '2', 'اتنين', 'اثنين'].includes(normAns);
 
             if (wantsNewCode) {
@@ -1114,7 +1117,7 @@ export async function handleAllMessages(mek, currentConn) {
                 global.pendingPairingRetry.delete(retryKey);
 
                 await respondWithStrictTiming('🔄', async () => {
-                    await currentConn.sendMessage(from, { text: '🔄 *أمرك! جاري استخراج كود اقتران جديد الآن، انتظر ثوانٍ...* ⏳' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '🔄 *أمرك! جاري تجديد واستخراج كود اقتران جديد ساري بنفس البيانات الآن، انتظر ثوانٍ...* ⏳' }, { quoted: mek });
                 });
 
                 requestSubBotPairing(
@@ -1142,8 +1145,20 @@ export async function handleAllMessages(mek, currentConn) {
                     }
                 } catch (_) {}
 
+                // حفظ بيانات البوت الملغي للحفاظ على الخصوصية وإمكانية الاسترجاع عند كتابة (تنصيب)
+                saveSavedBotProfile(cleanSender || retryKey, {
+                    botName: retryData.botName,
+                    callName: retryData.callName,
+                    gender: retryData.gender,
+                    personality: retryData.personality,
+                    targetPhone: retryData.targetPhone,
+                    adminPhone: cleanSender || retryData.adminPhone
+                });
+
                 await respondWithStrictTiming('🛑', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ *تم إلغاء عملية التنصيب بنجاح.*' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { 
+                        text: `❌ *تم إلغاء عملية التنصيب بنجاح.* 🛑\n💡 _تم حفظ بيانات بوتك (${retryData.botName})، لو حبيت ترجع تشغله في أي وقت اكتب فقط (تنصيب)._` 
+                    }, { quoted: mek });
                 });
                 return;
             }
@@ -1166,10 +1181,67 @@ export async function handleAllMessages(mek, currentConn) {
                 // إمكانية الإلغاء
                 if (['الغاء', 'إلغاء', 'خروج', 'stop', 'cancel'].includes(normalizedBody)) {
                     installState.delete(cleanSender);
+                    installState.delete(installKey);
                     await respondWithStrictTiming('❌', async () => {
                         await currentConn.sendMessage(from, { text: '❌ تم إلغاء عملية تنصيب البوت الفرعي بنجاح.' }, { quoted: mek });
                     });
                     return;
+                }
+
+                // 🔄 خطوة الاختيار بين تشغيل البوت القديم المحفوظ أو تنصيب بوت جديد
+                if (currentInstall.step === 'CONFIRM_REUSE') {
+                    const normAns = normalizedBody.trim();
+                    const isOld = ['1', 'القديم', 'قديم', 'بوت قديم', 'تشغيل القديم', 'نعم', 'اه', 'ايوه', 'ايوة', 'واحد'].includes(normAns);
+                    const isNew = ['2', 'جديد', 'جديد بوت', 'تنصيب جديد', 'لا', 'لأ', 'اتنين', 'اثنين'].includes(normAns);
+
+                    if (isOld) {
+                        const saved = currentInstall.savedProfile;
+                        currentInstall.botName = saved.botName;
+                        currentInstall.callName = saved.callName || saved.botName;
+                        currentInstall.gender = saved.gender || 'male';
+                        currentInstall.personality = saved.personality || 'respectful';
+                        currentInstall.step = 4; // الانتقال مباشرة لإدخال رقم هاتف البوت!
+                        delete currentInstall.savedProfile;
+                        installState.set(cleanSender, currentInstall);
+
+                        const askPhoneText = 
+                            `✅ *تم استرجاع إعدادات وتسمية بوتك بنجاح!* 🌸\n` +
+                            `🏷️ *الاسم:* « ${saved.botName} »\n` +
+                            `👤 *الجنس:* ${saved.gender === 'female' ? 'أنثى 👧' : 'ذكر 👦'}\n` +
+                            `🎭 *الشخصية:* ${saved.personality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم 😇✨'}\n\n` +
+                            `4️⃣ *اكتب الآن رقم الهاتف (الشريحة) الذي تريد تشغيل البوت عليه:*\n` +
+                            `• اكتب الرقم بالأرقام الإنجليزية بدون مسافات أو فواصل.\n` +
+                            `• مثال: *01012345678* أو *201012345678* أو بأي كود دولة.\n\n` +
+                            `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
+
+                        await respondWithStrictTiming('📱', async () => {
+                            await currentConn.sendMessage(from, { text: askPhoneText }, { quoted: mek });
+                        });
+                        return;
+                    } else if (isNew) {
+                        removeSavedBotProfile(cleanSender);
+                        currentInstall.step = 1;
+                        delete currentInstall.savedProfile;
+                        installState.set(cleanSender, currentInstall);
+
+                        const startNewText = 
+                            `✨ *تمام! هنبدأ تنصيب جديد خطوة بخطوة:* 🆕\n\n` +
+                            `1️⃣ *ما هو الاسم الرسمي الذي تريده لبوتك الجديد؟*\n` +
+                            `(اكتب الاسم فقط في رسالة، مثال: إمبراطور الظلام / شادو 2 / الصقر الملكي)\n\n` +
+                            `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
+
+                        await respondWithStrictTiming('🏷️', async () => {
+                            await currentConn.sendMessage(from, { text: startNewText }, { quoted: mek });
+                        });
+                        return;
+                    } else {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { 
+                                text: `⚠️ *برجاء الاختيار يا فنان:*\n• أرسل *(1)* أو *(القديم)* لتشغيل بوتك السابق (${currentInstall.savedProfile?.botName})\n• أرسل *(2)* أو *(جديد)* لتنصيب بوت جديد\n• أو اكتب *(الغاء)*` 
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
                 }
 
                 // الخطوة 1: اختيار اسم البوت الرسمي
@@ -1480,6 +1552,45 @@ export async function handleAllMessages(mek, currentConn) {
 
                 await respondWithStrictTiming('⚠️', async () => {
                     await currentConn.sendMessage(from, { text: subBotNotice }, { quoted: mek });
+                });
+                return;
+            }
+
+            // فحص وجود بروفايل بوت محفوظ مسبقاً لهذا الرقم خصيصاً (للحفاظ على الخصوصية التامة)
+            const savedProfiles = loadSavedBotProfiles();
+            const userSaved = savedProfiles[cleanSender];
+
+            if (userSaved && userSaved.botName) {
+                const restorePrompt = 
+                    `✨ *مرحباً بك في نظام تنصيب البوتات الفرعية (Sub-Bot)!* 🤖\n\n` +
+                    `👑 لقينا عندك إعدادات بوت محفوظ برقمك باسم: *( ${userSaved.botName} )* 🏷️\n` +
+                    `• 👤 *الجنس:* ${userSaved.gender === 'female' ? 'أنثى 👧' : 'ذكر 👦'}\n` +
+                    `• 🎭 *الشخصية:* ${userSaved.personality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم 😇✨'}\n` +
+                    (userSaved.targetPhone ? `• 📱 *الرقم السابق:* +${userSaved.targetPhone}\n` : '') +
+                    `\n❓ *تحب تشغل وترجع بوتك القديم ولا تنصب بوت جديد؟*\n\n` +
+                    `1️⃣ أرسل *(1)* أو *(القديم)* ➔ لإعادة تشغيل بوتك القديم بنفس الاسم والإعدادات فوراً ⚡\n` +
+                    `2️⃣ أرسل *(2)* أو *(جديد)* ➔ لبدء تنصيب جديد واختيار اسم وشخصية جديدة 🆕\n\n` +
+                    `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
+
+                if (isRealGroup) {
+                    await respondWithStrictTiming('🔒', async () => {
+                        await currentConn.sendMessage(from, { 
+                            text: `⚠️ *عفواً يا فنان! عملية تنصيب البوت تتم حصرياً في الخاص لسرية كود الربط وأمان حسابك.*\n💬 تم إرسال رسالة البدء لك في الخاص.. افتح الشات الخاص مع البوت وابدأ فوراً! 🚀` 
+                        }, { quoted: mek });
+                    });
+                    const privateJid = `${cleanSender}@s.whatsapp.net`;
+                    installState.set(cleanSender, { step: 'CONFIRM_REUSE', savedProfile: userSaved, createdAt: Date.now() });
+                    try {
+                        await currentConn.sendMessage(privateJid, { text: restorePrompt });
+                    } catch (_) {}
+                    return;
+                }
+
+                installState.set(cleanSender, { step: 'CONFIRM_REUSE', savedProfile: userSaved, createdAt: Date.now() });
+                if (cleanFrom) installState.set(cleanFrom, { step: 'CONFIRM_REUSE', savedProfile: userSaved, createdAt: Date.now() });
+
+                await respondWithStrictTiming('🤖', async () => {
+                    await currentConn.sendMessage(from, { text: restorePrompt }, { quoted: mek });
                 });
                 return;
             }
@@ -1813,6 +1924,14 @@ export async function handleAllMessages(mek, currentConn) {
 
                 // تأخير ثانيتين لضمان وصول الرسالة قبل إغلاق السوكيت
                 setTimeout(async () => {
+                    saveSavedBotProfile(cleanSender, {
+                        botName: botName,
+                        callName: currentConn.callName || botName,
+                        gender: currentConn.gender || 'male',
+                        personality: currentConn.personality || 'respectful',
+                        targetPhone: myNumber,
+                        adminPhone: cleanSender
+                    });
                     await deleteSubBotRemote(myNumber, currentConn, false);
 
                     // إشعار الحج الأصلي إذا كان الحاذف هو صاحب البوت الفرعي
@@ -1840,10 +1959,18 @@ export async function handleAllMessages(mek, currentConn) {
 
             if (userBotPhone) {
                 const targetBotName = registry[userBotPhone]?.botName || userBotPhone;
+                saveSavedBotProfile(cleanSender, {
+                    botName: targetBotName,
+                    callName: registry[userBotPhone]?.callName || targetBotName,
+                    gender: registry[userBotPhone]?.gender || 'male',
+                    personality: registry[userBotPhone]?.personality || 'respectful',
+                    targetPhone: userBotPhone,
+                    adminPhone: cleanSender
+                });
                 await deleteSubBotRemote(userBotPhone, currentConn, false);
                 await respondWithStrictTiming('🗑️', async () => {
                     await currentConn.sendMessage(from, { 
-                        text: `🛑 *تم إلغاء تنصيب بوتك الفرعي (${targetBotName}) وحذف ملفاته بالكامل بنجاح!* ✅` 
+                        text: `🛑 *تم إلغاء تنصيب بوتك الفرعي (${targetBotName}) وحذف ملفاته بالكامل بنجاح!* ✅\n💡 _تم حفظ بيانات بوتك لتشغيله في أي وقت بمجرد كتابة (تنصيب)._` 
                     }, { quoted: mek });
                 });
                 return;

@@ -104,6 +104,8 @@ async function startShadowBot() {
         }
     });
 
+    global.conn = conn;
+
     // 🛑 تتبع وتفادي تكرار ردود البوت على رسائله هو فقط
     const originalSendMessage = conn.sendMessage.bind(conn);
     conn.sendMessage = async (...args) => {

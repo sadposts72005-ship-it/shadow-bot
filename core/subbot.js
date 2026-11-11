@@ -41,6 +41,59 @@ export function saveSubBotsRegistry(data) {
     }
 }
 
+const SAVED_PROFILES_FILE = path.join(process.cwd(), 'sub_bots_saved.json');
+
+/**
+ * تحميل إعدادات البوتات المحفوظة لأصحابها
+ */
+export function loadSavedBotProfiles() {
+    try {
+        if (fs.existsSync(SAVED_PROFILES_FILE)) {
+            return JSON.parse(fs.readFileSync(SAVED_PROFILES_FILE, 'utf8'));
+        }
+    } catch (e) {
+        console.error('❌ خطأ في قراءة إعدادات البوتات المحفوظة:', e?.message || e);
+    }
+    return {};
+}
+
+/**
+ * حفظ إعدادات البوت برقم صاحبه للحفاظ على الخصوصية وإمكانية الاسترجاع
+ */
+export function saveSavedBotProfile(phone, profile) {
+    if (!phone) return;
+    try {
+        const cleanP = cleanPhoneNumber(phone) || String(phone).replace(/[^0-9]/g, '');
+        if (!cleanP) return;
+        const data = loadSavedBotProfiles();
+        data[cleanP] = {
+            ...profile,
+            updatedAt: Date.now()
+        };
+        fs.writeFileSync(SAVED_PROFILES_FILE, JSON.stringify(data, null, 2), 'utf8');
+        return true;
+    } catch (e) {
+        console.error('❌ خطأ في حفظ إعدادات البوت المحفوظ:', e?.message || e);
+        return false;
+    }
+}
+
+/**
+ * حذف إعدادات البوت المحفوظ للمستخدم
+ */
+export function removeSavedBotProfile(phone) {
+    if (!phone) return;
+    try {
+        const cleanP = cleanPhoneNumber(phone) || String(phone).replace(/[^0-9]/g, '');
+        if (!cleanP) return;
+        const data = loadSavedBotProfiles();
+        if (data[cleanP]) {
+            delete data[cleanP];
+            fs.writeFileSync(SAVED_PROFILES_FILE, JSON.stringify(data, null, 2), 'utf8');
+        }
+    } catch (_) {}
+}
+
 /**
  * تنظيف رقم الهاتف وإبقاؤه أرقاماً فقط مع تحويل الأرقام المحلية للدولية
  */
@@ -396,6 +449,24 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     let warnTimer = null;
     let expireTimer = null;
 
+    async function sendNotify(text, quoted = null) {
+        const c = global.conn || mainConn;
+        if (!c || !notifyJid) return false;
+        if (quoted) {
+            try {
+                await c.sendMessage(notifyJid, { text }, { quoted });
+                return true;
+            } catch (_) {}
+        }
+        try {
+            await c.sendMessage(notifyJid, { text });
+            return true;
+        } catch (e) {
+            console.error('❌ [Sub-Bot Notify Error]:', e?.message || e);
+            return false;
+        }
+    }
+
     async function startPairingEngine() {
         if (isExpired) return;
         try {
@@ -442,31 +513,33 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                     `⏳ *الكود صالح لمدة 3 دقائق فقط.*\n` +
                                     `⚠️ سيصلك إشعار تنبيه قبل دقيقة من انتهاء الوقت إذا لم تقم بالربط!`;
 
-                                await mainConn.sendMessage(notifyJid, { text: pairMsg }, { quoted: quotedMek });
+                                await sendNotify(pairMsg, quotedMek);
 
                                 // 📋 إرسال الكود في رسالة منفصلة مخصصة لنسخه بنقرة واحدة
                                 await new Promise(r => setTimeout(r, 800));
-                                await mainConn.sendMessage(notifyJid, { text: `${code}` });
+                                await sendNotify(`${code}`);
 
                                 // ⏱️ تنبيه بعد دقيقتين (120 ثانية) بأن المتبقي دقيقة واحدة فقط
                                 warnTimer = setTimeout(async () => {
-                                    if (!isConnected && !isExpired && (!sock.authState?.creds?.registered)) {
+                                    if (!isConnected && !isExpired) {
                                         try {
+                                            console.log(`⏱️ [Sub-Bot Pairing] إرسال تنبيه الدقيقة المتبقية للرقم (+${cleanPhone})`);
                                             const warnMsg = 
                                                 `⚠️ *تنبيه هام: متبقي دقيقة واحدة فقط!* ⏳\n\n` +
                                                 `كود اقتران بوتك (${botName}) سينتهي ويصبح غير صالح بعد 60 ثانية!\n` +
-                                                `📱 الكود مُرسل في الرسالة التالية لنسخه فوراً:`;
-                                            await mainConn.sendMessage(notifyJid, { text: warnMsg }, { quoted: quotedMek });
+                                                `📱 الكود متاح في الرسالة التالية لنسخه فوراً:`;
+                                            await sendNotify(warnMsg);
                                             await new Promise(r => setTimeout(r, 600));
-                                            await mainConn.sendMessage(notifyJid, { text: `${code}` });
+                                            await sendNotify(`${code}`);
                                         } catch (_) {}
                                     }
                                 }, 120000);
 
                                 // ⏱️ انتهاء صلاحية الكود بعد 3 دقائق (180 ثانية) وسؤال المستخدم إذا كان يريد كوداً آخر أم إلغاء
                                 expireTimer = setTimeout(async () => {
-                                    if (!isConnected && (!sock.authState?.creds?.registered)) {
+                                    if (!isConnected && !isExpired) {
                                         isExpired = true;
+                                        console.log(`⌛ [Sub-Bot Pairing] انتهاء صلاحية الكود للرقم (+${cleanPhone})`);
 
                                         try {
                                             sock.end(new Error('Pairing code 3m timeout'));
@@ -475,14 +548,22 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                         const retryKey = cleanAdmin || getCleanNumber(notifyJid) || cleanPhone;
                                         const retryMsg = 
                                             `⌛ *انتهت صلاحية كود الاقتران الحالي (3 دقائق)!* ⌛\n\n` +
-                                            `❓ *عايز كود تاني ولا تلغي العملية؟*\n\n` +
-                                            `1️⃣ اكتب *(كود تاني)* أو *(1)* لاستخراج كود اقتران جديد 🔄\n` +
+                                            `❓ *عايز تطلب كود جديد بنفس التنصيب ولا تلغي العملية؟*\n\n` +
+                                            `1️⃣ اكتب *(تجديد)* أو *(كود جديد)* أو *(1)* لتجديد الكود واستخراج كود ساري بنفس بيانات التنصيب 🔄\n` +
                                             `2️⃣ اكتب *(الغاء)* أو *(2)* لإلغاء عملية التنصيب ❌\n\n` +
-                                            `⏱️ _الرسالة دي هتقعد 5 دقائق، لو مردتش البوت هيلغي العملية تلقائياً._`;
+                                            `⏱️ _الرسالة دي هتقعد 5 دقائق، لو مردتش البوت هيلغي العملية تلقائياً ويحفظ بيانات بوتك لتشغيله في أي وقت._`;
 
-                                        try {
-                                            await mainConn.sendMessage(notifyJid, { text: retryMsg }, { quoted: quotedMek });
-                                        } catch (_) {}
+                                        await sendNotify(retryMsg);
+
+                                        // حفظ بيانات البوت الملغي للحفاظ على الخصوصية وإمكانية الاسترجاع
+                                        saveSavedBotProfile(retryKey, {
+                                            botName,
+                                            callName: finalCallName,
+                                            gender: finalGender,
+                                            personality: finalPersonality,
+                                            targetPhone: cleanPhone,
+                                            adminPhone: cleanAdmin || retryKey
+                                        });
 
                                         // تايمر الـ 5 دقائق للإلغاء التلقائي في حال عدم الرد
                                         const autoCancelTimer = setTimeout(async () => {
@@ -497,10 +578,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                                     }
                                                 } catch (_) {}
 
-                                                try {
-                                                    const autoCancelMsg = `❌ *تم إلغاء عملية التنصيب تلقائياً لعدم الرد خلال 5 دقائق.* ⌛`;
-                                                    await mainConn.sendMessage(notifyJid, { text: autoCancelMsg });
-                                                } catch (_) {}
+                                                console.log(`❌ [Sub-Bot Pairing] إلغاء تلقائي للتنصيب بعد 5 دقائق لعدم الرد (+${cleanPhone})`);
+                                                const autoCancelMsg = `❌ *تم إلغاء عملية التنصيب تلقائياً لعدم الرد خلال 5 دقائق.* ⌛\n💡 _تم حفظ بيانات بوتك (${botName})، لو حبيت ترجع تشغله في أي وقت اكتب فقط (تنصيب)._`;
+                                                await sendNotify(autoCancelMsg);
                                             }
                                         }, 5 * 60 * 1000);
 
@@ -546,6 +626,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         global.pendingPairingRetry.delete(cleanPhone);
                         if (notifyJid) global.pendingPairingRetry.delete(getCleanNumber(notifyJid));
                     }
+                    removeSavedBotProfile(cleanAdmin);
+                    removeSavedBotProfile(cleanPhone);
+                    if (notifyJid) removeSavedBotProfile(getCleanNumber(notifyJid));
                     subBotStartTime = Math.floor(Date.now() / 1000);
                     sock.subBotStartTime = subBotStartTime;
                     console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
