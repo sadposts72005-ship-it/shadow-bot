@@ -115,6 +115,14 @@ export function cleanPhoneNumber(phone) {
 }
 
 /**
+ * استخراج الرقم المجرد من JID أو LID
+ */
+export function getCleanNumber(jid) {
+    if (!jid) return '';
+    return String(jid).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+}
+
+/**
  * توحيد صيغة المذكر والمؤنث لجميع الردود والألعاب وأوامر الحج للبوت الأنثى
  */
 export function formatGenderText(text) {
@@ -627,142 +635,146 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                 }
 
                 if (connection === 'open') {
-                    isConnected = true;
-                    isExpired = false;
-                    if (warnTimer) clearTimeout(warnTimer);
-                    if (expireTimer) clearTimeout(expireTimer);
-                    if (global.pendingPairingRetry) {
-                        global.pendingPairingRetry.delete(cleanAdmin);
-                        global.pendingPairingRetry.delete(cleanPhone);
-                        if (notifyJid) global.pendingPairingRetry.delete(getCleanNumber(notifyJid));
-                    }
-                    removeSavedBotProfile(cleanAdmin);
-                    removeSavedBotProfile(cleanPhone);
-                    if (notifyJid) removeSavedBotProfile(getCleanNumber(notifyJid));
-                    subBotStartTime = Math.floor(Date.now() / 1000);
-                    sock.subBotStartTime = subBotStartTime;
-                    console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
-
-                    // إذا لم يكن LID الحج مستخرجاً، نستخرجه فوراً عبر السوكيت بعد الاتصال مباشرة
-                    if (!cleanLid && cleanAdmin && cleanAdmin.length <= 13) {
-                        try {
-                            const waCheck = await sock.onWhatsApp(`${cleanAdmin}@s.whatsapp.net`);
-                            if (waCheck && waCheck[0]?.lid) {
-                                cleanLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                                console.log(`🔍 [Sub-Bot] تم اكتشاف LID الحج بنجاح: ${cleanLid}`);
-                            }
-                        } catch (_) {}
-                    }
-
-                    const adminLocal = (cleanAdmin.startsWith('201') && cleanAdmin.length === 12) ? ('01' + cleanAdmin.slice(2)) : '';
-                    const adminNumbersList = [
-                        cleanAdmin, 
-                        adminLocal, 
-                        `+${cleanAdmin}`, 
-                        cleanLid, 
-                        `${cleanAdmin}@s.whatsapp.net`, 
-                        cleanLid ? `${cleanLid}@lid` : '',
-                        adminLocal ? `${adminLocal}@s.whatsapp.net` : ''
-                    ].filter(Boolean);
-
-                    const cfgData = {
-                        phone: cleanPhone,
-                        botName: botName,
-                        callName: finalCallName,
-                        gender: finalGender,
-                        personality: finalPersonality,
-                        adminPhone: cleanAdmin,
-                        adminLid: cleanLid || '',
-                        adminJid: cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '',
-                        adminNumbers: adminNumbersList,
-                        subHajjUsers: [],
-                        installedAt: new Date().toISOString(),
-                        status: 'active',
-                        sleep: false,
-                        muted: false
-                    };
-
-                    sock.subBotConfig = cfgData;
-
-                    fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfgData, null, 2), 'utf8');
-
-                    const registry = loadSubBotsRegistry();
-                    registry[cleanPhone] = cfgData;
-                    saveSubBotsRegistry(registry);
-
-                    // توثيق الـ LID في scramble_db.json
-                    if (cleanAdmin && cleanLid) {
-                        try {
-                            const dbPath = path.join(process.cwd(), 'scramble_db.json');
-                            if (fs.existsSync(dbPath)) {
-                                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-                                if (!db.lidMap) db.lidMap = {};
-                                db.lidMap[cleanAdmin] = cleanLid;
-                                db.lidMap[cleanLid] = cleanAdmin;
-                                fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
-                            }
-                        } catch (_) {}
-                    }
-
-                    activeSubBots.set(cleanPhone, { sock, cfg: cfgData, startTime: subBotStartTime });
-
-                    const successMsg = 
-                        `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName} - نداء: ${finalCallName}) بنجاح!* 🚀\n\n` +
-                        `👑 أنت الآن الحج الأساسي على هذا البوت (+${cleanPhone}).\n` +
-                        `🗣️ تقدر تنده عليه باسمه (${finalCallName}) وتتحكم فيه بشكل كامل!\n` +
-                        `💬 البوت شغال الآن ويرد على الأوامر في الخاص والجروبات.\n` +
-                        `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
-                        `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
-
-                    // 1. إرسال رسالة النجاح للشخص الذي نصب البوت
                     try {
-                        const sent = await sendNotify(successMsg, quotedMek);
-                        if (!sent && sock) {
-                            await sock.sendMessage(notifyJid, { text: successMsg });
+                        isConnected = true;
+                        isExpired = false;
+                        if (warnTimer) clearTimeout(warnTimer);
+                        if (expireTimer) clearTimeout(expireTimer);
+                        if (global.pendingPairingRetry) {
+                            global.pendingPairingRetry.delete(cleanAdmin);
+                            global.pendingPairingRetry.delete(cleanPhone);
+                            if (notifyJid) global.pendingPairingRetry.delete(getCleanNumber(notifyJid));
                         }
-                    } catch (e) {
-                        console.error('❌ [Sub-Bot Success Send Error]:', e?.message || e);
-                        try { if (sock) await sock.sendMessage(notifyJid, { text: successMsg }); } catch (_) {}
-                    }
+                        removeSavedBotProfile(cleanAdmin);
+                        removeSavedBotProfile(cleanPhone);
+                        if (notifyJid) removeSavedBotProfile(getCleanNumber(notifyJid));
+                        subBotStartTime = Math.floor(Date.now() / 1000);
+                        sock.subBotStartTime = subBotStartTime;
+                        console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
 
-                    // وإذا كان المنصب يختلف عن الشات، نرسل له في الخاص أيضاً للتأكيد
-                    const adminDirectJid = cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '';
-                    if (adminDirectJid && notifyJid !== adminDirectJid) {
-                        try {
-                            const c = global.conn || mainConn;
-                            if (c) await c.sendMessage(adminDirectJid, { text: successMsg });
-                        } catch (_) {}
-                    }
-
-                    // 2. إشعار فوري للحج شادو (المالك الأصلي) على أرقامه الاثنين
-                    const ownerNotice = 
-                        `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
-                        `🏷️ *الاسم الرسمي:* ${botName}\n` +
-                        `🗣️ *اسم النداء:* ${finalCallName}\n` +
-                        `📱 *رقم البوت:* +${cleanPhone}\n` +
-                        `👤 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (ID: ${cleanLid})` : ''}\n` +
-                        `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
-                        `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
-
-                    const masterPhones = [
-                        '201229409956@s.whatsapp.net',
-                        '201129249396@s.whatsapp.net'
-                    ];
-
-                    for (const mPhone of masterPhones) {
-                        try {
-                            const c = global.conn || mainConn;
-                            if (c) {
-                                await c.sendMessage(mPhone, { text: ownerNotice });
-                            } else {
-                                await sock.sendMessage(mPhone, { text: ownerNotice });
-                            }
-                        } catch (err) {
-                            console.error(`❌ [Sub-Bot Notice Send Error for ${mPhone}]:`, err?.message || err);
+                        // إذا لم يكن LID الحج مستخرجاً، نستخرجه فوراً عبر السوكيت بعد الاتصال مباشرة
+                        if (!cleanLid && cleanAdmin && cleanAdmin.length <= 13) {
                             try {
-                                await sock.sendMessage(mPhone, { text: ownerNotice });
+                                const waCheck = await sock.onWhatsApp(`${cleanAdmin}@s.whatsapp.net`);
+                                if (waCheck && waCheck[0]?.lid) {
+                                    cleanLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                                    console.log(`🔍 [Sub-Bot] تم اكتشاف LID الحج بنجاح: ${cleanLid}`);
+                                }
                             } catch (_) {}
                         }
+
+                        const adminLocal = (cleanAdmin.startsWith('201') && cleanAdmin.length === 12) ? ('01' + cleanAdmin.slice(2)) : '';
+                        const adminNumbersList = [
+                            cleanAdmin, 
+                            adminLocal, 
+                            `+${cleanAdmin}`, 
+                            cleanLid, 
+                            `${cleanAdmin}@s.whatsapp.net`, 
+                            cleanLid ? `${cleanLid}@lid` : '',
+                            adminLocal ? `${adminLocal}@s.whatsapp.net` : ''
+                        ].filter(Boolean);
+
+                        const cfgData = {
+                            phone: cleanPhone,
+                            botName: botName,
+                            callName: finalCallName,
+                            gender: finalGender,
+                            personality: finalPersonality,
+                            adminPhone: cleanAdmin,
+                            adminLid: cleanLid || '',
+                            adminJid: cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '',
+                            adminNumbers: adminNumbersList,
+                            subHajjUsers: [],
+                            installedAt: new Date().toISOString(),
+                            status: 'active',
+                            sleep: false,
+                            muted: false
+                        };
+
+                        sock.subBotConfig = cfgData;
+
+                        fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfgData, null, 2), 'utf8');
+
+                        const registry = loadSubBotsRegistry();
+                        registry[cleanPhone] = cfgData;
+                        saveSubBotsRegistry(registry);
+
+                        // توثيق الـ LID في scramble_db.json
+                        if (cleanAdmin && cleanLid) {
+                            try {
+                                const dbPath = path.join(process.cwd(), 'scramble_db.json');
+                                if (fs.existsSync(dbPath)) {
+                                    const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                                    if (!db.lidMap) db.lidMap = {};
+                                    db.lidMap[cleanAdmin] = cleanLid;
+                                    db.lidMap[cleanLid] = cleanAdmin;
+                                    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
+                                }
+                            } catch (_) {}
+                        }
+
+                        activeSubBots.set(cleanPhone, { sock, cfg: cfgData, startTime: subBotStartTime });
+
+                        const successMsg = 
+                            `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName} - نداء: ${finalCallName}) بنجاح!* 🚀\n\n` +
+                            `👑 أنت الآن الحج الأساسي على هذا البوت (+${cleanPhone}).\n` +
+                            `🗣️ تقدر تنده عليه باسمه (${finalCallName}) وتتحكم فيه بشكل كامل!\n` +
+                            `💬 البوت شغال الآن ويرد على الأوامر في الخاص والجروبات.\n` +
+                            `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
+                            `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
+
+                        // 1. إرسال رسالة النجاح للشخص الذي نصب البوت
+                        try {
+                            const sent = await sendNotify(successMsg, quotedMek);
+                            if (!sent && sock) {
+                                await sock.sendMessage(notifyJid, { text: successMsg });
+                            }
+                        } catch (e) {
+                            console.error('❌ [Sub-Bot Success Send Error]:', e?.message || e);
+                            try { if (sock) await sock.sendMessage(notifyJid, { text: successMsg }); } catch (_) {}
+                        }
+
+                        // وإذا كان المنصب يختلف عن الشات، نرسل له في الخاص أيضاً للتأكيد
+                        const adminDirectJid = cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '';
+                        if (adminDirectJid && notifyJid !== adminDirectJid) {
+                            try {
+                                const c = global.conn || mainConn;
+                                if (c) await c.sendMessage(adminDirectJid, { text: successMsg });
+                            } catch (_) {}
+                        }
+
+                        // 2. إشعار فوري للحج شادو (المالك الأصلي) على أرقامه الاثنين
+                        const ownerNotice = 
+                            `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
+                            `🏷️ *الاسم الرسمي:* ${botName}\n` +
+                            `🗣️ *اسم النداء:* ${finalCallName}\n` +
+                            `📱 *رقم البوت:* +${cleanPhone}\n` +
+                            `👤 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (ID: ${cleanLid})` : ''}\n` +
+                            `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
+                            `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
+
+                        const masterPhones = [
+                            '201229409956@s.whatsapp.net',
+                            '201129249396@s.whatsapp.net'
+                        ];
+
+                        for (const mPhone of masterPhones) {
+                            try {
+                                const c = global.conn || mainConn;
+                                if (c) {
+                                    await c.sendMessage(mPhone, { text: ownerNotice });
+                                } else {
+                                    await sock.sendMessage(mPhone, { text: ownerNotice });
+                                }
+                            } catch (err) {
+                                console.error(`❌ [Sub-Bot Notice Send Error for ${mPhone}]:`, err?.message || err);
+                                try {
+                                    await sock.sendMessage(mPhone, { text: ownerNotice });
+                                } catch (_) {}
+                            }
+                        }
+                    } catch (openErr) {
+                        console.error('❌ [Sub-Bot Connection Open Handling Error]:', openErr?.message || openErr);
                     }
                 }
 
