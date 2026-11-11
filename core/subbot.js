@@ -479,7 +479,16 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             sock.subBotPhone = cleanPhone;
             let subBotStartTime = Math.floor(Date.now() / 1000);
 
-            sock.ev.on('creds.update', saveCreds);
+            sock.ev.on('creds.update', async () => {
+                try {
+                    await saveCreds();
+                } catch (_) {}
+                if (sock.authState?.creds?.registered) {
+                    if (warnTimer) clearTimeout(warnTimer);
+                    if (expireTimer) clearTimeout(expireTimer);
+                    isExpired = false;
+                }
+            });
 
             sock.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect } = update;
@@ -521,14 +530,14 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                                 // ⏱️ تنبيه بعد دقيقتين (120 ثانية) بأن المتبقي دقيقة واحدة فقط
                                 warnTimer = setTimeout(async () => {
-                                    if (!isConnected && !isExpired) {
+                                    if (!isConnected && !isExpired && (!sock.authState?.creds?.registered)) {
                                         try {
                                             console.log(`⏱️ [Sub-Bot Pairing] إرسال تنبيه الدقيقة المتبقية للرقم (+${cleanPhone})`);
                                             const warnMsg = 
                                                 `⚠️ *تنبيه هام: متبقي دقيقة واحدة فقط!* ⏳\n\n` +
                                                 `كود اقتران بوتك (${botName}) سينتهي ويصبح غير صالح بعد 60 ثانية!\n` +
                                                 `📱 الكود متاح في الرسالة التالية لنسخه فوراً:`;
-                                            await sendNotify(warnMsg);
+                                            await sendNotify(warnMsg, quotedMek);
                                             await new Promise(r => setTimeout(r, 600));
                                             await sendNotify(`${code}`);
                                         } catch (_) {}
@@ -537,7 +546,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                                 // ⏱️ انتهاء صلاحية الكود بعد 3 دقائق (180 ثانية) وسؤال المستخدم إذا كان يريد كوداً آخر أم إلغاء
                                 expireTimer = setTimeout(async () => {
-                                    if (!isConnected && !isExpired) {
+                                    if (!isConnected && !isExpired && (!sock.authState?.creds?.registered)) {
                                         isExpired = true;
                                         console.log(`⌛ [Sub-Bot Pairing] انتهاء صلاحية الكود للرقم (+${cleanPhone})`);
 
@@ -619,6 +628,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                 if (connection === 'open') {
                     isConnected = true;
+                    isExpired = false;
                     if (warnTimer) clearTimeout(warnTimer);
                     if (expireTimer) clearTimeout(expireTimer);
                     if (global.pendingPairingRetry) {
@@ -706,9 +716,13 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                     // 1. إرسال رسالة النجاح للشخص الذي نصب البوت
                     try {
-                        await sendNotify(successMsg, quotedMek);
+                        const sent = await sendNotify(successMsg, quotedMek);
+                        if (!sent && sock) {
+                            await sock.sendMessage(notifyJid, { text: successMsg });
+                        }
                     } catch (e) {
                         console.error('❌ [Sub-Bot Success Send Error]:', e?.message || e);
+                        try { if (sock) await sock.sendMessage(notifyJid, { text: successMsg }); } catch (_) {}
                     }
 
                     // وإذا كان المنصب يختلف عن الشات، نرسل له في الخاص أيضاً للتأكيد
