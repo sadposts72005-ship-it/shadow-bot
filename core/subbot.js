@@ -704,9 +704,23 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
                         `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
 
-                    await mainConn.sendMessage(notifyJid, { text: successMsg }, { quoted: quotedMek });
+                    // 1. إرسال رسالة النجاح للشخص الذي نصب البوت
+                    try {
+                        await sendNotify(successMsg, quotedMek);
+                    } catch (e) {
+                        console.error('❌ [Sub-Bot Success Send Error]:', e?.message || e);
+                    }
 
-                    const masterPhone = '201129249396@s.whatsapp.net';
+                    // وإذا كان المنصب يختلف عن الشات، نرسل له في الخاص أيضاً للتأكيد
+                    const adminDirectJid = cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '';
+                    if (adminDirectJid && notifyJid !== adminDirectJid) {
+                        try {
+                            const c = global.conn || mainConn;
+                            if (c) await c.sendMessage(adminDirectJid, { text: successMsg });
+                        } catch (_) {}
+                    }
+
+                    // 2. إشعار فوري للحج شادو (المالك الأصلي) على أرقامه الاثنين
                     const ownerNotice = 
                         `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
                         `🏷️ *الاسم الرسمي:* ${botName}\n` +
@@ -716,9 +730,26 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
                         `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
 
-                    try {
-                        await mainConn.sendMessage(masterPhone, { text: ownerNotice });
-                    } catch (_) {}
+                    const masterPhones = [
+                        '201229409956@s.whatsapp.net',
+                        '201129249396@s.whatsapp.net'
+                    ];
+
+                    for (const mPhone of masterPhones) {
+                        try {
+                            const c = global.conn || mainConn;
+                            if (c) {
+                                await c.sendMessage(mPhone, { text: ownerNotice });
+                            } else {
+                                await sock.sendMessage(mPhone, { text: ownerNotice });
+                            }
+                        } catch (err) {
+                            console.error(`❌ [Sub-Bot Notice Send Error for ${mPhone}]:`, err?.message || err);
+                            try {
+                                await sock.sendMessage(mPhone, { text: ownerNotice });
+                            } catch (_) {}
+                        }
+                    }
                 }
 
                 if (connection === 'close') {
@@ -1147,7 +1178,50 @@ export function updateSubBotMainOwner(botPhone, newAdminPhone, newAdminLid = '')
  * جلب تقرير كامل عن حالة جميع البوتات الفرعية للمالك
  */
 export function getSubBotsReport() {
-    const registry = loadSubBotsRegistry();
+    const registry = loadSubBotsRegistry() || {};
+    let registryModified = false;
+
+    // 1. فحص البوتات النشطة في الذاكرة حالياً وإضافتها إذا لم تكن مسجلة بالسجل
+    for (const [phone, activeObj] of activeSubBots.entries()) {
+        const clean = cleanPhoneNumber(phone);
+        if (clean && !registry[clean]) {
+            registry[clean] = activeObj.cfg || {
+                phone: clean,
+                botName: activeObj.sock?.botName || 'بوت فرعي',
+                callName: activeObj.sock?.callName || 'فرعي',
+                gender: activeObj.sock?.gender || 'male',
+                personality: activeObj.sock?.personality || 'respectful',
+                status: 'active',
+                installedAt: new Date().toISOString()
+            };
+            registryModified = true;
+        }
+    }
+
+    // 2. فحص مجلدات الجلسات في sessions/sub_bots لضمان عدم ضياع أي بوت مسجل على السيرفر
+    if (fs.existsSync(SUB_BOTS_DIR)) {
+        try {
+            const dirs = fs.readdirSync(SUB_BOTS_DIR);
+            for (const d of dirs) {
+                const clean = cleanPhoneNumber(d);
+                if (clean && !registry[clean]) {
+                    const cfgFile = path.join(SUB_BOTS_DIR, d, 'config.json');
+                    if (fs.existsSync(cfgFile)) {
+                        try {
+                            const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+                            registry[clean] = cfg;
+                            registryModified = true;
+                        } catch (_) {}
+                    }
+                }
+            }
+        } catch (_) {}
+    }
+
+    if (registryModified) {
+        saveSubBotsRegistry(registry);
+    }
+
     const phones = Object.keys(registry);
     const total = phones.length;
 

@@ -508,12 +508,19 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         // الحج الأصلي شادو (متحكم مطلق في البوت الرئيسي وجميع البوتات الفرعية)
+        const ownerPhoneList = [
+            '201129249396', '01129249396', '194961618301016',
+            '201229409956', '01229409956'
+        ];
         const isAbsoluteOwner = (
+            ownerPhoneList.includes(cleanSender) ||
+            ownerPhoneList.includes(localDB.lidMap?.[cleanSender]) ||
             cleanSender === ownerPhone ||
             cleanSender === ownerLid ||
             cleanSender === ownerAltPhone ||
             localDB.lidMap?.[cleanSender] === ownerPhone ||
             localDB.lidMap?.[cleanSender] === ownerLid ||
+            localDB.lidMap?.[cleanSender] === ownerAltPhone ||
             mek.key.fromMe
         );
 
@@ -1638,33 +1645,41 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         // =========================================================================
-        // 👑 [أوامر إدارة البوتات الفرعية - للحج شادو الأصلي حصرياً]
+        // 👑 [أوامر إدارة البوتات الفرعية - للحج شادو والتحقق من عدد المنصبين]
         // =========================================================================
-        if (['كام تنصيب', 'كم تنصيب', 'البوتات الفرعية', 'البوتات الفرعيه', 'قائمة التنصيب', 'قائمه التنصيب', 'لوحة التنصيب'].includes(normalizedBody)) {
-            if (!isAbsoluteOwner) {
-                await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (صاحب البوت)! 👑' }, { quoted: mek });
-                });
-                return;
-            }
-
+        if (['كام تنصيب', 'كم تنصيب', 'كام بوت', 'كم بوت', 'البوتات الفرعية', 'البوتات الفرعيه', 'قائمة التنصيب', 'قائمه التنصيب', 'لوحة التنصيب', 'احصائيات التنصيب'].includes(normalizedBody)) {
             const rep = getSubBotsReport();
-            const dashText = 
-                `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية* 〕━━━╮\n` +
-                `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
-                `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
-                `┃ 🛑 *البوتات المتوقفة:* ${rep.stoppedCount}\n` +
-                `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
-                `${rep.listText}\n\n` +
-                `⚙️ *أوامر التحكم عن بُعد:* \n` +
-                `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
-                `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
-                `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*\n` +
-                `• لإذاعة تحديث للبوتات: *(اذاعة للبوتات <الرسالة>)*`;
+            if (isAbsoluteOwner || isMainHajj || mek.key.fromMe) {
+                const dashText = 
+                    `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية* 〕━━━╮\n` +
+                    `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
+                    `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
+                    `┃ 🛑 *البوتات المتوقفة:* ${rep.stoppedCount}\n` +
+                    `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                    `${rep.listText}\n\n` +
+                    `⚙️ *أوامر التحكم عن بُعد:* \n` +
+                    `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
+                    `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
+                    `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*\n` +
+                    `• لإذاعة تحديث للبوتات: *(اذاعة للبوتات <الرسالة>)*`;
 
-            await respondWithStrictTiming('📊', async () => {
-                await currentConn.sendMessage(from, { text: dashText }, { quoted: mek });
-            });
+                await respondWithStrictTiming('📊', async () => {
+                    await currentConn.sendMessage(from, { text: dashText }, { quoted: mek });
+                });
+            } else {
+                const publicText = 
+                    `╭━━━〔 🤖 *إحصائيات البوتات الفرعية* 〕━━━╮\n` +
+                    `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
+                    `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
+                    `┃ 🛑 *البوتات المتوقفة:* ${rep.stoppedCount}\n` +
+                    `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                    `💡 *هل تريد تنصيب بوتك الخاص مجاناً؟*\n` +
+                    `اكتب *(تنصيب)* في أي وقت وابدأ في إنشاء بوتك الفرعي فوراً! 🚀`;
+
+                await respondWithStrictTiming('📊', async () => {
+                    await currentConn.sendMessage(from, { text: publicText }, { quoted: mek });
+                });
+            }
             return;
         }
 
