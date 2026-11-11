@@ -91,6 +91,9 @@ function convertArabicNumbers(text) {
 const groupMetaCache = new Map();
 const GROUP_META_CACHE_TTL = 30000;
 
+// 🌸 جلسات التحديد التفاعلي للصلاة على النبي في الجروبات
+const salawatSessions = new Map();
+
 async function getCachedGroupMetadata(conn, gid) {
     if (!conn || !gid || !gid.endsWith('@g.us')) return null;
     const now = Date.now();
@@ -604,10 +607,15 @@ async function getParticipatingGroupIds(conn, localDB) {
     return Array.from(groupsSet);
 }
 
-async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, sentGids = new Set()) {
+async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, sentGids = new Set(), isSalawat = false) {
     for (let gid of groupIds) {
         if (!gid || !gid.endsWith('@g.us') || localDB.bannedGroups?.includes(gid)) continue;
         if (sentGids.has(gid)) continue;
+
+        // إذا كانت الرسالة تذكيراً بالصلاة على النبي، والجروب له جدول مخصص أو تم إيقافه، نتخطاه في البث العام
+        if (isSalawat && localDB.groupSalawatSettings && localDB.groupSalawatSettings[gid]) {
+            continue;
+        }
 
         if (!conn || !conn.user?.id) break;
 
@@ -616,10 +624,14 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
 
             let participants = [];
             try {
-                const metaPromise = conn.groupMetadata(gid);
-                const metaTimeout = new Promise(resolve => setTimeout(() => resolve(null), 3000));
-                const meta = await Promise.race([metaPromise, metaTimeout]);
+                const meta = await getCachedGroupMetadata(conn, gid);
                 if (meta?.participants) participants = meta.participants;
+                else {
+                    const metaPromise = conn.groupMetadata(gid);
+                    const metaTimeout = new Promise(resolve => setTimeout(() => resolve(null), 3000));
+                    const fetchedMeta = await Promise.race([metaPromise, metaTimeout]);
+                    if (fetchedMeta?.participants) participants = fetchedMeta.participants;
+                }
             } catch (_) {}
 
             if (participants && participants.length > 0) {
@@ -635,14 +647,14 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
     }
 }
 
-async function broadcastReminders(messageToSend, localDB) {
+async function broadcastReminders(messageToSend, localDB, isSalawat = false) {
     const sentGids = new Set();
     const mainConn = activeRemindersConn;
 
     if (mainConn && mainConn.user?.id) {
         const mainGroups = await getParticipatingGroupIds(mainConn, localDB);
         if (mainGroups.length > 0) {
-            await sendRemindersWithDelay(mainConn, mainGroups, messageToSend, localDB, sentGids);
+            await sendRemindersWithDelay(mainConn, mainGroups, messageToSend, localDB, sentGids, isSalawat);
         }
     }
 
@@ -655,11 +667,58 @@ async function broadcastReminders(messageToSend, localDB) {
                 const subGroups = await getParticipatingGroupIds(subSock, localDB);
                 const uniqueSubGroups = subGroups.filter(g => !sentGids.has(g));
                 if (uniqueSubGroups.length > 0) {
-                    await sendRemindersWithDelay(subSock, uniqueSubGroups, messageToSend, localDB, sentGids);
+                    await sendRemindersWithDelay(subSock, uniqueSubGroups, messageToSend, localDB, sentGids, isSalawat);
                 }
             }
         }
     } catch (_) {}
+}
+
+async function sendSalawatToSingleGroup(gid, messageToSend, localDB) {
+    if (!gid || !gid.endsWith('@g.us') || localDB.bannedGroups?.includes(gid)) return false;
+
+    // البحث عن سوكيت متصل بالجروب (البوت الرئيسي أولاً ثم البوتات الفرعية)
+    let conn = activeRemindersConn;
+    if (activeSubBots && activeSubBots.size > 0) {
+        for (const [subPhone, subData] of activeSubBots.entries()) {
+            const sock = subData?.sock;
+            if (sock && sock.user?.id) {
+                if (subData.knownGroups?.includes(gid)) {
+                    conn = sock;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!conn || !conn.user?.id) return false;
+
+    try {
+        let participants = [];
+        try {
+            const meta = await getCachedGroupMetadata(conn, gid);
+            if (meta?.participants) participants = meta.participants;
+            else {
+                const metaPromise = conn.groupMetadata(gid);
+                const metaTimeout = new Promise(resolve => setTimeout(() => resolve(null), 3000));
+                const fetchedMeta = await Promise.race([metaPromise, metaTimeout]);
+                if (fetchedMeta?.participants) participants = fetchedMeta.participants;
+            }
+        } catch (_) {}
+
+        if (participants && participants.length > 0) {
+            const mentions = participants.map(p => p.id).filter(Boolean);
+            const tagList = participants.map(mem => `@${mem.id.split('@')[0].split(':')[0]}`).join(' ');
+            const finalTaggedMessage = `${messageToSend}\n\n🔔 تذكير لجميع الأعضاء:\n${tagList}`;
+            await conn.sendMessage(gid, { text: finalTaggedMessage, mentions: mentions }).catch(() => {});
+        } else {
+            await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
+        }
+        return true;
+    } catch (err) {
+        console.error(`Error in sendSalawatToSingleGroup for ${gid}:`, err?.message || err);
+        return false;
+    }
 }
 
 let activeRemindersConn = null;
@@ -713,7 +772,50 @@ export async function startAutoReminders(currentConn) {
                 }
             }
 
-            // 2. تذكير الصلاة على النبي ﷺ كل ساعة بانتظام ودون انقطاع
+            // 2. تذكير الصلاة على النبي ﷺ المجدول والمخصص لكل جروب
+            if (localDB.groupSalawatSettings && typeof localDB.groupSalawatSettings === 'object') {
+                const now = Date.now();
+                let settingsUpdated = false;
+
+                for (const [gid, cfg] of Object.entries(localDB.groupSalawatSettings)) {
+                    if (!gid || !gid.endsWith('@g.us') || !cfg || !cfg.active || cfg.disabled) continue;
+                    if (localDB.bannedGroups?.includes(gid)) continue;
+
+                    const intervalMs = (Number(cfg.intervalHours) || 1) * 60 * 60 * 1000;
+                    const lastSent = Number(cfg.lastSent) || 0;
+
+                    if (now - lastSent >= intervalMs) {
+                        const salawatMessages = [
+                            `✨ *اللهم صلِّ وسلِّم وبارك على نبينا وحبيبنا محمد وعلى آله وصحبه أجمعين* ﷺ ❤️\n\nأكثروا من الصلاة والسلام على خير الأنام تُفرَج همومكم وتُغفَر ذنوبكم 🤲🤍`,
+                            `🌸 *صلوا على الحبيب المصطفى* ﷺ 🌸\n\n«إنَّ أوْلى النَّاسِ بي يَومَ القيامةِ أَكْثَرُهُم عليَّ صَلاةً» 🌿\nاللهم صلِّ وسلم وبارك على محمد وآله وصحبه أجمعين ❤️`,
+                            `🕊️ *تذكير بالصلاة على النبي محمد ﷺ* 🕊️\n\nاللهم صلّ على محمد وعلى آل محمد كما صليت على إبراهيم وعلى آل إبراهيم إنك حميد مجيد ✨\nلا تنس ذكر الله يا غالي 🤍`,
+                            `🌟 *صلِّ على النبي وتبسم* ﷺ 🌟\n\n«من صلّى عليّ صلاة صلّى الله عليه بها عشراً» 🌿\nرطب لسانك وقلبك بالصلاة والسلام على رسول الله ﷺ 🤍`
+                        ];
+                        const randomSalawat = salawatMessages[Math.floor(Math.random() * salawatMessages.length)];
+
+                        await sendSalawatToSingleGroup(gid, randomSalawat, localDB);
+                        cfg.lastSent = now;
+                        settingsUpdated = true;
+
+                        // إذا كان الجروب محدد بعدد مرات معينة (وليس دائم -1)
+                        if (typeof cfg.remaining === 'number' && cfg.remaining > 0) {
+                            cfg.remaining -= 1;
+                            if (cfg.remaining <= 0) {
+                                cfg.active = false;
+                                await conn.sendMessage(gid, {
+                                    text: `🌸 *اكتمل عدد مرات الصلاة على النبي المحددة لهذا الجروب (${cfg.count} مرة) بنجاح!* ✨\nتقبل الله منا ومنكم صالح الأعمال. لتجديد الجدول اكتب ( *تحديد صلاه* ).`
+                                }).catch(() => {});
+                            }
+                        }
+                    }
+                }
+
+                if (settingsUpdated) {
+                    saveLocalDB(localDB);
+                }
+            }
+
+            // 3. تذكير الصلاة على النبي ﷺ العام (للجروبات التي لم تحدد جدولاً خاصاً)
             // يرسل كل ساعة خلال أول 3 دقائق من الساعة (minNum <= 3) لضمان عدم تفويت الإرسال
             if (minNum <= 3) {
                 const salawatLogKey = `salawat_${todayDateStr}_${hours}`;
@@ -727,7 +829,7 @@ export async function startAutoReminders(currentConn) {
                             `🌟 *صلِّ على النبي وتبسم* ﷺ 🌟\n\n«من صلّى عليّ صلاة صلّى الله عليه بها عشراً» 🌿\nرطب لسانك وقلبك بالصلاة والسلام على رسول الله ﷺ 🤍`
                         ];
                         const randomSalawat = salawatMessages[Math.floor(Math.random() * salawatMessages.length)];
-                        await broadcastReminders(randomSalawat, localDB);
+                        await broadcastReminders(randomSalawat, localDB, true);
                         localDB.sentRemindersLog.list.push(salawatLogKey);
                         saveLocalDB(localDB);
                     } finally {
@@ -883,6 +985,108 @@ const datelsHandler = {
                 await delay(DELAYS.textReply);
             }
 
+            // 🌸 متابعة جلسة التحديد التفاعلي للصلاة على النبي في الجروب
+            if (from && from.endsWith('@g.us') && salawatSessions.has(from)) {
+                const session = salawatSessions.get(from);
+                const now = Date.now();
+
+                // مهلة الجلسة 5 دقائق
+                if (now - session.timestamp > 300000) {
+                    salawatSessions.delete(from);
+                } else if (session.sender === sender || isHajj || isBotOwner) {
+                    // أمر الإلغاء أثناء المحادثة التفاعلية
+                    if (['الغاء', 'إلغاء', 'خروج', 'قف', 'وقف', 'ستوب', 'cancel'].includes(normalizedBody)) {
+                        salawatSessions.delete(from);
+                        await handleCommandTiming('🛑');
+                        await currentConn.sendMessage(from, { text: '🛑 تم إلغاء عملية تحديد الصلاة على النبي.' }, { quoted: mek });
+                        return true;
+                    }
+
+                    // الخطوة 1: انتظار تحديد عدد المرات
+                    if (session.step === 'WAITING_COUNT') {
+                        const cleanedText = cleanArabicNumbers(normalizedBody).trim();
+                        const isUnlimited = /^(دائم|دايم|مفتوح|مستمر|عمر كلو|عمره كله|عمركلو|لا نهائي|على طول|ع طول|0)$/i.test(cleanedText);
+                        let chosenCount = -1;
+
+                        if (isUnlimited) {
+                            chosenCount = -1;
+                        } else {
+                            const parsed = parseInt(cleanedText.replace(/[^0-9]/g, ''));
+                            if (!parsed || isNaN(parsed) || parsed <= 0) {
+                                await handleCommandTiming('⚠️');
+                                await currentConn.sendMessage(from, {
+                                    text: '⚠️ *برجاء كتابة عدد المرات كرقم صحيح* (مثال: *5* أو *10* أو *20*)،\nأو اكتب *(دائم)* لو عايزه يفضل شغال على طول بدون توقف مدى الحياة، أو اكتب *(الغاء)*.'
+                                }, { quoted: mek });
+                                return true;
+                            }
+                            chosenCount = parsed;
+                        }
+
+                        session.count = chosenCount;
+                        session.step = 'WAITING_INTERVAL';
+                        session.timestamp = Date.now();
+
+                        const countText = chosenCount === -1 ? '« دائم ومستمر مدى الحياة ♾️ »' : `« ${chosenCount} مرة »`;
+                        await handleCommandTiming('🌸');
+                        await currentConn.sendMessage(from, {
+                            text: `✅ *تمام يا حاج! تم تسجيل عدد المرات:* ${countText} 🌸\n\n` +
+                                  `⏱️ *بين كل رسالة ورسالة عايز قد إيه؟*\n` +
+                                  `• اكتب الفارق الزمني بالساعات (مثال: *1* أو *2* أو *4* أو *5* أو *8* ساعات).\n` +
+                                  `*(الرقم اللي هتكتبه هو عدد الساعات بين كل تذكير والتاني)*\n\n` +
+                                  `❌ للإلغاء في أي وقت اكتب: *(الغاء)*`
+                        }, { quoted: mek });
+                        return true;
+                    }
+
+                    // الخطوة 2: انتظار تحديد عدد الساعات
+                    if (session.step === 'WAITING_INTERVAL') {
+                        const cleanedText = cleanArabicNumbers(normalizedBody).trim();
+                        let hours = 0;
+                        if (cleanedText.includes('ساعتين') || cleanedText === '2') hours = 2;
+                        else if (cleanedText === 'ساعه' || cleanedText === 'ساعة' || cleanedText === '1') hours = 1;
+                        else {
+                            hours = parseInt(cleanedText.replace(/[^0-9]/g, ''));
+                        }
+
+                        if (!hours || isNaN(hours) || hours <= 0) {
+                            await handleCommandTiming('⚠️');
+                            await currentConn.sendMessage(from, {
+                                text: '⚠️ *برجاء كتابة عدد الساعات كرقم صحيح* (مثال: *4* أو *5* ساعات) يا حاج، أو اكتب *(الغاء)*.'
+                            }, { quoted: mek });
+                            return true;
+                        }
+
+                        if (!localDB.groupSalawatSettings) localDB.groupSalawatSettings = {};
+                        localDB.groupSalawatSettings[from] = {
+                            count: session.count,
+                            remaining: session.count,
+                            intervalHours: hours,
+                            lastSent: Date.now(),
+                            createdAt: Date.now(),
+                            active: true,
+                            disabled: false,
+                            configuredBy: sender
+                        };
+                        saveLocalDB(localDB);
+                        salawatSessions.delete(from);
+
+                        const countDisplay = session.count === -1 ? 'دائم ومستمر مدى الحياة ♾️' : `${session.count} مرة`;
+                        await handleCommandTiming('🌸');
+                        await currentConn.sendMessage(from, {
+                            text: `✅ *تم ضبط وتثبيت تذكير الصلاة على النبي بنجاح يا حاج!* 🌸\n\n` +
+                                  `🕌 *جدول الجروب المعتمد:* \n` +
+                                  `• 🔢 *عدد المرات:* ${countDisplay}\n` +
+                                  `• ⏱️ *الفارق الزمني:* كل *${hours}* ساعة\n` +
+                                  `• ⏳ *أول تذكير:* بعد *${hours}* ساعات من الآن بانتظام\n` +
+                                  `• 📌 *الحالة:* مفعل وشغال في الجروب مدى الحياة ⚡\n\n` +
+                                  `💡 *للتعديل في أي وقت:* اكتب ( *تحديد صلاه* ) أو ( *تعديل صلاه* ).\n` +
+                                  `🛑 *للإلغاء والإيقاف:* اكتب ( *الغاء صلاه* ) أو ( *ايقاف صلاه* ).`
+                        }, { quoted: mek });
+                        return true;
+                    }
+                }
+            }
+
             // أوامر الإغلاق الكامل للسيرفر للمطور الأصلي فقط
             const shutdownCommands = ['قفل البوت', 'ايقاف البوت', 'طفي البوت', 'اطفاء البوت'];
 
@@ -954,6 +1158,149 @@ const datelsHandler = {
                 const testSalawat = `✨ *اللهم صلِّ وسلِّم وبارك على نبينا وحبيبنا محمد وعلى آله وصحبه أجمعين* ﷺ ❤️\n\nأكثروا من الصلاة والسلام على خير الأنام تُفرَج همومكم وتُغفَر ذنوبكم 🤲🤍`;
                 await broadcastReminders(testSalawat, localDB);
                 await currentConn.sendMessage(from, { text: '✅ تم إرسال تذكير الصلاة على النبي الآن لجميع الرومات بنجاح! 🌸' }, { quoted: mek });
+                return true;
+            }
+
+            // 🌸 أمر تحديد وضبط الصلاة على النبي في الجروب (حصري للحج فقط)
+            const isSalawatSetupCmd = /^(تحديد صلاه|تحديد الصلاه|تحديد الصلاة|ضبط صلاه|ضبط الصلاة|تعديل صلاه|تعديل الصلاة)$/i.test(normalizedBody) ||
+                                      /^(تحديد صلاه|تحديد الصلاه|تحديد الصلاة|ضبط صلاه|ضبط الصلاة|تعديل صلاه|تعديل الصلاة)\s+/i.test(normalizedBody);
+
+            if (isSalawatSetupCmd) {
+                if (!isHajj && !isBotOwner) {
+                    await handleCommandTiming('❌');
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج فقط! 👑🌸' }, { quoted: mek });
+                    return true;
+                }
+
+                if (!from.endsWith('@g.us')) {
+                    await handleCommandTiming('⚠️');
+                    await currentConn.sendMessage(from, { text: '⚠️ هذا الأمر يعمل داخل الجروبات فقط لتحديد جدول الصلاة على النبي في الجروب يا حاج!' }, { quoted: mek });
+                    return true;
+                }
+
+                const rawArgs = normalizedBody.replace(/^(تحديد صلاه|تحديد الصلاه|تحديد الصلاة|ضبط صلاه|ضبط الصلاة|تعديل صلاه|تعديل الصلاة)/i, '').trim();
+                const parts = cleanArabicNumbers(rawArgs).split(/\s+/).filter(Boolean);
+
+                // إذا أرسل الحج الأمر كاملاً في سطر واحد (مثال: تحديد صلاه 10 4 أو تحديد صلاه دائم 5)
+                if (parts.length >= 2) {
+                    const countArg = parts[0];
+                    const hoursArg = parts[1];
+                    let directCount = -1;
+                    if (!/^(دائم|دايم|مفتوح|مستمر|عمر كلو|عمره كله|لا نهائي|0)$/i.test(countArg)) {
+                        directCount = parseInt(countArg.replace(/[^0-9]/g, '')) || -1;
+                    }
+                    let directHours = parseInt(hoursArg.replace(/[^0-9]/g, '')) || 0;
+                    if (directHours > 0) {
+                        if (!localDB.groupSalawatSettings) localDB.groupSalawatSettings = {};
+                        localDB.groupSalawatSettings[from] = {
+                            count: directCount,
+                            remaining: directCount,
+                            intervalHours: directHours,
+                            lastSent: Date.now(),
+                            createdAt: Date.now(),
+                            active: true,
+                            disabled: false,
+                            configuredBy: sender
+                        };
+                        saveLocalDB(localDB);
+                        salawatSessions.delete(from);
+
+                        const countDisplay = directCount === -1 ? 'دائم ومستمر مدى الحياة ♾️' : `${directCount} مرة`;
+                        await handleCommandTiming('🌸');
+                        await currentConn.sendMessage(from, {
+                            text: `✅ *تم ضبط وتثبيت تذكير الصلاة على النبي بنجاح يا حاج!* 🌸\n\n` +
+                                  `🕌 *جدول الجروب المعتمد:* \n` +
+                                  `• 🔢 *عدد المرات:* ${countDisplay}\n` +
+                                  `• ⏱️ *الفارق الزمني:* كل *${directHours}* ساعة\n` +
+                                  `• ⏳ *أول تذكير:* بعد *${directHours}* ساعات من الآن بانتظام\n` +
+                                  `• 📌 *الحالة:* مفعل وشغال في الجروب مدى الحياة ⚡\n\n` +
+                                  `💡 *للتعديل في أي وقت:* اكتب ( *تحديد صلاه* ) أو ( *تعديل صلاه* ).\n` +
+                                  `🛑 *للإلغاء والإيقاف:* اكتب ( *الغاء صلاه* ) أو ( *ايقاف صلاه* ).`
+                        }, { quoted: mek });
+                        return true;
+                    }
+                }
+
+                // فتح المحادثة التفاعلية خطوة بخطوة
+                salawatSessions.set(from, {
+                    step: 'WAITING_COUNT',
+                    sender: sender,
+                    timestamp: Date.now()
+                });
+
+                await handleCommandTiming('🌸');
+                await currentConn.sendMessage(from, {
+                    text: `🌸 *تـحـديـد جـدول الـصـلاة عـلـى الـنـبـي ﷺ* 🌸\n` +
+                          `👑 يا مرحب يا حاج.. محتاجه يتبعت كام مرة في الجروب؟\n\n` +
+                          `• اكتب عدد المرات (مثال: *5* أو *10* أو *20*).\n` +
+                          `• أو اكتب *(دائم)* لو عايزه يفضل شغال على طول بدون توقف مدى الحياة.\n\n` +
+                          `❌ للإلغاء في أي وقت اكتب: *(الغاء)*`
+                }, { quoted: mek });
+                return true;
+            }
+
+            // 🛑 أمر إلغاء وإيقاف الصلاة على النبي في الجروب (حصري للحج فقط)
+            if (['الغاء صلاه', 'إلغاء صلاه', 'الغاء الصلاه', 'إلغاء الصلاة', 'ايقاف صلاه', 'إيقاف صلاه', 'تعطيل صلاه', 'ايقاف الصلاه'].includes(normalizedBody)) {
+                if (!isHajj && !isBotOwner) {
+                    await handleCommandTiming('❌');
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج فقط! 👑🌸' }, { quoted: mek });
+                    return true;
+                }
+
+                if (!from.endsWith('@g.us')) {
+                    await handleCommandTiming('⚠️');
+                    await currentConn.sendMessage(from, { text: '⚠️ هذا الأمر يعمل داخل الجروبات فقط يا حاج!' }, { quoted: mek });
+                    return true;
+                }
+
+                if (!localDB.groupSalawatSettings) localDB.groupSalawatSettings = {};
+                localDB.groupSalawatSettings[from] = {
+                    active: false,
+                    disabled: true,
+                    cancelledAt: Date.now(),
+                    cancelledBy: sender
+                };
+                saveLocalDB(localDB);
+                salawatSessions.delete(from);
+
+                await handleCommandTiming('🛑');
+                await currentConn.sendMessage(from, {
+                    text: `🛑 *تم إلغاء وإيقاف تذكير الصلاة على النبي في هذا الجروب بنجاح يا حاج!* 🌸\nلن يتم إرسال تذكيرات الصلاة على النبي في هذا الجروب حتى تعيد ضبطه مجدداً بأمر ( *تحديد صلاه* ).`
+                }, { quoted: mek });
+                return true;
+            }
+
+            // 📋 أمر حالة وجدول الصلاة على النبي في الجروب
+            if (['حالة صلاه', 'حاله صلاه', 'حالة الصلاة', 'جدول صلاه', 'جدول الصلاة', 'وضع صلاه'].includes(normalizedBody)) {
+                if (!from.endsWith('@g.us')) return false;
+
+                const cfg = localDB.groupSalawatSettings?.[from];
+                if (!cfg || cfg.disabled || !cfg.active) {
+                    await handleCommandTiming('ℹ️');
+                    await currentConn.sendMessage(from, {
+                        text: `ℹ️ *تذكير الصلاة على النبي غير محدد أو متوقف في هذا الجروب حالياً.* 🌸\nلتحديده وضبطه يا حاج، اكتب: ( *تحديد صلاه* ).`
+                    }, { quoted: mek });
+                    return true;
+                }
+
+                const countText = cfg.count === -1 ? 'دائم ومستمر مدى الحياة ♾️' : `${cfg.count} مرة (متبقي: ${cfg.remaining ?? cfg.count} مرة)`;
+                const intervalText = `كل ${cfg.intervalHours} ساعة`;
+                let lastSentText = 'لم يُرسل بعد';
+                if (cfg.lastSent && cfg.lastSent > 0) {
+                    const d = new Date(cfg.lastSent);
+                    lastSentText = d.toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo', hour: '2-digit', minute: '2-digit' });
+                }
+
+                await handleCommandTiming('🌸');
+                await currentConn.sendMessage(from, {
+                    text: `🌸 *حالة جدول الصلاة على النبي في الجروب:* 🌸\n\n` +
+                          `• 🔢 *عدد المرات:* ${countText}\n` +
+                          `• ⏱️ *الفارق الزمني:* ${intervalText}\n` +
+                          `• 🕒 *آخر تذكير:* ${lastSentText}\n` +
+                          `• 📌 *الحالة:* مفعل وشغال بانتظام مدى الحياة ⚡\n\n` +
+                          `💡 *للتعديل:* اكتب ( *تحديد صلاه* )\n` +
+                          `🛑 *للإيقاف:* اكتب ( *الغاء صلاه* )`
+                }, { quoted: mek });
                 return true;
             }
 
