@@ -15,12 +15,25 @@ export const subBotSentMsgIds = new Set();
 global.subBotSentMsgIds = subBotSentMsgIds;
 
 /**
- * تحميل سجل البوتات الفرعية من ملف sub_bots.json
+ * تحميل سجل البوتات الفرعية من ملف sub_bots.json مع استرجاع تلقائي من النسخة الاحتياطية
  */
 export function loadSubBotsRegistry() {
     try {
         if (fs.existsSync(REGISTRY_FILE)) {
-            return JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+            const content = fs.readFileSync(REGISTRY_FILE, 'utf8').trim();
+            if (content && content !== '{}') {
+                return JSON.parse(content);
+            }
+        }
+        // استرجاع تلقائي من مجلد الجلسات المحمي في حال تم تحديث السيرفر
+        const backupFile = path.join(process.cwd(), 'sessions', 'sub_bots_registry_backup.json');
+        if (fs.existsSync(backupFile)) {
+            const backupContent = fs.readFileSync(backupFile, 'utf8').trim();
+            if (backupContent && backupContent !== '{}') {
+                const data = JSON.parse(backupContent);
+                try { fs.writeFileSync(REGISTRY_FILE, JSON.stringify(data, null, 2), 'utf8'); } catch (_) {}
+                return data;
+            }
         }
     } catch (e) {
         console.error('❌ خطأ في قراءة سجل البوتات الفرعية:', e?.message || e);
@@ -29,11 +42,17 @@ export function loadSubBotsRegistry() {
 }
 
 /**
- * حفظ سجل البوتات الفرعية
+ * حفظ سجل البوتات الفرعية مع إنشاء نسخة احتياطية في مجلد الجلسات المحمي من التحديثات
  */
 export function saveSubBotsRegistry(data) {
     try {
         fs.writeFileSync(REGISTRY_FILE, JSON.stringify(data, null, 2), 'utf8');
+        try {
+            const backupDir = path.join(process.cwd(), 'sessions');
+            if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+            const backupFile = path.join(backupDir, 'sub_bots_registry_backup.json');
+            fs.writeFileSync(backupFile, JSON.stringify(data, null, 2), 'utf8');
+        } catch (_) {}
         return true;
     } catch (e) {
         console.error('❌ خطأ في حفظ سجل البوتات الفرعية:', e?.message || e);
@@ -49,7 +68,14 @@ const SAVED_PROFILES_FILE = path.join(process.cwd(), 'sub_bots_saved.json');
 export function loadSavedBotProfiles() {
     try {
         if (fs.existsSync(SAVED_PROFILES_FILE)) {
-            return JSON.parse(fs.readFileSync(SAVED_PROFILES_FILE, 'utf8'));
+            const content = fs.readFileSync(SAVED_PROFILES_FILE, 'utf8').trim();
+            if (content && content !== '{}') {
+                return JSON.parse(content);
+            }
+        }
+        const backupFile = path.join(process.cwd(), 'sessions', 'sub_bots_saved_backup.json');
+        if (fs.existsSync(backupFile)) {
+            return JSON.parse(fs.readFileSync(backupFile, 'utf8'));
         }
     } catch (e) {
         console.error('❌ خطأ في قراءة إعدادات البوتات المحفوظة:', e?.message || e);
@@ -71,6 +97,12 @@ export function saveSavedBotProfile(phone, profile) {
             updatedAt: Date.now()
         };
         fs.writeFileSync(SAVED_PROFILES_FILE, JSON.stringify(data, null, 2), 'utf8');
+        try {
+            const backupDir = path.join(process.cwd(), 'sessions');
+            if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+            const backupFile = path.join(backupDir, 'sub_bots_saved_backup.json');
+            fs.writeFileSync(backupFile, JSON.stringify(data, null, 2), 'utf8');
+        } catch (_) {}
         return true;
     } catch (e) {
         console.error('❌ خطأ في حفظ إعدادات البوت المحفوظ:', e?.message || e);
@@ -866,12 +898,60 @@ export function startSubBotWatchdog(mainConn) {
 
 /**
  * تشغيل واسترجاع جميع البوتات الفرعية المسجلة عند إقلاع البوت الرئيسي
- * يتم تشغيلها بتأخير زمني مجدول (Staggered) لتفادي استهلاك الذاكرة أو حظر السيرفرات
+ * يتم استرجاعها تلقائياً من السجل ومجلد الجلسات لمنع مسح أي بوت بعد أي تحديث
  */
 export async function initAllSubBots(mainConn) {
     startSubBotWatchdog(mainConn || global.conn);
 
     const registry = loadSubBotsRegistry() || {};
+    let registryModified = false;
+
+    // 1. فحص شامل لمجلدات الجلسات في sessions/sub_bots لضمان عدم ضياع أي بوت بعد أي تحديث كود أو ريستارت
+    if (fs.existsSync(SUB_BOTS_DIR)) {
+        try {
+            const dirs = fs.readdirSync(SUB_BOTS_DIR);
+            for (const d of dirs) {
+                const clean = cleanPhoneNumber(d);
+                if (!clean) continue;
+
+                const sessionFolder = path.join(SUB_BOTS_DIR, d);
+                const credsFile = path.join(sessionFolder, 'creds.json');
+                const cfgFile = path.join(sessionFolder, 'config.json');
+
+                if (fs.existsSync(credsFile)) {
+                    let cfg = null;
+                    if (fs.existsSync(cfgFile)) {
+                        try {
+                            cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+                        } catch (_) {}
+                    }
+                    if (!cfg) {
+                        cfg = {
+                            phone: clean,
+                            botName: 'بوت فرعي',
+                            callName: 'فرعي',
+                            gender: 'male',
+                            personality: 'respectful',
+                            status: 'active',
+                            installedAt: new Date().toISOString()
+                        };
+                    }
+                    if (!registry[clean]) {
+                        console.log(`♻️ [Sub-Bots] تم استرجاع وحفظ بيانات البوت الفرعي (+${clean}) تلقائياً بعد التحديث!`);
+                        registry[clean] = cfg;
+                        registryModified = true;
+                    }
+                }
+            }
+        } catch (scanErr) {
+            console.error('❌ خطأ في فحص مجلدات الجلسات:', scanErr);
+        }
+    }
+
+    if (registryModified) {
+        saveSubBotsRegistry(registry);
+    }
+
     const phones = Object.keys(registry);
 
     if (phones.length === 0) {
@@ -879,7 +959,7 @@ export async function initAllSubBots(mainConn) {
         return;
     }
 
-    console.log(`🔄 [Sub-Bots] جاري استرجاع وتشغيل ${phones.length} بوت فرعي مسجل...`);
+    console.log(`🔄 [Sub-Bots] جاري استرجاع وتشغيل ${phones.length} بوت فرعي مسجل ومحفوظ...`);
 
     let delaySec = 3;
     for (const phone of phones) {
