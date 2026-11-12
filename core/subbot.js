@@ -723,7 +723,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
                             `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
 
-                        // 1. إرسال رسالة النجاح للشخص الذي نصب البوت
+                        // 1. إرسال رسالة النجاح للشخص الذي نصب البوت (مرة واحدة فقط)
                         try {
                             const sent = await sendNotify(successMsg, quotedMek);
                             if (!sent && sock) {
@@ -734,16 +734,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             try { if (sock) await sock.sendMessage(notifyJid, { text: successMsg }); } catch (_) {}
                         }
 
-                        // وإذا كان المنصب يختلف عن الشات، نرسل له في الخاص أيضاً للتأكيد
-                        const adminDirectJid = cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '';
-                        if (adminDirectJid && notifyJid !== adminDirectJid) {
-                            try {
-                                const c = global.conn || mainConn;
-                                if (c) await c.sendMessage(adminDirectJid, { text: successMsg });
-                            } catch (_) {}
-                        }
-
-                        // 2. إشعار فوري للحج شادو (المالك الأصلي) على أرقامه الاثنين
+                        // 2. إشعار فوري للحج شادو (المالك الأصلي) فقط دون الإرسال لرقم البوت نفسه
                         const ownerNotice = 
                             `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
                             `🏷️ *الاسم الرسمي:* ${botName}\n` +
@@ -753,25 +744,19 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
                             `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
 
-                        const masterPhones = [
-                            '201229409956@s.whatsapp.net',
-                            '201129249396@s.whatsapp.net'
-                        ];
-
-                        for (const mPhone of masterPhones) {
-                            try {
-                                const c = global.conn || mainConn;
-                                if (c) {
-                                    await c.sendMessage(mPhone, { text: ownerNotice });
-                                } else {
-                                    await sock.sendMessage(mPhone, { text: ownerNotice });
-                                }
-                            } catch (err) {
-                                console.error(`❌ [Sub-Bot Notice Send Error for ${mPhone}]:`, err?.message || err);
-                                try {
-                                    await sock.sendMessage(mPhone, { text: ownerNotice });
-                                } catch (_) {}
+                        const masterPhone = '201129249396@s.whatsapp.net';
+                        try {
+                            const c = global.conn || mainConn;
+                            if (c) {
+                                await c.sendMessage(masterPhone, { text: ownerNotice });
+                            } else if (sock) {
+                                await sock.sendMessage(masterPhone, { text: ownerNotice });
                             }
+                        } catch (err) {
+                            console.error(`❌ [Sub-Bot Notice Send Error for ${masterPhone}]:`, err?.message || err);
+                            try {
+                                if (sock) await sock.sendMessage(masterPhone, { text: ownerNotice });
+                            } catch (_) {}
                         }
                     } catch (openErr) {
                         console.error('❌ [Sub-Bot Connection Open Handling Error]:', openErr?.message || openErr);
