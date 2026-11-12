@@ -206,7 +206,10 @@ async function createSubBotSocket(phone, sessionDir) {
         syncFullHistory: false,
         fireInitQueries: false,
         shouldSyncHistoryMessage: () => false,
-        defaultQueryTimeoutMs: undefined,
+        defaultQueryTimeoutMs: 60000,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
+        retryRequestDelayMs: 2000,
         getMessage: async () => ({ conversation: '' })
     });
 
@@ -369,30 +372,17 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 activeSubBots.delete(cleanPhone);
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
 
-                if (statusCode === DisconnectReason.loggedOut) {
-                    console.log(`🚫 [Sub-Bot] تم تسجيل الخروج للبوت الفرعي (+${cleanPhone}).`);
-                    const registry = loadSubBotsRegistry();
-                    if (registry[cleanPhone]) {
-                        registry[cleanPhone].status = 'logged_out';
-                        saveSubBotsRegistry(registry);
-                    }
-                    try {
-                        if (fs.existsSync(sessionDir)) {
-                            fs.rmSync(sessionDir, { recursive: true, force: true });
-                        }
-                    } catch (_) {}
-                } else if (shouldReconnect) {
-                    const registry = loadSubBotsRegistry();
-                    if (registry[cleanPhone]?.status === 'active') {
-                        setTimeout(() => {
-                            bootSubBot(cleanPhone, cfg, mainConn).catch(e => console.error(e));
-                        }, 5000);
-                    }
+                // لا نقوم بحذف الجلسة مطلقاً، ونعيد الاتصال تلقائياً طالما لم يتم إيقافه يدوياً بأمر (ايقاف تنصيب)
+                const isManuallyStopped = cfg.status === 'stopped';
+                if (!isManuallyStopped) {
+                    console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي تلقائياً (+${cleanPhone}) بعد 5 ثوانٍ...`);
+                    setTimeout(() => {
+                        bootSubBot(cleanPhone, cfg, mainConn || global.conn).catch(e => console.error(e));
+                    }, 5000);
                 }
             }
         });
@@ -769,10 +759,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     console.log(`⚠️ [Sub-Bot Pairing] انقطع اتصال السوكيت للرقم (+${cleanPhone}) بكود: ${statusCode}`);
                     activeSubBots.delete(cleanPhone);
 
-                    if (statusCode === DisconnectReason.loggedOut) {
-                        console.log(`🚫 [Sub-Bot Pairing] تم تسجيل الخروج (+${cleanPhone}).`);
-                        try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch (_) {}
-                    } else if (!isConnected) {
+                    if (!isConnected) {
                         // ⚡ الأهم: إعادة الاتصال فوراً لاستكمال المصافحة (Handshake) بعد إدخال الكود (خصوصاً خطأ 515 و 428)
                         console.log(`🔄 [Sub-Bot Pairing] إعادة الاتصال التلقائي لاستكمال الاقتران (+${cleanPhone})...`);
                         setTimeout(() => {
@@ -781,11 +768,13 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             }
                         }, 2500);
                     } else {
-                        // إذا كان متصلاً وانقطع لاحقاً
+                        // إذا كان متصلاً وانقطع لاحقاً (إعادة تشغيله تلقائياً طالما لم يتم إيقافه يدوياً)
                         const registry = loadSubBotsRegistry();
-                        if (registry[cleanPhone]?.status === 'active') {
+                        const currentCfg = registry[cleanPhone] || cfgData;
+                        if (currentCfg?.status !== 'stopped') {
+                            console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي المتصل (+${cleanPhone}) تلقائياً بعد 4 ثوانٍ...`);
                             setTimeout(() => {
-                                bootSubBot(cleanPhone, registry[cleanPhone], mainConn).catch(e => console.error(e));
+                                bootSubBot(cleanPhone, currentCfg, mainConn || global.conn).catch(e => console.error(e));
                             }, 4000);
                         }
                     }
@@ -835,12 +824,54 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     return await startPairingEngine();
 }
 
+// 💓 [Watchdog & Heartbeat] حارس ذكي دائم لمنع خروج أو فصل البوتات الفرعية نهائياً (24/7)
+let isSubBotWatchdogStarted = false;
+export function startSubBotWatchdog(mainConn) {
+    if (isSubBotWatchdogStarted) return;
+    isSubBotWatchdogStarted = true;
+
+    console.log('🛡️ [Sub-Bot Watchdog] تم تفعيل نظام النبض والحماية لمنع خروج البوتات الفرعية نهائياً (24/7).');
+
+    // 1. نبض نشط كل دقيقتين لمنع واتساب من اعتبار الجلسة خاملة وقطعها بعد 20-30 دقيقة
+    setInterval(async () => {
+        for (const [phone, item] of activeSubBots.entries()) {
+            try {
+                if (item.sock?.ws?.isOpen) {
+                    await item.sock.sendPresenceUpdate('available');
+                }
+            } catch (_) {}
+        }
+    }, 2 * 60 * 1000);
+
+    // 2. فحص دوري كل دقيقة لإعادة تشغيل أي بوت فرعي مسجل انقطع اتصاله تلقائياً
+    setInterval(async () => {
+        try {
+            const registry = loadSubBotsRegistry() || {};
+            for (const [phone, cfg] of Object.entries(registry)) {
+                const clean = cleanPhoneNumber(phone);
+                if (!clean || cfg?.status === 'stopped') continue;
+
+                const activeItem = activeSubBots.get(clean);
+                const isSocketAlive = activeItem?.sock?.ws?.isOpen;
+
+                if (!isSocketAlive) {
+                    console.log(`🛡️ [Sub-Bot Watchdog] رصد انقطاع البوت الفرعي (+${clean})، جاري إعادة تشغيله تلقائياً...`);
+                    activeSubBots.delete(clean);
+                    bootSubBot(clean, cfg, mainConn || global.conn).catch(() => {});
+                }
+            }
+        } catch (_) {}
+    }, 60 * 1000);
+}
+
 /**
  * تشغيل واسترجاع جميع البوتات الفرعية المسجلة عند إقلاع البوت الرئيسي
  * يتم تشغيلها بتأخير زمني مجدول (Staggered) لتفادي استهلاك الذاكرة أو حظر السيرفرات
  */
 export async function initAllSubBots(mainConn) {
-    const registry = loadSubBotsRegistry();
+    startSubBotWatchdog(mainConn || global.conn);
+
+    const registry = loadSubBotsRegistry() || {};
     const phones = Object.keys(registry);
 
     if (phones.length === 0) {
@@ -853,10 +884,10 @@ export async function initAllSubBots(mainConn) {
     let delaySec = 3;
     for (const phone of phones) {
         const cfg = registry[phone];
-        if (cfg && cfg.status === 'active') {
+        if (cfg && cfg.status !== 'stopped') {
             setTimeout(async () => {
                 try {
-                    await bootSubBot(phone, cfg, mainConn);
+                    await bootSubBot(phone, cfg, mainConn || global.conn);
                 } catch (err) {
                     console.error(`❌ تعذر تشغيل البوت الفرعي (+${phone}):`, err?.message || err);
                 }
