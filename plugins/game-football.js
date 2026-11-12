@@ -164,22 +164,16 @@ const handler = async (m, conn) => {
 
     // 3️⃣ أمر تلميح كوره
     if (normalizedBody === 'تلميح كوره' || normalizedBody === 'تلميح كورة') {
+        if (!conn.football[id]) return false;
         await triggerEffects();
-        if (!conn.football[id]) {
-            await conn.sendMessage(id, { text: `❌ مفيش لعبة شغالة حالياً! اكتب *كوره* للبدء.` }, { quoted: m });
-            return true;
-        }
         await conn.sendMessage(id, { text: `💡 *تلميح للسؤال:* ${conn.football[id].hint}` }, { quoted: m });
         return true;
     }
 
     // 4️⃣ أمر الغاء كوره
     if (normalizedBody === 'الغاء كوره' || normalizedBody === 'الغاء كورة' || normalizedBody === 'ايقاف كوره') {
+        if (!conn.football[id]) return false;
         await triggerEffects();
-        if (!conn.football[id]) {
-            await conn.sendMessage(id, { text: `❌ مفيش لعبة شغالة حالياً عشان تلغيها!` }, { quoted: m });
-            return true;
-        }
 
         if (conn.football[id].creator !== sender) {
             await conn.sendMessage(id, { text: `❌ عذراً! الشخص اللي بدأ اللعبة هو الوحيد اللي يقدر يلغيها.` }, { quoted: m });

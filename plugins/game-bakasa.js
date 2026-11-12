@@ -92,7 +92,6 @@ const handler = async (mek, currentConn) => {
     let firstWord = args[0] || '';
 
     if (!currentConn.bakasa) currentConn.bakasa = {};
-    global.bakasa = currentConn.bakasa;
     if (!currentConn.pmUsers) currentConn.pmUsers = new Set();
     if (!currentConn.bakasa[from]) {
         currentConn.bakasa[from] = {

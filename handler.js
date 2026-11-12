@@ -33,6 +33,28 @@ import {
 
 // 💤 خريطة حفظ حالة وتوقيت النوم المعزولة لكل بوت (سواء الأساسي أو الفرعي)
 const botSleepMap = new Map();
+
+// 👥 كاش بيانات ومشاركي المجموعات لتسريع الفحص ومنع تكرار الاستعلامات
+const groupMetaCache = new Map();
+const GROUP_META_CACHE_TTL = 30000;
+async function getCachedGroupMetadata(conn, gid) {
+    if (!conn || !gid || !gid.endsWith('@g.us')) return null;
+    const now = Date.now();
+    const cached = groupMetaCache.get(gid);
+    if (cached && (now - cached.timestamp < GROUP_META_CACHE_TTL) && cached.data) {
+        return cached.data;
+    }
+    try {
+        const metaPromise = conn.groupMetadata(gid);
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 3000));
+        const data = await Promise.race([metaPromise, timeoutPromise]);
+        if (data) {
+            groupMetaCache.set(gid, { data, timestamp: now });
+            return data;
+        }
+    } catch (_) {}
+    return cached?.data || null;
+}
 const botWakeTimeMap = new Map();
 // 🤫 خريطة كتم الصوت المعزولة (اسكت / اتكلم) لكل بوت
 const botMuteMap = new Map();
@@ -470,6 +492,35 @@ export async function handleAllMessages(mek, currentConn) {
             if (subBotConfig.callName) currentConn.callName = subBotConfig.callName;
         }
 
+        // 🆔 بناء قائمة بكل المعرفات الممكنة للبوت الحالي مبكراً
+        const thisBotIdentities = new Set();
+        if (myNumber) thisBotIdentities.add(myNumber);
+        if (currentConn.user?.id) {
+            const uPhone = currentConn.user.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+            if (uPhone) thisBotIdentities.add(uPhone);
+        }
+        if (currentConn.user?.lid) {
+            const uLid = currentConn.user.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+            if (uLid) thisBotIdentities.add(uLid);
+        }
+        if (subBotConfig?.phone) {
+            const sPhone = cleanPhoneNumber(subBotConfig.phone);
+            if (sPhone) thisBotIdentities.add(sPhone);
+        }
+        if (currentConn.subBotPhone) {
+            const sPhone = cleanPhoneNumber(currentConn.subBotPhone);
+            if (sPhone) thisBotIdentities.add(sPhone);
+        }
+        if (myNumber && localDB?.lidMap?.[myNumber]) {
+            thisBotIdentities.add(String(localDB.lidMap[myNumber]).replace(/[^0-9]/g, ''));
+        }
+        if (localDB?.lidMap) {
+            for (const [phone, lid] of Object.entries(localDB.lidMap)) {
+                if (thisBotIdentities.has(phone)) thisBotIdentities.add(String(lid).replace(/[^0-9]/g, ''));
+                if (thisBotIdentities.has(lid)) thisBotIdentities.add(String(phone).replace(/[^0-9]/g, ''));
+            }
+        }
+
         // 🔍 تحديث خريطة الـ LID وتسجيل الجروبات النشطة تلقائياً
         if (isRealGroup) {
             if (!localDB.knownGroups) localDB.knownGroups = [];
@@ -854,24 +905,64 @@ export async function handleAllMessages(mek, currentConn) {
         if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return;
 
         // =========================================================================
-        // 🤖 [اسم المناداة والنداء وتوجيه الأوامر للبوت المستهدف]
+        // 🤖 [اسم المناداة والنداء وتوجيه الأوامر للبوت المستهدف وعزل البوتات في الروم الواحد]
         // =========================================================================
         const subBotsRegistry = loadSubBotsRegistry();
         const otherBotNames = [];
         const otherCallNames = [];
-        for (const [p, info] of Object.entries(subBotsRegistry)) {
-            if (p !== myNumber) {
-                if (info.botName) otherBotNames.push(normalizeArabic(info.botName.toLowerCase().trim()));
-                if (info.callName) otherCallNames.push(normalizeArabic(info.callName.toLowerCase().trim()));
-            }
-        }
+        const allOtherBotNumbers = new Set();
+        const mainBotNumber = '201229409956';
+
         if (currentConn.isSubBot) {
+            allOtherBotNumbers.add(mainBotNumber);
             otherBotNames.push('شادو');
             otherCallNames.push('شادو');
         }
 
+        for (const [p, info] of Object.entries(subBotsRegistry)) {
+            const cleanP = p.replace(/[^0-9]/g, '');
+            if (cleanP && !thisBotIdentities.has(cleanP)) {
+                allOtherBotNumbers.add(cleanP);
+                if (info.phone) allOtherBotNumbers.add(info.phone.replace(/[^0-9]/g, ''));
+                if (info.botName) otherBotNames.push(normalizeArabic(info.botName.toLowerCase().trim()));
+                if (info.callName) otherCallNames.push(normalizeArabic(info.callName.toLowerCase().trim()));
+            }
+        }
+
+        // 0️⃣ إذا كانت الرسالة عبارة عن ريبلاي (اقتباس) لرسالة صادرة من بوت آخر في النظام:
+        // يجب على هذا البوت تجاهلها بصمت تام لكي لا يتدخل في لعبة أو أمر بوت آخر!
+        const quotedParticipantEarly = mek.message?.extendedTextMessage?.contextInfo?.participant;
+        if (quotedParticipantEarly) {
+            const cleanQuotedPart = quotedParticipantEarly.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+            if (cleanQuotedPart && allOtherBotNumbers.has(cleanQuotedPart) && !thisBotIdentities.has(cleanQuotedPart)) {
+                return;
+            }
+        }
+
+        // فحص وجود بوتات أخرى من نظامنا في نفس هذا الجروب
+        let otherBotsPresentInRoom = false;
+        let mainBotPresentInRoom = false;
+        if (isRealGroup) {
+            try {
+                const groupMeta = await getCachedGroupMetadata(currentConn, from);
+                if (groupMeta && groupMeta.participants) {
+                    for (const p of groupMeta.participants) {
+                        const pNum = p.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                        if (allOtherBotNumbers.has(pNum)) {
+                            otherBotsPresentInRoom = true;
+                            if (pNum === mainBotNumber) mainBotPresentInRoom = true;
+                        }
+                    }
+                }
+            } catch (_) {}
+        }
+
         // 💫 الرد على "بوت" أو "يا بوت" (اسمي كذا يا نجم)
         if (normalizedBody === 'بوت' || normalizedBody === 'يا بوت') {
+            // إذا كان البوت الأساسي موجوداً في نفس الروم، يصمت البوت الفرعي ليرد البوت الأساسي فقط
+            if (isRealGroup && currentConn.isSubBot && mainBotPresentInRoom) {
+                return;
+            }
             const currentTime = Date.now();
             const isFemale = (currentConn.gender === 'female' || currentConn.subBotConfig?.gender === 'female');
             const starTitle = isFemale ? 'يا نجم/ة 🐤💫' : 'يا نجم 🐤💫';
@@ -947,6 +1038,32 @@ export async function handleAllMessages(mek, currentConn) {
             if (isCallingOtherBot) {
                 // الرسالة موجهة صراحةً لبوت آخر: هذا البوت يتجاهلها بصمت حتى يرد البوت المطلوب فقط!
                 return;
+            }
+
+            // 4️⃣ في حال تواجد البوت الرئيسي وبوتات فرعية في نفس الجروب، ولم يتم ذكر اسم البوت صراحة:
+            if (isRealGroup && currentConn.isSubBot && mainBotPresentInRoom) {
+                const isQuotedToThisBot = Boolean(
+                    quotedParticipantEarly && thisBotIdentities.has(quotedParticipantEarly.split('@')[0].split(':')[0].replace(/[^0-9]/g, ''))
+                );
+                const isGameActiveOnMe = Boolean(
+                    (currentConn.football && currentConn.football[from]) ||
+                    (currentConn.obito && currentConn.obito[from]) ||
+                    (currentConn.scramble && currentConn.scramble[from]) ||
+                    (currentConn.movies && currentConn.movies[from]) ||
+                    (currentConn.puzzleGames && currentConn.puzzleGames.has(from)) ||
+                    (currentConn.bakasa && currentConn.bakasa[from] && currentConn.bakasa[from].status !== 'off') ||
+                    (currentConn.sarahaGames && currentConn.sarahaGames[from]) ||
+                    (currentConn.gameSolo && currentConn.gameSolo[from]) ||
+                    (currentConn.game && currentConn.game[from])
+                );
+
+                if (!isQuotedToThisBot && !isGameActiveOnMe) {
+                    const isGameStarter = /^(كوره|كورة|لعبة الكورة|احزر|احذر|رتب|ترتيب|xo|اكس او|صراحه|صراحة|بكاسه|بكاسة|بازل|puzzle|فيلم|افلام)$/i.test(normalizedBody);
+                    const isGeneralCmd = /^(اوامر|الاوامر|أوامر|الأوامر|منيو|المنيو|مطور|المطور|بنج|ping)$/i.test(normalizedBody);
+                    if (isGameStarter || isGeneralCmd) {
+                        return;
+                    }
+                }
             }
         }
 
@@ -2103,35 +2220,6 @@ export async function handleAllMessages(mek, currentConn) {
         const quotedClean = getCleanNumber(quotedParticipant);
         const stanzaId = ctxInfo?.stanzaId || '';
 
-        // بناء قائمة بكل المعرفات الممكنة للبوت الحالي (أرقام تليفون، LIDs، سجلات)
-        const thisBotIdentities = new Set();
-        if (myNumber) thisBotIdentities.add(myNumber);
-        if (currentConn.user?.id) {
-            const uPhone = currentConn.user.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-            if (uPhone) thisBotIdentities.add(uPhone);
-        }
-        if (currentConn.user?.lid) {
-            const uLid = currentConn.user.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-            if (uLid) thisBotIdentities.add(uLid);
-        }
-        if (subBotConfig?.phone) {
-            const sPhone = cleanPhoneNumber(subBotConfig.phone);
-            if (sPhone) thisBotIdentities.add(sPhone);
-        }
-        if (currentConn.subBotPhone) {
-            const sPhone = cleanPhoneNumber(currentConn.subBotPhone);
-            if (sPhone) thisBotIdentities.add(sPhone);
-        }
-        if (myNumber && localDB?.lidMap?.[myNumber]) {
-            thisBotIdentities.add(String(localDB.lidMap[myNumber]).replace(/[^0-9]/g, ''));
-        }
-        if (localDB?.lidMap) {
-            for (const [phone, lid] of Object.entries(localDB.lidMap)) {
-                if (thisBotIdentities.has(phone)) thisBotIdentities.add(String(lid).replace(/[^0-9]/g, ''));
-                if (thisBotIdentities.has(lid)) thisBotIdentities.add(String(phone).replace(/[^0-9]/g, ''));
-            }
-        }
-
         const isQuotedToMe = (quotedClean && thisBotIdentities.has(quotedClean)) ||
             (Boolean(stanzaId) && (
                 (currentConn.sentMsgIds && currentConn.sentMsgIds.has(stanzaId)) ||
@@ -2448,7 +2536,7 @@ export async function handleAllMessages(mek, currentConn) {
         let isGameCommand = /^(كوره|كورة|لعبة الكورة|لعبة كوره|كيف لعب كوره|كيف العب كوره|طريقه كوره|تلميح كوره|تلميح كورة|الغاء كوره|الغاء كورة|ايقاف كوره|احزر|احذر|لعبة احزر|لعبة احذر|كيف لعب احزر|كيف العب احزر|طريقه احزر|شراء تلميح احزر|الغاء احزر|الغاء احذر|رتب|ترتيب|لعبة رتب|كيف لعب رتب|كيف العب رتب|طريقه رتب|شراء تلميح رتب|الغاء رتب|xo|الخروج|انسحاب|اكس|او|اكس او|صراحه|صراحة|بكاسه|بكاسة|انضمام بكاسه|انضمام بكاسة|خروج بكاسه|خروج بكاسة|ابدأ بكاسه|ابدأ بكاسة|تصويت|خلصت|تخمين|تكملة|تكمله|الغاء بكاسه|الغاء بكاسة|بازل|puzzle|لعبة بازل|لعبه بازل|لعبة البازل|لعبه البازل|ابدأ بازل|ابدا بازل|جيم بازل|فوق|تحت|يمين|شمال|تلميح بازل|الغاء بازل|تلميح البازل|الغاء البازل)$/i.test(normalizedBody) || (tttCommandCheck && tttCommandCheck.test(textLower));
 
         if (!isRealGroup) {
-            let isBakasaActive = (currentConn.bakasa && currentConn.bakasa[from] && currentConn.bakasa[from].status !== 'off') || (global.bakasa && global.bakasa[from] && global.bakasa[from].status !== 'off');
+            let isBakasaActive = (currentConn.bakasa && currentConn.bakasa[from] && currentConn.bakasa[from].status !== 'off');
             if (isGameCommand || (currentConn.obito && currentConn.obito[from]) || (currentConn.scramble && currentConn.scramble[from]) || (currentConn.gameSolo && currentConn.gameSolo[from]) || (currentConn.game && currentConn.game[from]) || isBakasaActive) {
                 await respondWithStrictTiming('⚠️', async () => {
                     await currentConn.sendMessage(from, { text: '⚠️ الألعاب دي بتشتغل جوه الجروبات بس يا نجم! ⚽🎮' }, { quoted: mek });
@@ -2550,7 +2638,7 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        let bakasaState = (currentConn.bakasa && currentConn.bakasa[from]) || (global.bakasa && global.bakasa[from]);
+        let bakasaState = (currentConn.bakasa && currentConn.bakasa[from]);
         let isBakasaActive = bakasaState && bakasaState.status !== 'off';
         let isBakasaExplicitCmd = normalizedBody.startsWith('بكاسه') || normalizedBody.startsWith('بكاسة');
         

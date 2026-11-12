@@ -2,8 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { modifyUserPoints } from '../core/points.js';
 
-const puzzleGames = new Map();
-
 // ⏱️ دالة التأخير المخصصة
 const gameDelay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -103,6 +101,9 @@ const puzzleHandler = {
     description: 'لعبة البازل المطور أرقام وأشكال عشوائية مفتوحة الوقت 100%',
     
     async execute(client, m, args, command, text) {
+        client.puzzleGames = client.puzzleGames || new Map();
+        const puzzleGames = client.puzzleGames;
+
         const from = m.key.remoteJid;
         const sender = m.key.participant || m.key.remoteJid;
 

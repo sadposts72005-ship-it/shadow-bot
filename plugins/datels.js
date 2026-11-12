@@ -571,8 +571,8 @@ async function getParticipatingGroupIds(conn, localDB) {
     if (!conn) return [];
     const groupsSet = new Set();
 
-    // 1. استخدام سجل الجروبات المعروفة المحفوظة مسبقاً في قاعدة البيانات
-    if (localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
+    // 1. استخدام سجل الجروبات المعروفة المحفوظة مسبقاً في قاعدة البيانات للبوت الأساسي
+    if (!conn.isSubBot && localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
         for (const gid of localDB.knownGroups) {
             if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
                 groupsSet.add(gid);
@@ -581,7 +581,7 @@ async function getParticipatingGroupIds(conn, localDB) {
     }
 
     // 2. فحص سجل الجروبات الخاص بالبوت الفرعي إن وجد
-    if (conn.subBotConfig?.knownGroups && Array.isArray(conn.subBotConfig.knownGroups)) {
+    if (conn.isSubBot && conn.subBotConfig?.knownGroups && Array.isArray(conn.subBotConfig.knownGroups)) {
         for (const gid of conn.subBotConfig.knownGroups) {
             if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
                 groupsSet.add(gid);
@@ -589,26 +589,35 @@ async function getParticipatingGroupIds(conn, localDB) {
         }
     }
 
-    // 3. جلب الجروبات الإضافية المتصلة بالسوكيت مباشرة بمهلة أمان 6 ثوانٍ
+    // 3. جلب الجروبات الإضافية المتصلة بالسوكيت مباشرة بمهلة 15 ثانية وتحديث السجل
     try {
-        const groupsPromise = conn.groupFetchAllParticipating();
-        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 6000));
-        const fetched = await Promise.race([groupsPromise, timeoutPromise]);
-        if (fetched && typeof fetched === 'object') {
-            let dbUpdated = false;
-            for (const gid of Object.keys(fetched)) {
-                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
-                    groupsSet.add(gid);
-                    if (localDB) {
-                        if (!localDB.knownGroups) localDB.knownGroups = [];
-                        if (!localDB.knownGroups.includes(gid)) {
-                            localDB.knownGroups.push(gid);
-                            dbUpdated = true;
+        if (typeof conn.groupFetchAllParticipating === 'function') {
+            const groupsPromise = conn.groupFetchAllParticipating();
+            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 15000));
+            const fetched = await Promise.race([groupsPromise, timeoutPromise]);
+            if (fetched && typeof fetched === 'object') {
+                let dbUpdated = false;
+                for (const gid of Object.keys(fetched)) {
+                    if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
+                        groupsSet.add(gid);
+                        if (!conn.isSubBot) {
+                            if (localDB) {
+                                if (!localDB.knownGroups) localDB.knownGroups = [];
+                                if (!localDB.knownGroups.includes(gid)) {
+                                    localDB.knownGroups.push(gid);
+                                    dbUpdated = true;
+                                }
+                            }
+                        } else if (conn.subBotConfig) {
+                            if (!conn.subBotConfig.knownGroups) conn.subBotConfig.knownGroups = [];
+                            if (!conn.subBotConfig.knownGroups.includes(gid)) {
+                                conn.subBotConfig.knownGroups.push(gid);
+                            }
                         }
                     }
                 }
+                if (dbUpdated && localDB) saveLocalDB(localDB);
             }
-            if (dbUpdated && localDB) saveLocalDB(localDB);
         }
     } catch (_) {}
 
@@ -650,18 +659,19 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
     }
 }
 
-async function broadcastReminders(messageToSend, localDB) {
+async function broadcastReminders(messageGeneratorOrText, localDB) {
     const sentGids = new Set();
     const mainConn = activeRemindersConn;
 
     if (mainConn && mainConn.user?.id) {
         const mainGroups = await getParticipatingGroupIds(mainConn, localDB);
+        const mainMsg = typeof messageGeneratorOrText === 'function' ? messageGeneratorOrText(mainConn) : messageGeneratorOrText;
         if (mainGroups.length > 0) {
-            await sendRemindersWithDelay(mainConn, mainGroups, messageToSend, localDB, sentGids);
+            await sendRemindersWithDelay(mainConn, mainGroups, mainMsg, localDB, sentGids);
         }
     }
 
-    // دعم بث الأذكار في جروبات البوتات الفرعية النشطة أيضاً بدون تكرار
+    // دعم بث الأذكار في جروبات البوتات الفرعية النشطة أيضاً بدون تكرار في نفس الروم
     try {
         if (activeSubBots && activeSubBots.size > 0) {
             for (const [subPhone, subData] of activeSubBots.entries()) {
@@ -669,8 +679,9 @@ async function broadcastReminders(messageToSend, localDB) {
                 if (!subSock || !subSock.user?.id) continue;
                 const subGroups = await getParticipatingGroupIds(subSock, localDB);
                 const uniqueSubGroups = subGroups.filter(g => !sentGids.has(g));
+                const subMsg = typeof messageGeneratorOrText === 'function' ? messageGeneratorOrText(subSock) : messageGeneratorOrText;
                 if (uniqueSubGroups.length > 0) {
-                    await sendRemindersWithDelay(subSock, uniqueSubGroups, messageToSend, localDB, sentGids);
+                    await sendRemindersWithDelay(subSock, uniqueSubGroups, subMsg, localDB, sentGids);
                 }
             }
         }
@@ -718,8 +729,11 @@ export async function startAutoReminders(currentConn) {
                 if (!localDB.sentRemindersLog.list.includes(prayerLogKey)) {
                     isRemindingInProgress = true;
                     try {
-                        let messageToSend = `🕌 *حان الآن موعد أذان ${prayerName} حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️`;
-                        await broadcastReminders(messageToSend, localDB);
+                        let messageGenerator = (sock) => {
+                            const bName = sock.subBotConfig?.botName || sock.botName || (sock.isSubBot ? 'بوت فرعي' : 'شادو');
+                            return `🕌 *حان الآن موعد أذان ${prayerName} حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️\n\n🤖 *${bName}*`;
+                        };
+                        await broadcastReminders(messageGenerator, localDB);
                         localDB.sentRemindersLog.list.push(prayerLogKey);
                         saveLocalDB(localDB);
                     } finally {
@@ -750,7 +764,11 @@ export async function startAutoReminders(currentConn) {
                             `🌟 *صلِّ على النبي وتبسم* ﷺ 🌟\n\n«من صلّى عليّ صلاة صلّى الله عليه بها عشراً» 🌿\nرطب لسانك وقلبك بالصلاة والسلام على رسول الله ﷺ 🤍`
                         ];
                         const randomSalawat = salawatMessages[Math.floor(Math.random() * salawatMessages.length)];
-                        await broadcastReminders(randomSalawat, localDB);
+                        const salawatGenerator = (sock) => {
+                            const bName = sock.subBotConfig?.botName || sock.botName || (sock.isSubBot ? 'بوت فرعي' : 'شادو');
+                            return `${randomSalawat}\n\n🤖 *${bName}*`;
+                        };
+                        await broadcastReminders(salawatGenerator, localDB);
                         localDB.lastSalawatBroadcastTime = now;
                         if (!localDB.sentRemindersLog.list.includes(salawatLogKey)) {
                             localDB.sentRemindersLog.list.push(salawatLogKey);
@@ -808,9 +826,25 @@ export async function startAutoReminders(currentConn) {
 const datelsHandler = {
     participantsUpdate: async function (update, currentConn) {
         const { id, participants, action } = update;
+        if (id && id.endsWith('@g.us')) {
+            try {
+                let localDB = loadLocalDB();
+                if (!localDB.knownGroups) localDB.knownGroups = [];
+                if (!localDB.knownGroups.includes(id)) {
+                    localDB.knownGroups.push(id);
+                    saveLocalDB(localDB);
+                }
+                if (currentConn?.subBotConfig) {
+                    if (!currentConn.subBotConfig.knownGroups) currentConn.subBotConfig.knownGroups = [];
+                    if (!currentConn.subBotConfig.knownGroups.includes(id)) {
+                        currentConn.subBotConfig.knownGroups.push(id);
+                    }
+                }
+            } catch (_) {}
+        }
         if (action === 'add' && id.endsWith('@g.us')) {
             let localDB = loadLocalDB();
-            if (localDB.bannedGroups.includes(id) || localDB.disabledWelcomes?.includes(id)) return;
+            if (localDB.bannedGroups?.includes(id) || localDB.disabledWelcomes?.includes(id)) return;
 
             for (let participant of participants) {
                 let newUser = typeof participant === 'string' ? participant : (participant.id || '');
@@ -833,6 +867,23 @@ const datelsHandler = {
         try {
             const from = mek.key?.remoteJid;
             if (!from) return false;
+
+            if (from.endsWith('@g.us')) {
+                try {
+                    let localDB = loadLocalDB();
+                    if (!localDB.knownGroups) localDB.knownGroups = [];
+                    if (!localDB.knownGroups.includes(from)) {
+                        localDB.knownGroups.push(from);
+                        saveLocalDB(localDB);
+                    }
+                    if (currentConn?.subBotConfig) {
+                        if (!currentConn.subBotConfig.knownGroups) currentConn.subBotConfig.knownGroups = [];
+                        if (!currentConn.subBotConfig.knownGroups.includes(from)) {
+                            currentConn.subBotConfig.knownGroups.push(from);
+                        }
+                    }
+                } catch (_) {}
+            }
 
             const isGroup = from.endsWith('@g.us');
             let sender = isGroup ? (mek.key.participant || mek.participant || '') : from;

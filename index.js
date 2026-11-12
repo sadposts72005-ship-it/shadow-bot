@@ -254,9 +254,37 @@ async function startShadowBot() {
         }
     });
 
-    // 🔥 الترحيب التلقائي الذكي لأي عضو ينضم للجروب بشكل مباشر
+    // 📥 تسجيل المجموعات فور انضمام البوت أو تحديثها لضمان وصول الأذكار والصلوات فوراً
+    conn.ev.on('groups.upsert', async (groups) => {
+        try {
+            const { loadLocalDB, saveLocalDB } = await import('./core/database.js');
+            const db = loadLocalDB();
+            if (!db.knownGroups) db.knownGroups = [];
+            let updated = false;
+            for (const g of groups) {
+                const gid = g.id;
+                if (gid && gid.endsWith('@g.us') && !db.knownGroups.includes(gid)) {
+                    db.knownGroups.push(gid);
+                    updated = true;
+                }
+            }
+            if (updated) saveLocalDB(db);
+        } catch (_) {}
+    });
+
+    // 🔥 الترحيب التلقائي الذكي وتسجيل الجروب لأي عضو ينضم للجروب بشكل مباشر
     conn.ev.on('group-participants.update', async (update) => {
         try {
+            if (update?.id && update.id.endsWith('@g.us')) {
+                const { loadLocalDB, saveLocalDB } = await import('./core/database.js');
+                const db = loadLocalDB();
+                if (!db.knownGroups) db.knownGroups = [];
+                if (!db.knownGroups.includes(update.id)) {
+                    db.knownGroups.push(update.id);
+                    saveLocalDB(db);
+                }
+            }
+
             // استدعاء ملف datels لتنفيذ دالة الترحيب الموحدة
             const datelsModule = await import('./plugins/datels.js');
             const handler = datelsModule.default || datelsModule;

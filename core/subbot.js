@@ -356,6 +356,50 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
             }
         });
 
+        // 📥 تسجيل مجموعات البوت الفرعي تلقائياً فور انضمامه أو تحديثها لضمان إرسال الأذكار والصلوات
+        sock.ev.on('groups.upsert', async (groups) => {
+            try {
+                if (!sock.subBotConfig) sock.subBotConfig = {};
+                if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+                let updated = false;
+                for (const g of groups) {
+                    const gid = g.id;
+                    if (gid && gid.endsWith('@g.us') && !sock.subBotConfig.knownGroups.includes(gid)) {
+                        sock.subBotConfig.knownGroups.push(gid);
+                        updated = true;
+                    }
+                }
+                if (updated) {
+                    const cfgPath = path.join(process.cwd(), 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                    if (fs.existsSync(path.dirname(cfgPath))) {
+                        fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
+                    }
+                }
+            } catch (_) {}
+        });
+
+        // 🔥 الترحيب التلقائي وتسجيل الجروب بالبوت الفرعي
+        sock.ev.on('group-participants.update', async (update) => {
+            try {
+                if (update?.id && update.id.endsWith('@g.us')) {
+                    if (!sock.subBotConfig) sock.subBotConfig = {};
+                    if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+                    if (!sock.subBotConfig.knownGroups.includes(update.id)) {
+                        sock.subBotConfig.knownGroups.push(update.id);
+                        const cfgPath = path.join(process.cwd(), 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                        if (fs.existsSync(path.dirname(cfgPath))) {
+                            fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
+                        }
+                    }
+                }
+                const datelsModule = await import('../plugins/datels.js');
+                const handler = datelsModule.default || datelsModule;
+                if (handler && typeof handler.participantsUpdate === 'function') {
+                    await handler.participantsUpdate(update, sock);
+                }
+            } catch (_) {}
+        });
+
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
@@ -844,6 +888,50 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, err?.message || err);
                     }
                 }
+            });
+
+            // 📥 تسجيل مجموعات البوت الفرعي تلقائياً
+            sock.ev.on('groups.upsert', async (groups) => {
+                try {
+                    if (!sock.subBotConfig) sock.subBotConfig = {};
+                    if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+                    let updated = false;
+                    for (const g of groups) {
+                        const gid = g.id;
+                        if (gid && gid.endsWith('@g.us') && !sock.subBotConfig.knownGroups.includes(gid)) {
+                            sock.subBotConfig.knownGroups.push(gid);
+                            updated = true;
+                        }
+                    }
+                    if (updated) {
+                        const cfgPath = path.join(process.cwd(), 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                        if (fs.existsSync(path.dirname(cfgPath))) {
+                            fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
+                        }
+                    }
+                } catch (_) {}
+            });
+
+            // 🔥 الترحيب التلقائي وتسجيل الجروب بالبوت الفرعي
+            sock.ev.on('group-participants.update', async (update) => {
+                try {
+                    if (update?.id && update.id.endsWith('@g.us')) {
+                        if (!sock.subBotConfig) sock.subBotConfig = {};
+                        if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+                        if (!sock.subBotConfig.knownGroups.includes(update.id)) {
+                            sock.subBotConfig.knownGroups.push(update.id);
+                            const cfgPath = path.join(process.cwd(), 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                            if (fs.existsSync(path.dirname(cfgPath))) {
+                                fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
+                            }
+                        }
+                    }
+                    const datelsModule = await import('../plugins/datels.js');
+                    const handler = datelsModule.default || datelsModule;
+                    if (handler && typeof handler.participantsUpdate === 'function') {
+                        await handler.participantsUpdate(update, sock);
+                    }
+                } catch (_) {}
             });
 
             return sock;
