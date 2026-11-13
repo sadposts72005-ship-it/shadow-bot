@@ -250,7 +250,7 @@ function isUserMuted(senderJid, fromGid, localDB) {
 
     return mutedList.some(u => {
         const cleanU = getCleanNumber(u);
-        return cleanU === senderClean || (mappedPhone && cleanU === mappedPhone) || (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean);
+        return cleanU === senderClean || (mappedPhone && cleanU === mappedPhone) || (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) || u === senderJid;
     });
 }
 

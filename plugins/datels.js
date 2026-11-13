@@ -290,18 +290,36 @@ function isUserMuted(senderJid, fromGid, localDB) {
 
     return mutedList.some(u => {
         const cleanU = getCleanNumber(u);
-        return cleanU === senderClean || (mappedPhone && cleanU === mappedPhone) || (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean);
+        return cleanU === senderClean || (mappedPhone && cleanU === mappedPhone) || (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) || u === senderJid;
     });
 }
 
 function extractTarget(mek, bodyText = '') {
-    // 1. Quoted participant
-    const quoted = mek.message?.extendedTextMessage?.contextInfo?.participant;
+    let msg = mek?.message;
+    if (msg?.ephemeralMessage) msg = msg.ephemeralMessage.message;
+    if (msg?.viewOnceMessageV2) msg = msg.viewOnceMessageV2.message;
+    if (msg?.viewOnceMessage) msg = msg.viewOnceMessage.message;
+
+    const ctx = msg?.extendedTextMessage?.contextInfo ||
+                msg?.imageMessage?.contextInfo ||
+                msg?.videoMessage?.contextInfo ||
+                msg?.stickerMessage?.contextInfo ||
+                msg?.documentMessage?.contextInfo ||
+                msg?.audioMessage?.contextInfo ||
+                msg?.contactMessage?.contextInfo ||
+                mek?.message?.extendedTextMessage?.contextInfo ||
+                mek?.contextInfo ||
+                null;
+
+    // 1. Quoted participant (الرد على رسالة)
+    const quoted = ctx?.participant || ctx?.quotedMessage?.participant;
     if (quoted) return quoted;
 
-    // 2. Mentioned jids
-    const mentioned = mek.message?.extendedTextMessage?.contextInfo?.mentionedJid;
-    if (mentioned && mentioned.length > 0) return mentioned[0];
+    // 2. Mentioned jids (المنشن)
+    const mentioned = ctx?.mentionedJid;
+    if (mentioned && Array.isArray(mentioned) && mentioned.length > 0) {
+        return mentioned[0];
+    }
 
     // 3. Extracted phone number or LID from text (يدعم الأرقام العربية والإنجليزية والمسافات)
     const converted = convertArabicNumbers(bodyText || '');
@@ -1918,9 +1936,21 @@ const datelsHandler = {
                     }
 
                     const targetNum = getCleanNumber(target);
-                    if (targetNum === '201129249396' || target.includes('194961618301016') || isHajjMember(target, localDB)) {
+                    if (targetNum === '201129249396' || target.includes('194961618301016') || isUserInList(target, localDB.mainHajjUsers) || isUserInList(target, localDB.hajjUsers)) {
                         await handleCommandTiming('👑');
                         await currentConn.sendMessage(from, { text: '❌ عيب يا فنان.. لا يمكن كتم الحج شادو أو الحجاج المعتمدين!' }, { quoted: mek });
+                        return true;
+                    }
+
+                    if (targetNum === myBotNum || target.includes(myBotNum)) {
+                        await handleCommandTiming('🤖');
+                        await currentConn.sendMessage(from, { text: '❌ ما ينفعش تكتم البوت يا فنان!' }, { quoted: mek });
+                        return true;
+                    }
+
+                    if (targetNum === groupCreatorRaw) {
+                        await handleCommandTiming('👑');
+                        await currentConn.sendMessage(from, { text: '❌ لا يمكن كتم منشئ الجروب!' }, { quoted: mek });
                         return true;
                     }
 
@@ -1930,7 +1960,7 @@ const datelsHandler = {
                     const mappedTarget = localDB.lidMap?.[targetNum] || '';
                     const alreadyMuted = localDB.mutedUsers[from].some(u => {
                         const cu = getCleanNumber(u);
-                        return cu === targetNum || (mappedTarget && cu === mappedTarget);
+                        return cu === targetNum || (mappedTarget && cu === mappedTarget) || u === target;
                     });
 
                     if (alreadyMuted) {
@@ -1942,6 +1972,9 @@ const datelsHandler = {
                     localDB.mutedUsers[from].push(targetNum);
                     if (mappedTarget && !localDB.mutedUsers[from].includes(mappedTarget)) {
                         localDB.mutedUsers[from].push(mappedTarget);
+                    }
+                    if (!localDB.mutedUsers[from].includes(target)) {
+                        localDB.mutedUsers[from].push(target);
                     }
                     saveLocalDB(localDB);
 
@@ -1973,6 +2006,17 @@ const datelsHandler = {
                     const mappedTarget = localDB.lidMap?.[targetNum] || '';
 
                     if (!localDB.mutedUsers || !localDB.mutedUsers[from]) {
+                        await handleCommandTiming('ℹ️');
+                        await currentConn.sendMessage(from, { text: `ℹ️ العضو @${targetNum} ليس مكتوماً في هذا الجروب!`, mentions: [target] }, { quoted: mek });
+                        return true;
+                    }
+
+                    const isMutedNow = localDB.mutedUsers[from].some(u => {
+                        const cu = getCleanNumber(u);
+                        return cu === targetNum || (mappedTarget && cu === mappedTarget) || u === target;
+                    });
+
+                    if (!isMutedNow) {
                         await handleCommandTiming('ℹ️');
                         await currentConn.sendMessage(from, { text: `ℹ️ العضو @${targetNum} ليس مكتوماً في هذا الجروب!`, mentions: [target] }, { quoted: mek });
                         return true;
