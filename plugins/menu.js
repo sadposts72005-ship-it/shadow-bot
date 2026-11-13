@@ -235,7 +235,6 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                `تابع كافة التحديثات، المميزات الجديدة، الإعلانات وشروحات البوت الحصرية عبر قناة الواتساب الرسمية:\n\n` +
                `🔗 *رابط الانضمام للقناة مباشرة:*\n` +
                `https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
-               `👑 *المطور الأساسي:* الحج شادو (+201129249396)\n` +
                `✨ نتشرف بوجودكم معنا دائماً! ❤️` +
                footer;
     }

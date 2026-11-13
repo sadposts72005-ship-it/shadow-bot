@@ -1470,7 +1470,6 @@ const datelsHandler = {
                     `📢 *قناة المطور الرسمية (الحج شادو)* 📢\n\n` +
                     `تابع كافة التحديثات، الإعلانات، والمميزات الجديدة والشروحات الحصرية عبر قناة الواتساب الرسمية:\n\n` +
                     `🔗 *رابط القناة للانضمام:*\nhttps://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
-                    `👑 *المطور الأساسي:* الحج شادو (+201129249396)\n` +
                     `✨ شرفنا بانضمامك يا غالي! ❤️`;
                 await currentConn.sendMessage(from, { text: channelMsg }, { quoted: mek });
                 return true;
