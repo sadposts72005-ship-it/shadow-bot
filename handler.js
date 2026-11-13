@@ -904,6 +904,27 @@ export async function handleAllMessages(mek, currentConn) {
         // 🚫 فحص حظر المستخدم
         if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return;
 
+        // 🔇 فحص كتم المستخدم في هذا الجروب (حذف فوري لرسائل المكتوم)
+        if (isRealGroup && localDB.mutedUsers?.[from]?.includes(sender)) {
+            try {
+                await currentConn.sendMessage(from, { delete: mek.key });
+            } catch (_) {}
+            return;
+        }
+
+        // 🛡️ مكافحة نصوص الكراش والفيروسات الضخمة لحماية الجروب من التبنيد
+        if (isRealGroup && localDB.groupProtection?.[from] && !isAbsoluteOwner) {
+            const rawLen = (body || '').length;
+            const hasCrash = rawLen > 7000 || /[\u200B-\u200D\uFEFF]{20,}/.test(body) || /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]{1000,}/.test(body);
+            if (hasCrash) {
+                try {
+                    await currentConn.sendMessage(from, { delete: mek.key });
+                    await currentConn.groupParticipantsUpdate(from, [sender], 'remove');
+                } catch (_) {}
+                return;
+            }
+        }
+
         // =========================================================================
         // 🤖 [اسم المناداة والنداء وتوجيه الأوامر للبوت المستهدف وعزل البوتات في الروم الواحد]
         // =========================================================================

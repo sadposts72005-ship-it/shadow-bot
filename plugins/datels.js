@@ -1022,6 +1022,31 @@ const datelsHandler = {
                 return cleanK === cleanSenderNum || (localDB.lidMap?.[cleanSenderNum] && cleanK === localDB.lidMap[cleanSenderNum]);
             });
 
+            // 🔇 0️⃣ [حذف رسائل الأعضاء المكتومين بالجروب فوراً]
+            if (isGroup && localDB.mutedUsers?.[from]?.includes(sender)) {
+                try {
+                    await currentConn.sendMessage(from, { delete: mek.key });
+                } catch (_) {}
+                return true;
+            }
+
+            // 🛡️ [مكافحة نصوص الكراش والفيروسات الضخمة لحماية الجروب من التبنيد]
+            if (isGroup && localDB.groupProtection?.[from] && !isActualRoomAdminOrOwner) {
+                const rawLen = (body || '').length;
+                const hasCrash = rawLen > 7000 || /[\u200B-\u200D\uFEFF]{20,}/.test(body) || /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]{1000,}/.test(body);
+                if (hasCrash) {
+                    try {
+                        await currentConn.sendMessage(from, { delete: mek.key });
+                        await currentConn.groupParticipantsUpdate(from, [sender], 'remove');
+                        await currentConn.sendMessage(from, {
+                            text: `🚨 *تحذير أمني ضد التبنيد:* تم طرد @${cleanSenderNum} وحذف رسالته فوراً لإرساله نصوص فيروسات / كراش تهدد الجروب بالحظر! 🛡️`,
+                            mentions: [sender]
+                        });
+                    } catch (_) {}
+                    return true;
+                }
+            }
+
             // أوامر الإغلاق الكامل للسيرفر للمطور الأصلي فقط
             const shutdownCommands = ['قفل البوت', 'ايقاف البوت', 'طفي البوت', 'اطفاء البوت'];
 
@@ -1334,6 +1359,65 @@ const datelsHandler = {
             // =========================================================================
             const isImageHandled = await handleImageCommand(mek, currentConn, body);
             if (isImageHandled) return true;
+
+            // =========================================================================
+            // 👤 [أمر بروف / صورة البروفايل لأي شخص بجودة عالية]
+            // =========================================================================
+            const isPfpCommand = /^(?:\.|\/)?(بروف|البروف|بروفايل|البروفايل|صوره بروفايل|صورة بروفايل|صوره البروفايل|صورة البروفايل|صورة الشخص|صوره الشخص)(?:\s|$)/i.test(normalizedBody);
+            if (isPfpCommand) {
+                await handleCommandTiming('👤');
+                let target = extractTarget(mek, body);
+                if (!target) {
+                    target = sender;
+                }
+
+                let cleanTarget = getCleanNumber(target);
+                let targetJid = target.endsWith('@s.whatsapp.net') ? target : (target.endsWith('@g.us') ? target : `${cleanTarget}@s.whatsapp.net`);
+
+                try {
+                    let pfpUrl = await currentConn.profilePictureUrl(targetJid, 'image').catch(() => null);
+                    if (!pfpUrl) {
+                        pfpUrl = await currentConn.profilePictureUrl(targetJid).catch(() => null);
+                    }
+
+                    if (pfpUrl) {
+                        await currentConn.sendMessage(from, {
+                            image: { url: pfpUrl },
+                            caption: `👤 *صورة البروفايل للغالي:* @${cleanTarget}\n🤖 *بواسطة:* ${botName}`,
+                            mentions: [targetJid]
+                        }, { quoted: mek });
+                        return true;
+                    } else {
+                        await currentConn.sendMessage(from, {
+                            text: `❌ *تعذر جلب صورة البروفايل لـ @${cleanTarget}!* 👤\n(إما أنه مش حاطط صورة بروفايل، أو إعدادات خصوصيته في الواتساب تمنع ظهورها).`,
+                            mentions: [targetJid]
+                        }, { quoted: mek });
+                        return true;
+                    }
+                } catch (e) {
+                    await currentConn.sendMessage(from, {
+                        text: `❌ *تعذر جلب صورة البروفايل لـ @${cleanTarget}!* 👤\n(إما أنه مش حاطط صورة بروفايل، أو إعدادات خصوصيته في الواتساب تمنع ظهورها).`,
+                        mentions: [targetJid]
+                    }, { quoted: mek });
+                    return true;
+                }
+            }
+
+            // =========================================================================
+            // 📢 [أمر قناة المطور الرسمية]
+            // =========================================================================
+            const isChannelCommand = /^(?:\.|\/)?(قناة المطور|قناه المطور|قناة شادو|قناه شادو|قناة|قناه|القناة|القناه|قناة الواتس|قناة البوت)(?:\s|$)/i.test(normalizedBody);
+            if (isChannelCommand) {
+                await handleCommandTiming('📢');
+                const channelMsg = 
+                    `📢 *قناة المطور الرسمية (الحج شادو)* 📢\n\n` +
+                    `تابع كافة التحديثات، الإعلانات، والمميزات الجديدة والشروحات الحصرية عبر قناة الواتساب الرسمية:\n\n` +
+                    `🔗 *رابط القناة للانضمام:*\nhttps://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
+                    `👑 *المطور الأساسي:* الحج شادو (+201129249396)\n` +
+                    `✨ شرفنا بانضمامك يا غالي! ❤️`;
+                await currentConn.sendMessage(from, { text: channelMsg }, { quoted: mek });
+                return true;
+            }
 
             // =========================================================================
             // 🎵 [أمر الأغاني - بحث وعرض أي أغنية مع البوستر ورابط اليوتيوب]
@@ -1778,7 +1862,133 @@ const datelsHandler = {
                     return true;
                 }
 
-                // رابط الجروب
+                // كتم عضو (حذف كل رسائله بالجروب فوراً وتلقائياً)
+                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('كتم ') || normalizedBody === 'كتم' || normalizedBody.startsWith('اكتم ') || normalizedBody === 'اكتم')) {
+                    let target = extractTarget(mek, body);
+                    if (!target) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو أو اعمله منشن لكتمه ومنعه من التحدث بالجروب!\n(مثال: كتم @العضو)' }, { quoted: mek });
+                        return true;
+                    }
+
+                    const targetNum = getCleanNumber(target);
+                    if (targetNum === '201129249396' || target.includes('194961618301016') || isHajjMember(target, localDB)) {
+                        await handleCommandTiming('👑');
+                        await currentConn.sendMessage(from, { text: '❌ عيب يا فنان.. لا يمكن كتم الحج شادو أو الحجاج المعتمدين!' }, { quoted: mek });
+                        return true;
+                    }
+
+                    if (!localDB.mutedUsers) localDB.mutedUsers = {};
+                    if (!localDB.mutedUsers[from]) localDB.mutedUsers[from] = [];
+
+                    if (localDB.mutedUsers[from].includes(target)) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} مكتوم بالفعل في هذا الجروب!`, mentions: [target] }, { quoted: mek });
+                        return true;
+                    }
+
+                    localDB.mutedUsers[from].push(target);
+                    saveLocalDB(localDB);
+
+                    await handleCommandTiming('🔇');
+                    await currentConn.sendMessage(from, {
+                        text: `🔇 *تم كتم العضو @${targetNum} بنجاح!* 🛑\n\nلن يستطيع التحدث في المجموعة، وأي رسالة سيرسلها هنا سيقوم البوت بحذفها فوراً وتلقائياً.`,
+                        mentions: [target]
+                    }, { quoted: mek });
+                    return true;
+                }
+
+                // فك كتم عضو
+                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('فك كتم') || normalizedBody.startsWith('فك الكتم') || normalizedBody.startsWith('الغاء كتم') || normalizedBody.startsWith('تكلم'))) {
+                    let target = extractTarget(mek, body);
+                    if (!target) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو أو اعمله منشن لفك الكتم عنه!' }, { quoted: mek });
+                        return true;
+                    }
+
+                    const targetNum = getCleanNumber(target);
+                    if (!localDB.mutedUsers || !localDB.mutedUsers[from] || !localDB.mutedUsers[from].includes(target)) {
+                        await handleCommandTiming('ℹ️');
+                        await currentConn.sendMessage(from, { text: `ℹ️ العضو @${targetNum} ليس مكتوماً في هذا الجروب!`, mentions: [target] }, { quoted: mek });
+                        return true;
+                    }
+
+                    localDB.mutedUsers[from] = localDB.mutedUsers[from].filter(u => u !== target);
+                    saveLocalDB(localDB);
+
+                    await handleCommandTiming('🔊');
+                    await currentConn.sendMessage(from, {
+                        text: `🔊 *تم فك الكتم عن @${targetNum} بنجاح!* ✨\nأصبح بإمكانه المشاركة وإرسال الرسائل في المجموعة الآن.`,
+                        mentions: [target]
+                    }, { quoted: mek });
+                    return true;
+                }
+
+                // عرض قائمة المكتومين
+                if (isActualRoomAdminOrOwner && (normalizedBody === 'المكتومين' || normalizedBody === 'قائمة المكتومين')) {
+                    await handleCommandTiming('📋');
+                    const mutedList = localDB.mutedUsers?.[from] || [];
+                    if (mutedList.length === 0) {
+                        await currentConn.sendMessage(from, { text: '✨ لا يوجد أي أعضاء مكتومين حالياً في هذا الجروب.' }, { quoted: mek });
+                        return true;
+                    }
+                    let listText = `🔇 *قائمة الأعضاء المكتومين في الجروب (${mutedList.length}):*\n\n`;
+                    for (let i = 0; i < mutedList.length; i++) {
+                        listText += `${i + 1}️⃣ @${getCleanNumber(mutedList[i])}\n`;
+                    }
+                    listText += `\n💡 لفك كتم أي عضو اكتب: *(فك كتم @العضو)*`;
+                    await currentConn.sendMessage(from, { text: listText, mentions: mutedList }, { quoted: mek });
+                    return true;
+                }
+
+                // حماية الجروب ضد التبنيد والتخريب
+                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('حماية الجروب') || normalizedBody.startsWith('حمايه الجروب') || normalizedBody.startsWith('ضد التبنيد') || normalizedBody.startsWith('حماية الروم') || normalizedBody.startsWith('حمايه الروم'))) {
+                    if (!localDB.groupProtection) localDB.groupProtection = {};
+
+                    if (normalizedBody.includes('تشغيل') || normalizedBody.includes('تفعيل') || normalizedBody.includes('فتح')) {
+                        localDB.groupProtection[from] = true;
+                        saveLocalDB(localDB);
+
+                        // قفل تعديل معلومات الجروب للمشرفين فقط لمنع تغيير الاسم لألفاظ محظورة
+                        try {
+                            await currentConn.groupSettingUpdate(from, 'locked');
+                        } catch (_) {}
+
+                        await handleCommandTiming('🛡️');
+                        const shieldMsg = 
+                            `🛡️ *تم تفعيل درع حماية الجروب ضد التبنيد والتخريب بنجاح!* 🔒\n\n` +
+                            `✅ *الإجراءات الأمنية المفعلة الآن:*\n` +
+                            `• 🔒 *قفل معلومات الجروب:* تم قفل تعديل الاسم والوصف والصورة للمشرفين فقط لمنع أي مخرب من تغيير الاسم لكلمات محظورة تسبب حظر الجروب.\n` +
+                            `• 💣 *مكافحة الفيروسات والكراش:* الحذف الفوري لأي رسائل كراش أو فيروسات هبوط (Virtex/Crash Text) قد تتسبب في تبنيد الروم.\n` +
+                            `• 🚫 *حماية مشددة ضد الروابط:* منع اللينكات وحذفها تلقائياً.\n` +
+                            `• 👤 *مراقبة التخريب:* حماية الروم من الطرد العشوائي.\n\n` +
+                            `✨ *الجروب الآن في أمان تام وتحت حماية بوت ${botName}!* 🛡️`;
+                        await currentConn.sendMessage(from, { text: shieldMsg }, { quoted: mek });
+                        return true;
+                    }
+
+                    if (normalizedBody.includes('ايقاف') || normalizedBody.includes('إيقاف') || normalizedBody.includes('تعطيل') || normalizedBody.includes('قفل')) {
+                        localDB.groupProtection[from] = false;
+                        saveLocalDB(localDB);
+
+                        await handleCommandTiming('🔓');
+                        await currentConn.sendMessage(from, { text: '🔓 *تم إيقاف وضع حماية الجروب ضد التبنيد.*' }, { quoted: mek });
+                        return true;
+                    }
+
+                    // عرض الحالة
+                    const isProtected = Boolean(localDB.groupProtection[from]);
+                    await handleCommandTiming('🛡️');
+                    const statusMsg = 
+                        `🛡️ *نظام حماية الجروبات ضد التبنيد والتخريب* 🛡️\n\n` +
+                        `📊 *الحالة الحالية في هذا الجروب:* ${isProtected ? 'مفعل ومحمي ✅' : 'معطل ❌'}\n\n` +
+                        `📌 *للتحكم في الحماية:*\n` +
+                        `• لتشغيل الحماية: *(حماية الجروب تشغيل)* 🛡️\n` +
+                        `• لإيقاف الحماية: *(حماية الجروب ايقاف)* 🔓`;
+                    await currentConn.sendMessage(from, { text: statusMsg }, { quoted: mek });
+                    return true;
+                }
                 if (isActualRoomAdminOrOwner && /^(لينك|اللينك|رابط|الرابط|لينك الجروب|اللينك الجروب|رابط الجروب|الرابط الجروب|لينك الروم|رابط الروم)$/i.test(normalizedBody)) {
                     await handleCommandTiming('🔗');
                     try {
