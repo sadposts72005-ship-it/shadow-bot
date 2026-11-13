@@ -280,6 +280,20 @@ function containsBadWords(text) {
     return false;
 }
 
+function isUserMuted(senderJid, fromGid, localDB) {
+    if (!fromGid || !localDB?.mutedUsers?.[fromGid]) return false;
+    const mutedList = localDB.mutedUsers[fromGid];
+    if (!Array.isArray(mutedList) || mutedList.length === 0) return false;
+
+    const senderClean = getCleanNumber(senderJid);
+    const mappedPhone = localDB.lidMap?.[senderClean] || '';
+
+    return mutedList.some(u => {
+        const cleanU = getCleanNumber(u);
+        return cleanU === senderClean || (mappedPhone && cleanU === mappedPhone) || (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean);
+    });
+}
+
 function extractTarget(mek, bodyText = '') {
     // 1. Quoted participant
     const quoted = mek.message?.extendedTextMessage?.contextInfo?.participant;
@@ -1023,7 +1037,7 @@ const datelsHandler = {
             });
 
             // 🔇 0️⃣ [حذف رسائل الأعضاء المكتومين بالجروب فوراً]
-            if (isGroup && localDB.mutedUsers?.[from]?.includes(sender)) {
+            if (isGroup && isUserMuted(sender, from, localDB)) {
                 try {
                     await currentConn.sendMessage(from, { delete: mek.key });
                 } catch (_) {}
@@ -1363,7 +1377,7 @@ const datelsHandler = {
             // =========================================================================
             // 👤 [أمر بروف / صورة البروفايل لأي شخص بجودة عالية]
             // =========================================================================
-            const isPfpCommand = /^(?:\.|\/)?(بروف|البروف|بروفايل|البروفايل|صوره بروفايل|صورة بروفايل|صوره البروفايل|صورة البروفايل|صورة الشخص|صوره الشخص)(?:\s|$)/i.test(normalizedBody);
+            const isPfpCommand = /^(?:\.|\/|!)?(?:بروف|البروف|بروفايل|البروفايل|صوره بروفايل|صورة بروفايل|صوره البروفايل|صورة البروفايل|صورة الشخص|صوره الشخص)(?:\s|$)/i.test(normalizedBody);
             if (isPfpCommand) {
                 await handleCommandTiming('👤');
                 let target = extractTarget(mek, body);
@@ -1372,32 +1386,57 @@ const datelsHandler = {
                 }
 
                 let cleanTarget = getCleanNumber(target);
-                let targetJid = target.endsWith('@s.whatsapp.net') ? target : (target.endsWith('@g.us') ? target : `${cleanTarget}@s.whatsapp.net`);
+                let candidates = [];
 
-                try {
-                    let pfpUrl = await currentConn.profilePictureUrl(targetJid, 'image').catch(() => null);
-                    if (!pfpUrl) {
-                        pfpUrl = await currentConn.profilePictureUrl(targetJid).catch(() => null);
-                    }
+                // 1. فحص وجود رقم هاتف حقيقي مطابق في lidMap
+                const mappedNum = localDB.lidMap?.[cleanTarget];
+                if (mappedNum) {
+                    if (mappedNum.length <= 13) candidates.push(`${mappedNum}@s.whatsapp.net`);
+                    else candidates.push(`${mappedNum}@lid`);
+                }
 
-                    if (pfpUrl) {
-                        await currentConn.sendMessage(from, {
-                            image: { url: pfpUrl },
-                            caption: `👤 *صورة البروفايل للغالي:* @${cleanTarget}\n🤖 *بواسطة:* ${botName}`,
-                            mentions: [targetJid]
-                        }, { quoted: mek });
-                        return true;
-                    } else {
-                        await currentConn.sendMessage(from, {
-                            text: `❌ *تعذر جلب صورة البروفايل لـ @${cleanTarget}!* 👤\n(إما أنه مش حاطط صورة بروفايل، أو إعدادات خصوصيته في الواتساب تمنع ظهورها).`,
-                            mentions: [targetJid]
-                        }, { quoted: mek });
-                        return true;
-                    }
-                } catch (e) {
+                // 2. إذا كان المعرف الأصلي به رقم هاتف عادي
+                if (target.endsWith('@s.whatsapp.net') || cleanTarget.length <= 13) {
+                    candidates.push(`${cleanTarget}@s.whatsapp.net`);
+                }
+
+                // 3. كـ LID
+                if (target.endsWith('@lid') || cleanTarget.length > 13) {
+                    candidates.push(`${cleanTarget}@lid`);
+                }
+
+                // 4. المعرف الأصلي منقى من أي معرف أجهزة
+                const rawJidClean = target.split('@')[0].split(':')[0] + (target.endsWith('@lid') ? '@lid' : '@s.whatsapp.net');
+                if (!candidates.includes(rawJidClean)) candidates.push(rawJidClean);
+
+                let pfpUrl = null;
+                for (const cand of candidates) {
+                    try {
+                        pfpUrl = await currentConn.profilePictureUrl(cand, 'image');
+                        if (pfpUrl) break;
+                    } catch (_) {}
+                    try {
+                        pfpUrl = await currentConn.profilePictureUrl(cand, 'preview');
+                        if (pfpUrl) break;
+                    } catch (_) {}
+                    try {
+                        pfpUrl = await currentConn.profilePictureUrl(cand);
+                        if (pfpUrl) break;
+                    } catch (_) {}
+                }
+
+                if (pfpUrl) {
+                    const mentionJid = candidates.find(c => c.endsWith('@s.whatsapp.net')) || target;
                     await currentConn.sendMessage(from, {
-                        text: `❌ *تعذر جلب صورة البروفايل لـ @${cleanTarget}!* 👤\n(إما أنه مش حاطط صورة بروفايل، أو إعدادات خصوصيته في الواتساب تمنع ظهورها).`,
-                        mentions: [targetJid]
+                        image: { url: pfpUrl },
+                        caption: `👤 *صورة البروفايل للغالي:* @${cleanTarget}\n🤖 *بواسطة:* ${botName}`,
+                        mentions: [mentionJid]
+                    }, { quoted: mek });
+                    return true;
+                } else {
+                    await currentConn.sendMessage(from, {
+                        text: `❌ *تعذر جلب صورة البروفايل لـ @${cleanTarget}!* 👤\n(إما أنه مش حاطط صورة بروفايل، أو إعدادات خصوصيته في الواتساب مخصصة لجهات الاتصال فقط).`,
+                        mentions: [target]
                     }, { quoted: mek });
                     return true;
                 }
@@ -1863,11 +1902,18 @@ const datelsHandler = {
                 }
 
                 // كتم عضو (حذف كل رسائله بالجروب فوراً وتلقائياً)
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('كتم ') || normalizedBody === 'كتم' || normalizedBody.startsWith('اكتم ') || normalizedBody === 'اكتم')) {
+                const isMuteCmd = /^(?:\.|\/|!)?(?:كتم|اكتم|اسكت)(?:\s|$)/i.test(normalizedBody);
+                if (isMuteCmd) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. أمر الكتم مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
+
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو أو اعمله منشن لكتمه ومنعه من التحدث بالجروب!\n(مثال: كتم @العضو)' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو بكلمة (كتم) أو اعمله منشن لكتمه ومنعه من التحدث بالجروب!\n(مثال: كتم @العضو أو ريبلاي على رسالته)' }, { quoted: mek });
                         return true;
                     }
 
@@ -1881,13 +1927,22 @@ const datelsHandler = {
                     if (!localDB.mutedUsers) localDB.mutedUsers = {};
                     if (!localDB.mutedUsers[from]) localDB.mutedUsers[from] = [];
 
-                    if (localDB.mutedUsers[from].includes(target)) {
+                    const mappedTarget = localDB.lidMap?.[targetNum] || '';
+                    const alreadyMuted = localDB.mutedUsers[from].some(u => {
+                        const cu = getCleanNumber(u);
+                        return cu === targetNum || (mappedTarget && cu === mappedTarget);
+                    });
+
+                    if (alreadyMuted) {
                         await handleCommandTiming('⚠️');
                         await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} مكتوم بالفعل في هذا الجروب!`, mentions: [target] }, { quoted: mek });
                         return true;
                     }
 
-                    localDB.mutedUsers[from].push(target);
+                    localDB.mutedUsers[from].push(targetNum);
+                    if (mappedTarget && !localDB.mutedUsers[from].includes(mappedTarget)) {
+                        localDB.mutedUsers[from].push(mappedTarget);
+                    }
                     saveLocalDB(localDB);
 
                     await handleCommandTiming('🔇');
@@ -1899,22 +1954,34 @@ const datelsHandler = {
                 }
 
                 // فك كتم عضو
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('فك كتم') || normalizedBody.startsWith('فك الكتم') || normalizedBody.startsWith('الغاء كتم') || normalizedBody.startsWith('تكلم'))) {
+                const isUnmuteCmd = /^(?:\.|\/|!)?(?:فك\s*كتم|فك\s*الكتم|الغاء\s*كتم|إلغاء\s*كتم|تكلم)(?:\s|$)/i.test(normalizedBody);
+                if (isUnmuteCmd) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
+
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو أو اعمله منشن لفك الكتم عنه!' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو بكلمة (فك كتم) أو اعمله منشن لفك الكتم عنه!' }, { quoted: mek });
                         return true;
                     }
 
                     const targetNum = getCleanNumber(target);
-                    if (!localDB.mutedUsers || !localDB.mutedUsers[from] || !localDB.mutedUsers[from].includes(target)) {
+                    const mappedTarget = localDB.lidMap?.[targetNum] || '';
+
+                    if (!localDB.mutedUsers || !localDB.mutedUsers[from]) {
                         await handleCommandTiming('ℹ️');
                         await currentConn.sendMessage(from, { text: `ℹ️ العضو @${targetNum} ليس مكتوماً في هذا الجروب!`, mentions: [target] }, { quoted: mek });
                         return true;
                     }
 
-                    localDB.mutedUsers[from] = localDB.mutedUsers[from].filter(u => u !== target);
+                    localDB.mutedUsers[from] = localDB.mutedUsers[from].filter(u => {
+                        const cu = getCleanNumber(u);
+                        return cu !== targetNum && cu !== mappedTarget && u !== target;
+                    });
                     saveLocalDB(localDB);
 
                     await handleCommandTiming('🔊');

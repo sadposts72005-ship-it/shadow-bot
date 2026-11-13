@@ -240,6 +240,20 @@ function getCleanNumber(jid) {
     return jid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
 }
 
+function isUserMuted(senderJid, fromGid, localDB) {
+    if (!fromGid || !localDB?.mutedUsers?.[fromGid]) return false;
+    const mutedList = localDB.mutedUsers[fromGid];
+    if (!Array.isArray(mutedList) || mutedList.length === 0) return false;
+
+    const senderClean = getCleanNumber(senderJid);
+    const mappedPhone = localDB.lidMap?.[senderClean] || '';
+
+    return mutedList.some(u => {
+        const cleanU = getCleanNumber(u);
+        return cleanU === senderClean || (mappedPhone && cleanU === mappedPhone) || (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean);
+    });
+}
+
 function isUserInList(jid, list = []) {
     if (!jid || !Array.isArray(list)) return false;
     const cleanNum = getCleanNumber(jid);
@@ -905,7 +919,7 @@ export async function handleAllMessages(mek, currentConn) {
         if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return;
 
         // 🔇 فحص كتم المستخدم في هذا الجروب (حذف فوري لرسائل المكتوم)
-        if (isRealGroup && localDB.mutedUsers?.[from]?.includes(sender)) {
+        if (isRealGroup && isUserMuted(sender, from, localDB)) {
             try {
                 await currentConn.sendMessage(from, { delete: mek.key });
             } catch (_) {}
@@ -2763,11 +2777,13 @@ export async function handleAllMessages(mek, currentConn) {
             targetMenuSec = 7;
         } else if (/^(قسم\s*8|8)$/.test(normalizedBody) || ['الردود', 'الدردشة', 'قسم الردود', 'قسم الدردشة'].includes(normalizedBody)) {
             targetMenuSec = 8;
+        } else if (/^(قسم\s*9|9)$/.test(normalizedBody) || ['القناة', 'القناه', 'قناة', 'قناه', 'قناة المطور', 'قناه المطور', 'قسم القناة', 'قسم القناه'].includes(normalizedBody)) {
+            targetMenuSec = 9;
         }
 
         let shouldExecuteMenu = isMainMenuCmd;
         if (targetMenuSec !== null) {
-            const isNamedSectionWord = normalizedBody.startsWith('قسم ') || ['الالعاب', 'الألعاب', 'البروفايل', 'التنبيهات', 'التنصيب', 'اوامر الحج', 'الذكاء', 'الميديا', 'الردود'].includes(normalizedBody);
+            const isNamedSectionWord = normalizedBody.startsWith('قسم ') || ['الالعاب', 'الألعاب', 'البروفايل', 'التنبيهات', 'التنصيب', 'اوامر الحج', 'الذكاء', 'الميديا', 'الردود', 'القناة', 'القناه', 'قناة', 'قناه', 'قناة المطور', 'قناه المطور'].includes(normalizedBody);
             if (isAllMenuCmd || isNamedSectionWord || !isRealGroup) {
                 shouldExecuteMenu = true;
             } else if (isRealGroup) {
