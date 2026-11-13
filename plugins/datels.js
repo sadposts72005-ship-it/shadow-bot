@@ -576,27 +576,23 @@ async function fetchEgyptPrayerTimes() {
     };
 }
 
-function getWelcomeMessage(userJid) {
+function getWelcomeMessage(userJid, groupName = '', groupDesc = '', botName = 'شادو', localDB = null) {
     if (!userJid) return '';
-    let userRaw = userJid.split('@')[0].split(':')[0];
-    return `✨ *مرحباً بك يا غالي في الجروب!* 🥳 ❤️ \n` +
-           `👋 نورتنا يا @${userRaw}\n\n` +
-           `📜 *قوانين الجروب الرجاء الالتزام بها:*\n` +
-           `1️⃣ *ممنوع الشتائم* تماماً لعدم التعرض للحظر الذكي لحسابك البوت هيرد عليك.\n` +
-           `2️⃣ *ممنوع إرسال الروابط (اللينكات)*، البوت بيحذفها تلقائياً و الـ 10 روابط ورا بعض طرد نهائي.\n` +
-           `3️⃣ *ممنوع دخول لبنت خاص* احترم خصوصية الأعضاء منعا للمشاكل والطرد.\n` +
+    const cleanNum = getCleanNumber(userJid);
+    const mappedPhone = localDB?.lidMap?.[cleanNum] || '';
+    const displayNum = mappedPhone || cleanNum || userJid.split('@')[0].split(':')[0];
+
+    const gName = groupName && groupName.trim() ? groupName.trim() : 'الجروب';
+    const gDesc = groupDesc && groupDesc.trim() ? groupDesc.trim() : 'لا يوجد وصف محدد للجروب حالياً.';
+
+    return `✨ *أهلاً وسهلاً بك يا غالي نورتنا في الجروب!* 👋❤️\n\n` +
+           `👤 *العضو الجديد:* @${displayNum}\n` +
+           `🏷️ *اسم الجروب:* ${gName}\n\n` +
+           `📝 *وصف الجروب:*\n${gDesc}\n\n` +
            `─── 𖤐 ──── 𖤐 ───\n` +
-           `🕵️‍♂️ *تعرف على شادو بوت (Shadow Bot):*\n` +
-           `أنا بوت مساعد ومسلي جوه الجروب، بقدم ألعاب وتسلية ردود تلقائية تفاعلية.\n\n` +
-           `🎮 *تقدر تلعب معايا دلوقتي ألعاب زي:*\n` +
-           `• *بازل* ➔ لعبة ترتيب الأرقام والأشكال الأسطورية.\n` +
-           `• *بكاسة* ➔ لعبة مين فينا الحرامي واكتشاف الجاسوس.\n` +
-           `• *اكس او* ➔ تحدي صاحبك أو البوت في الشات.\n` +
-           `• *احزر* ➔ لعبة تخمين الشخصيات والمشاهير بالصور.\n` +
-           `• *صراحة* ➔ أسئلة جريئة وممتعة للتسلية.\n` +
-           `• *رتب* ➔ ترتيب الحروف المبعثرة وكسب نقاط.\n` +
-           `• *كوره* ➔ أسئلة كروية وتحدي معلومات ملحمية.\n\n` +
-           `💡 لمعرفة كل الأوامر بالتفصيل اكتب في أي وقت كلمة: *اوامر* أو *أوامر* في الشات!`;
+           `🤖 *معاك بوت (${botName}) المساعد والترفيهي:*\n` +
+           `أنا هنا لمساعدتكم وتسلية الجروب! بقدم ألعاب تفاعلية (بكاسة، بازل، اكس او، احزر، رتب، كورة)، حماية الجروب من الروابط، تذكيرات الصلاة والأذكار، صانع الاستيكرات، وتحميل الميديا.\n\n` +
+           `💡 *لعرض كافة الأوامر والبدء:* أرسل كلمة *(منيو)* أو *(أوامر)* في أي وقت!`;
 }
 
 async function getParticipatingGroupIds(conn, localDB) {
@@ -878,19 +874,50 @@ const datelsHandler = {
             let localDB = loadLocalDB();
             if (localDB.bannedGroups?.includes(id) || localDB.disabledWelcomes?.includes(id)) return;
 
+            const myBotNum = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
+            const botName = currentConn.botName || (currentConn.subBotConfig?.botName) || 'شادو';
+
+            // إذا كان هذا بوت فرعي والبوت الرئيسي شغال وموجود في نفس الجروب، نترك الترحيب للبوت الرئيسي لعدم التكرار
+            if (currentConn.isSubBot && global.mainConn && global.mainConn.user?.id) {
+                const mainKnown = localDB.knownGroups || [];
+                if (mainKnown.includes(id)) return;
+            }
+
+            // جلب معلومات الجروب (الاسم والوصف)
+            let groupName = '';
+            let groupDesc = '';
+            try {
+                const groupMeta = await currentConn.groupMetadata(id);
+                groupName = groupMeta?.subject || '';
+                groupDesc = groupMeta?.desc?.toString() || '';
+            } catch (_) {}
+
             for (let participant of participants) {
                 let newUser = typeof participant === 'string' ? participant : (participant.id || '');
                 if (!newUser) continue;
 
-                const welcomeKey = `${id}_${getCleanNumber(newUser)}`;
+                const cleanUser = getCleanNumber(newUser);
+                // لا يرحب البوت بنفسه إذا انضم للجروب
+                if (cleanUser === myBotNum) continue;
+
+                const welcomeKey = `${id}_${cleanUser}`;
                 if (recentWelcomes.has(welcomeKey)) continue;
 
                 recentWelcomes.add(welcomeKey);
-                setTimeout(() => recentWelcomes.delete(welcomeKey), 10000);
+                setTimeout(() => recentWelcomes.delete(welcomeKey), 15000);
 
                 await delay(DELAYS.welcomeDelay);
-                let welcomeText = getWelcomeMessage(newUser);
-                await currentConn.sendMessage(id, { text: welcomeText, mentions: [newUser] }).catch(() => {});
+                let welcomeText = getWelcomeMessage(newUser, groupName, groupDesc, botName, localDB);
+
+                const mappedPhone = localDB.lidMap?.[cleanUser];
+                const mentions = [newUser];
+                if (mappedPhone && `${mappedPhone}@s.whatsapp.net` !== newUser) {
+                    mentions.push(`${mappedPhone}@s.whatsapp.net`);
+                }
+
+                await currentConn.sendMessage(id, { text: welcomeText, mentions }).catch(e => {
+                    console.error("❌ خطأ أثناء إرسال رسالة الترحيب:", e?.message || e);
+                });
             }
         }
     },
@@ -1712,7 +1739,13 @@ const datelsHandler = {
                 }
 
                 // تفعيل الترحيب
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'تفعيل الترحيب' || normalizedBody === 'تشغيل الترحيب')) {
+                const isEnableWelcome = /^(?:\.|\/|!)?(?:تفعيل\s*الترحيب|تشغيل\s*الترحيب|تفعيل\s*ترحيب|تشغيل\s*ترحيب)$/i.test(normalizedBody);
+                if (isEnableWelcome) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     if (!localDB.disabledWelcomes?.includes(from)) {
                         await handleCommandTiming('⚠️');
                         await currentConn.sendMessage(from, { text: '⚠️ رسائل الترحيب مفعلة وشغالة بالفعل في هذا الجروب! ✅' }, { quoted: mek });
@@ -1726,7 +1759,13 @@ const datelsHandler = {
                 }
 
                 // إلغاء الترحيب
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'الغاء الترحيب' || normalizedBody === 'القاء الترحيب' || normalizedBody === 'ايقاف الترحيب')) {
+                const isDisableWelcome = /^(?:\.|\/|!)?(?:الغاء\s*الترحيب|إلغاء\s*الترحيب|القاء\s*الترحيب|ايقاف\s*الترحيب|إيقاف\s*الترحيب|تعطيل\s*الترحيب|قفل\s*الترحيب|تعطيل\s*ترحيب)$/i.test(normalizedBody);
+                if (isDisableWelcome) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     if (localDB.disabledWelcomes?.includes(from)) {
                         await handleCommandTiming('⚠️');
                         await currentConn.sendMessage(from, { text: '⚠️ رسائل الترحيب معطلة بالفعل في هذا الجروب! ❌' }, { quoted: mek });
