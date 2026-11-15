@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
-import { loadSubBotsRegistry, updateSubBotHajj, activeSubBots, cleanPhoneNumber } from '../core/subbot.js';
+import { loadSubBotsRegistry, saveSubBotsRegistry, updateSubBotHajj, activeSubBots, cleanPhoneNumber } from '../core/subbot.js';
 import { loadLocalDB, saveLocalDB } from '../core/database.js';
 import handleStickerCommand from './sticker.js';
 import handleImageCommand from './image.js';
@@ -165,11 +165,23 @@ function isUserInList(jid, list = []) {
     });
 }
 
-function isUserBanned(jid, localDB) {
-    if (!jid || !localDB || !localDB.bannedUsers) return false;
+function isUserBanned(jid, localDB, currentConn = null) {
+    if (!jid) return false;
     const cleanNum = getCleanNumber(jid);
     if (!cleanNum) return false;
-    const mapped = localDB.lidMap?.[cleanNum];
+    const mapped = localDB?.lidMap?.[cleanNum];
+
+    // إذا كان البوت فرعياً، نفحص قائمة المحظورين الخاصة بهذا البوت الفرعي
+    if (currentConn?.isSubBot) {
+        const subBanned = currentConn.subBotConfig?.bannedUsers || [];
+        if (Array.isArray(subBanned) && subBanned.length > 0) {
+            return isUserInList(jid, subBanned) || (mapped && isUserInList(mapped, subBanned));
+        }
+        return false;
+    }
+
+    // إذا كان البوت الأساسي، نفحص bannedUsers في قاعدة البيانات العامة
+    if (!localDB || !localDB.bannedUsers) return false;
     return isUserInList(jid, localDB.bannedUsers) || (mapped && isUserInList(mapped, localDB.bannedUsers));
 }
 
@@ -996,11 +1008,18 @@ const datelsHandler = {
             );
 
             const isSubBotAdmin = isSubBotOwner || Boolean(mek.isSubBotAdmin);
-            const isMainHajj = isAbsoluteOwner || isUserInList(sender, localDB.mainHajjUsers);
-            const isHajj = isMainHajj || isUserInList(sender, localDB.hajjUsers) || mek.isSuperAdmin;
-
-            // تحديد المالك (الحج شادو للبوت الرئيسي، أو صاحب البوت الفرعي للبوت الفرعي)
-            const isBotOwner = isAbsoluteOwner || isSubBotOwner || isSubBotAdmin || Boolean(mek.isBotOwner) || isMainHajj;
+            let isMainHajj = false;
+            let isHajj = false;
+            if (isSubBot) {
+                isMainHajj = isAbsoluteOwner || isSubBotOwner || isSubBotAdmin;
+                isHajj = isMainHajj || mek.isSuperAdmin;
+            } else {
+                isMainHajj = isAbsoluteOwner || isUserInList(sender, localDB.mainHajjUsers);
+                isHajj = isMainHajj || isUserInList(sender, localDB.hajjUsers) || mek.isSuperAdmin;
+            }
+            const isBotOwner = isSubBot 
+                ? (isAbsoluteOwner || isSubBotOwner || isSubBotAdmin)
+                : (isAbsoluteOwner || isMainHajj);
 
             // استخراج النص من الرسالة
             const body = extractMessageBody(mek);
@@ -1019,7 +1038,7 @@ const datelsHandler = {
             }
 
             // فحص حظر المستخدم
-            if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return true;
+            if (isUserBanned(sender, localDB, currentConn) && !isAbsoluteOwner) return true;
 
             // جلب معلومات الجروب والمشرفين
             let groupMetadata = isGroup ? await getCachedGroupMetadata(currentConn, from) : null;
@@ -2628,9 +2647,10 @@ const datelsHandler = {
             // =========================================================================
             // رفع أدمن تنبيه
             if (normalizedBody.startsWith('رفع تنبيه') || normalizedBody.startsWith('ترقية تنبيه')) {
-                if (!isAbsoluteOwner) {
+                const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot ? isSubBotOwner : isMainHajj);
+                if (!canManageWarn) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي صاحب البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج الأساسي أو مالك هذا البوت! 👑🚫' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2651,15 +2671,16 @@ const datelsHandler = {
                 saveLocalDB(localDB);
 
                 await handleCommandTiming('🛡️');
-                await currentConn.sendMessage(from, { text: `🛡️ *أمر ملكي من الحج الأصلي:* \nتم ترقية @${targetNum} إلى رتبة [ أدمن تنبيه ] في هذا الجروب! ⚔️`, mentions: [target] }, { quoted: mek });
+                await currentConn.sendMessage(from, { text: `🛡️ *أمر ملكي من الحج:* \nتم ترقية @${targetNum} إلى رتبة [ أدمن تنبيه ] في هذا الجروب! ⚔️`, mentions: [target] }, { quoted: mek });
                 return true;
             }
 
             // تنزيل أدمن تنبيه
             if (normalizedBody.startsWith('نزل تنبيه') || normalizedBody.startsWith('تنزيل تنبيه')) {
-                if (!isAbsoluteOwner) {
+                const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot ? isSubBotOwner : isMainHajj);
+                if (!canManageWarn) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي صاحب البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج الأساسي أو مالك هذا البوت! 👑🚫' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2838,9 +2859,11 @@ const datelsHandler = {
 
             // حظر مستخدم
             if (normalizedBody.startsWith('حظر مستخدم') || normalizedBody.startsWith('حظر عضو')) {
-                if (!isAbsoluteOwner) {
+                const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
+                const canBan = isAbsoluteOwner || (currentConn?.isSubBot ? isSubBotAdminUser : isMainHajj);
+                if (!canBan) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي صاحب البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج الأساسي أو مالك هذا البوت! 👑🚫' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2855,31 +2878,80 @@ const datelsHandler = {
                     await currentConn.sendMessage(from, { text: '❌ هوب هوب يا فنان! ده الحج شادو الأصلي صاحب البوت ومحدش يقدر يحظره نهائياً! 👑🛡️' }, { quoted: mek });
                     return true;
                 }
-                if (isUserBanned(target, localDB)) {
+                // حماية مالك البوت الفرعي من الحظر في بوته
+                if (currentConn?.isSubBot) {
+                    const subCfg = currentConn.subBotConfig || {};
+                    if (targetNum === subCfg.adminPhone || targetNum === subCfg.adminLid || (subCfg.adminNumbers && subCfg.adminNumbers.includes(targetNum))) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ لا يمكنك حظر مالك هذا البوت الفرعي! 👑🚫' }, { quoted: mek });
+                        return true;
+                    }
+                }
+                // حماية الحجاج الأساسيين في البوت الأساسي من أن يحظروا بعضهم (إلا شادو)
+                if (!currentConn?.isSubBot && !isAbsoluteOwner && isUserInList(target, localDB.mainHajjUsers)) {
+                    await handleCommandTiming('❌');
+                    await currentConn.sendMessage(from, { text: '❌ لا يمكنك حظر حج أساسي آخر بالسستم! 👑🚫' }, { quoted: mek });
+                    return true;
+                }
+
+                if (isUserBanned(target, localDB, currentConn)) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { text: `⚠️ المستخدم @${targetNum} محظور بالفعل من استخدام البوت يا فنان! 🚫`, mentions: [target] }, { quoted: mek });
                     return true;
                 }
                 let cleanTargetJid = cleanUserJid(target);
-                if (!localDB.bannedUsers) localDB.bannedUsers = [];
-                localDB.bannedUsers.push(cleanTargetJid);
                 let mapped = localDB.lidMap?.[targetNum];
-                if (mapped) {
-                    localDB.bannedUsers.push(`${mapped}@s.whatsapp.net`);
-                    localDB.bannedUsers.push(`${mapped}@lid`);
-                }
-                saveLocalDB(localDB);
 
-                await handleCommandTiming('🚫');
-                await currentConn.sendMessage(from, { text: `🚫 تم حظر المستخدم @${targetNum} من استخدام البوت نهائياً!`, mentions: [target] }, { quoted: mek });
-                return true;
+                // إذا كنا في بوت فرعي: الحظر ينفذ على هذا البوت الفرعي فقط
+                if (currentConn?.isSubBot) {
+                    const subCfg = currentConn.subBotConfig || {};
+                    if (!subCfg.bannedUsers) subCfg.bannedUsers = [];
+                    if (!subCfg.bannedUsers.includes(cleanTargetJid)) subCfg.bannedUsers.push(cleanTargetJid);
+                    if (!subCfg.bannedUsers.includes(targetNum)) subCfg.bannedUsers.push(targetNum);
+                    if (mapped) {
+                        subCfg.bannedUsers.push(`${mapped}@s.whatsapp.net`);
+                        subCfg.bannedUsers.push(`${mapped}@lid`);
+                        subCfg.bannedUsers.push(mapped);
+                    }
+                    currentConn.subBotConfig = subCfg;
+                    const subPhone = subCfg.phone || myBotNum;
+                    const sessionDir = path.join(process.cwd(), 'sessions', 'sub_bots', subPhone);
+                    if (fs.existsSync(sessionDir)) {
+                        try {
+                            fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(subCfg, null, 2), 'utf8');
+                        } catch (_) {}
+                    }
+                    const reg = loadSubBotsRegistry();
+                    if (reg[subPhone]) {
+                        reg[subPhone].bannedUsers = subCfg.bannedUsers;
+                        saveSubBotsRegistry(reg);
+                    }
+                    await handleCommandTiming('🚫');
+                    await currentConn.sendMessage(from, { text: `🚫 تم حظر المستخدم @${targetNum} من استخدام هذا البوت الفرعي بنجاح!`, mentions: [target] }, { quoted: mek });
+                    return true;
+                } else {
+                    // في البوت الأساسي: الحظر يسجل في قاعدة البيانات العامة
+                    if (!localDB.bannedUsers) localDB.bannedUsers = [];
+                    localDB.bannedUsers.push(cleanTargetJid);
+                    if (mapped) {
+                        localDB.bannedUsers.push(`${mapped}@s.whatsapp.net`);
+                        localDB.bannedUsers.push(`${mapped}@lid`);
+                    }
+                    saveLocalDB(localDB);
+
+                    await handleCommandTiming('🚫');
+                    await currentConn.sendMessage(from, { text: `🚫 تم حظر المستخدم @${targetNum} من استخدام البوت نهائياً!`, mentions: [target] }, { quoted: mek });
+                    return true;
+                }
             }
 
             // فك حظر مستخدم
             if (normalizedBody.startsWith('فك حظر مستخدم') || normalizedBody.startsWith('فك حظر عضو')) {
-                if (!isAbsoluteOwner) {
+                const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
+                const canBan = isAbsoluteOwner || (currentConn?.isSubBot ? isSubBotAdminUser : isMainHajj);
+                if (!canBan) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي صاحب البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج الأساسي أو مالك هذا البوت! 👑🚫' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2889,21 +2961,48 @@ const datelsHandler = {
                     return true;
                 }
                 let targetNum = getCleanNumber(target);
-                if (!isUserBanned(target, localDB)) {
+                if (!isUserBanned(target, localDB, currentConn)) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { text: `⚠️ المستخدم @${targetNum} غير محظور بالفعل يا فنان! هو يقدر يستخدم البوت عادي. ✅`, mentions: [target] }, { quoted: mek });
                     return true;
                 }
                 let mapped = localDB.lidMap?.[targetNum];
-                localDB.bannedUsers = (localDB.bannedUsers || []).filter(u => {
-                    let clean = getCleanNumber(u);
-                    return clean !== targetNum && (!mapped || clean !== mapped);
-                });
-                saveLocalDB(localDB);
 
-                await handleCommandTiming('✅');
-                await currentConn.sendMessage(from, { text: `✅ تم فك حظر المستخدم @${targetNum} وعاد لاستخدام البوت بنجاح!`, mentions: [target] }, { quoted: mek });
-                return true;
+                // إذا كنا في بوت فرعي: فك الحظر من قائمة البوت الفرعي
+                if (currentConn?.isSubBot) {
+                    const subCfg = currentConn.subBotConfig || {};
+                    subCfg.bannedUsers = (subCfg.bannedUsers || []).filter(u => {
+                        let clean = getCleanNumber(u);
+                        return clean !== targetNum && (!mapped || clean !== mapped);
+                    });
+                    currentConn.subBotConfig = subCfg;
+                    const subPhone = subCfg.phone || myBotNum;
+                    const sessionDir = path.join(process.cwd(), 'sessions', 'sub_bots', subPhone);
+                    if (fs.existsSync(sessionDir)) {
+                        try {
+                            fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(subCfg, null, 2), 'utf8');
+                        } catch (_) {}
+                    }
+                    const reg = loadSubBotsRegistry();
+                    if (reg[subPhone]) {
+                        reg[subPhone].bannedUsers = subCfg.bannedUsers;
+                        saveSubBotsRegistry(reg);
+                    }
+                    await handleCommandTiming('✅');
+                    await currentConn.sendMessage(from, { text: `✅ تم فك حظر المستخدم @${targetNum} وعاد لاستخدام هذا البوت الفرعي بنجاح!`, mentions: [target] }, { quoted: mek });
+                    return true;
+                } else {
+                    // في البوت الأساسي: فك الحظر من قاعدة البيانات العامة
+                    localDB.bannedUsers = (localDB.bannedUsers || []).filter(u => {
+                        let clean = getCleanNumber(u);
+                        return clean !== targetNum && (!mapped || clean !== mapped);
+                    });
+                    saveLocalDB(localDB);
+
+                    await handleCommandTiming('✅');
+                    await currentConn.sendMessage(from, { text: `✅ تم فك حظر المستخدم @${targetNum} وعاد لاستخدام البوت بنجاح!`, mentions: [target] }, { quoted: mek });
+                    return true;
+                }
             }
 
             return false;

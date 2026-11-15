@@ -352,11 +352,23 @@ function isUserInList(jid, list = []) {
     });
 }
 
-function isUserBanned(jid, localDB) {
-    if (!jid || !localDB || !localDB.bannedUsers) return false;
+function isUserBanned(jid, localDB, currentConn = null) {
+    if (!jid) return false;
     const cleanNum = getCleanNumber(jid);
     if (!cleanNum) return false;
-    const mapped = localDB.lidMap?.[cleanNum];
+    const mapped = localDB?.lidMap?.[cleanNum];
+
+    // إذا كان البوت فرعياً، نفحص قائمة المحظورين الخاصة بهذا البوت الفرعي
+    if (currentConn?.isSubBot) {
+        const subBanned = currentConn.subBotConfig?.bannedUsers || [];
+        if (Array.isArray(subBanned) && subBanned.length > 0) {
+            return isUserInList(jid, subBanned) || (mapped && isUserInList(mapped, subBanned));
+        }
+        return false;
+    }
+
+    // إذا كان البوت الأساسي، نفحص bannedUsers في قاعدة البيانات العامة
+    if (!localDB || !localDB.bannedUsers) return false;
     return isUserInList(jid, localDB.bannedUsers) || (mapped && isUserInList(mapped, localDB.bannedUsers));
 }
 
@@ -707,9 +719,34 @@ export async function handleAllMessages(mek, currentConn) {
             const adminLocalPhone = (adminPhone.startsWith('201') && adminPhone.length === 12) ? ('01' + adminPhone.slice(2)) : '';
             const adminLid = subBotConfig.adminLid ? String(subBotConfig.adminLid).replace(/[^0-9]/g, '') : '';
             const senderCleanPhone = cleanPhoneNumber(cleanSender);
-            const mappedSender = localDB.lidMap?.[cleanSender] || '';
-            const mappedSenderClean = cleanPhoneNumber(mappedSender);
+            let mappedSender = localDB.lidMap?.[cleanSender] || '';
+            let mappedSenderClean = cleanPhoneNumber(mappedSender);
             const adminNumbers = Array.isArray(subBotConfig.adminNumbers) ? subBotConfig.adminNumbers : [];
+            const subHajjs = Array.isArray(subBotConfig.subHajjUsers) ? subBotConfig.subHajjUsers : [];
+
+            // إذا كان المُرسل عبر LID وغير مسجل في lidMap، نستخرج رقمه الحقيقي من بيانات بايلز اللحظية
+            if (!mappedSender && (sender.endsWith('@lid') || cleanSender.length > 13)) {
+                const altJids = [
+                    mek.key?.participantAlt,
+                    mek.key?.remoteJidAlt,
+                    mek.message?.extendedTextMessage?.contextInfo?.participantAlt,
+                    mek.message?.extendedTextMessage?.contextInfo?.remoteJidAlt
+                ];
+                for (const alt of altJids) {
+                    if (alt && typeof alt === 'string' && alt.endsWith('@s.whatsapp.net')) {
+                        const p = cleanPhoneNumber(getCleanNumber(alt));
+                        if (p && p.length >= 10 && p.length <= 13) {
+                            mappedSender = p;
+                            mappedSenderClean = p;
+                            if (!localDB.lidMap) localDB.lidMap = {};
+                            localDB.lidMap[cleanSender] = p;
+                            localDB.lidMap[p] = cleanSender;
+                            saveLocalDB(localDB);
+                            break;
+                        }
+                    }
+                }
+            }
 
             // 1. فحص هل هو المالك الأساسي للبوت الفرعي
             if (
@@ -721,7 +758,8 @@ export async function handleAllMessages(mek, currentConn) {
                 adminNumbers.includes(cleanSender) ||
                 adminNumbers.includes(senderCleanPhone) ||
                 adminNumbers.includes(sender) ||
-                (mappedSender && adminNumbers.includes(mappedSender))
+                (mappedSender && adminNumbers.includes(mappedSender)) ||
+                (mappedSenderClean && adminNumbers.includes(mappedSenderClean))
             ) {
                 isSubBotAdmin = true;
                 isSubBotMainOwner = true;
@@ -731,6 +769,7 @@ export async function handleAllMessages(mek, currentConn) {
                         subBotConfig.adminLid = cleanSender;
                         if (!subBotConfig.adminNumbers.includes(cleanSender)) subBotConfig.adminNumbers.push(cleanSender);
                         if (!subBotConfig.adminNumbers.includes(`${cleanSender}@lid`)) subBotConfig.adminNumbers.push(`${cleanSender}@lid`);
+                        if (!subBotConfig.subHajjUsers.includes(cleanSender)) subBotConfig.subHajjUsers.push(cleanSender);
                         
                         const subPhone = subBotConfig.phone || myNumber;
                         const sessionDir = path.join(process.cwd(), 'sessions', 'sub_bots', subPhone);
@@ -741,6 +780,7 @@ export async function handleAllMessages(mek, currentConn) {
                         if (reg[subPhone]) {
                             reg[subPhone].adminLid = cleanSender;
                             reg[subPhone].adminNumbers = subBotConfig.adminNumbers;
+                            reg[subPhone].subHajjUsers = subBotConfig.subHajjUsers;
                             saveSubBotsRegistry(reg);
                         }
                         if (adminPhone) {
@@ -763,15 +803,15 @@ export async function handleAllMessages(mek, currentConn) {
 
             // 2. فحص هل هو أحد الحجاج المرفوعين في هذا البوت الفرعي
             if (!isSubBotAdmin) {
-                const subHajjs = subBotConfig.subHajjUsers || [];
-                const subAdmins = subBotConfig.adminNumbers || [];
                 if (
                     subHajjs.includes(cleanSender) ||
                     subHajjs.includes(senderCleanPhone) ||
                     (mappedSender && subHajjs.includes(mappedSender)) ||
-                    subAdmins.includes(cleanSender) ||
-                    subAdmins.includes(senderCleanPhone) ||
-                    (mappedSender && subAdmins.includes(mappedSender))
+                    (mappedSenderClean && subHajjs.includes(mappedSenderClean)) ||
+                    adminNumbers.includes(cleanSender) ||
+                    adminNumbers.includes(senderCleanPhone) ||
+                    (mappedSender && adminNumbers.includes(mappedSender)) ||
+                    (mappedSenderClean && adminNumbers.includes(mappedSenderClean))
                 ) {
                     isSubBotAdmin = true;
                     isSubBotHajj = true;
@@ -779,11 +819,25 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
-        // الحج الرئيسي لهذا البوت بالتحديد
-        const isBotOwner = isAbsoluteOwner || isSubBotAdmin;
-        const isMainHajj = isBotOwner || isUserInList(sender, localDB.mainHajjUsers);
-        const isAssistantHajj = !isMainHajj && isUserInList(sender, localDB.hajjUsers);
+        // الحج الرئيسي لهذا البوت بالتحديد: فصل دقيق بين البوت الأساسي والبوتات الفرعية
+        let isMainHajj = false;
+        let isAssistantHajj = false;
+
+        if (currentConn.isSubBot) {
+            // على البوت الفرعي:
+            // الحج الأساسي هو الحج شادو الأصلي فقط، أو مالك البوت الفرعي، أو الحجاج المرفوعين في هذا البوت الفرعي
+            isMainHajj = isAbsoluteOwner || isSubBotMainOwner || isSubBotHajj;
+            isAssistantHajj = false;
+        } else {
+            // على البوت الأساسي:
+            // الحج الأساسي هو الحج شادو الأصلي، أو الحجاج المسجلين في mainHajjUsers للبوت الأساسي
+            isMainHajj = isAbsoluteOwner || isUserInList(sender, localDB.mainHajjUsers);
+            isAssistantHajj = !isMainHajj && isUserInList(sender, localDB.hajjUsers);
+        }
         const isHajj = isMainHajj || isAssistantHajj;
+        const isBotOwner = currentConn.isSubBot 
+            ? (isAbsoluteOwner || isSubBotAdmin)
+            : (isAbsoluteOwner || isMainHajj);
         
         const botCallName = subBotConfig?.callName || currentConn.callName || '';
         const normalizedCallName = normalizeArabic((botCallName || '').toLowerCase().trim());
@@ -819,11 +873,11 @@ export async function handleAllMessages(mek, currentConn) {
         const roomKey = `${botIdKey}_${from}`;
 
         // 👑 تحديد المسموح له بالتحكم بالنوم والصمت:
-        // في البوت الأساسي: شادو فقط (isAbsoluteOwner)
-        // في البوت الفرعي: شادو (isAbsoluteOwner) أو مالك البوت الفرعي (isSubBotMainOwner) أو الحجاج المرفوعين فيه (isSubBotHajj)
+        // في البوت الأساسي: شادو أو حجاج البوت الأساسي
+        // في البوت الفرعي: شادو أو مالك البوت الفرعي أو الحجاج المرفوعين فيه
         const isSleepOwner = currentConn.isSubBot
             ? (isAbsoluteOwner || isSubBotMainOwner || isSubBotHajj)
-            : isAbsoluteOwner;
+            : (isAbsoluteOwner || isMainHajj);
 
         // 🤫 1. فحص هل الجروب في وضع الصمت التام (اسكت / اخرس 100%)
         const isCurrentRoomMuted = botMuteMap.get(roomKey) || false;
@@ -1025,7 +1079,7 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         // 🚫 فحص حظر المستخدم
-        if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return;
+        if (isUserBanned(sender, localDB, currentConn) && !isAbsoluteOwner) return;
 
         // 🔇 فحص كتم المستخدم في هذا الجروب (حذف فوري لرسائل المكتوم بدون تجميد البوت)
         if (isRealGroup && isUserMuted(sender, from, localDB)) {
@@ -1785,10 +1839,13 @@ export async function handleAllMessages(mek, currentConn) {
                         } catch (_) {}
                     }
 
-                    // إذا كان الحج هو نفس القائم بالتنصيب
-                    if (!adminLid && (cleanSender === adminPhone || cleanPhoneNumber(cleanSender) === adminPhone)) {
-                        if (sender.endsWith('@lid') || cleanSender.length > 13) {
-                            adminLid = cleanSender;
+                    // إذا كان الحج هو نفس القائم بالتنصيب أو حسابه يطابق الرقم
+                    if (!adminLid) {
+                        const myResolved = await resolveUserPhoneNumber(mek, currentConn, localDB);
+                        if (isSelf || myResolved === adminPhone || cleanSender === adminPhone || cleanPhoneNumber(cleanSender) === adminPhone) {
+                            if (sender.endsWith('@lid') || cleanSender.length > 13) {
+                                adminLid = cleanSender;
+                            }
                         }
                     }
 
@@ -1929,7 +1986,7 @@ export async function handleAllMessages(mek, currentConn) {
         // =========================================================================
         if (['كام تنصيب', 'كم تنصيب', 'كام بوت', 'كم بوت', 'البوتات الفرعية', 'البوتات الفرعيه', 'قائمة التنصيب', 'قائمه التنصيب', 'لوحة التنصيب', 'احصائيات التنصيب'].includes(normalizedBody)) {
             const rep = getSubBotsReport();
-            if (isAbsoluteOwner || isMainHajj || mek.key.fromMe) {
+            if (isAbsoluteOwner || (!currentConn.isSubBot && isMainHajj) || mek.key.fromMe) {
                 const dashText = 
                     `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية* 〕━━━╮\n` +
                     `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +

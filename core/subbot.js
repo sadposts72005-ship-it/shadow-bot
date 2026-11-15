@@ -368,6 +368,31 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
         sock.callName = cfg.callName || cfg.botName || 'فرعي';
         sock.gender = cfg.gender || 'male';
         sock.personality = cfg.personality || 'respectful';
+
+        // ضمان تسجيل المالك ورقم الحج في قوائم المشرفين فور التحميل
+        if (cfg) {
+            if (!cfg.subHajjUsers) cfg.subHajjUsers = [];
+            if (!cfg.adminNumbers) cfg.adminNumbers = [];
+            if (!cfg.bannedUsers) cfg.bannedUsers = [];
+            const cleanAdm = cleanPhoneNumber(cfg.adminPhone) || cfg.adminPhone;
+            const admLocal = (cleanAdm && cleanAdm.startsWith('201') && cleanAdm.length === 12) ? ('01' + cleanAdm.slice(2)) : '';
+            if (cleanAdm) {
+                if (!cfg.subHajjUsers.includes(cleanAdm)) cfg.subHajjUsers.push(cleanAdm);
+                if (!cfg.adminNumbers.includes(cleanAdm)) cfg.adminNumbers.push(cleanAdm);
+                if (admLocal) {
+                    if (!cfg.subHajjUsers.includes(admLocal)) cfg.subHajjUsers.push(admLocal);
+                    if (!cfg.adminNumbers.includes(admLocal)) cfg.adminNumbers.push(admLocal);
+                }
+            }
+            if (cfg.adminLid) {
+                const cLid = String(cfg.adminLid).replace(/[^0-9]/g, '');
+                if (cLid) {
+                    if (!cfg.subHajjUsers.includes(cLid)) cfg.subHajjUsers.push(cLid);
+                    if (!cfg.adminNumbers.includes(cLid)) cfg.adminNumbers.push(cLid);
+                }
+            }
+        }
+
         sock.subBotConfig = cfg;
         sock.isSubBot = true;
         sock.subBotPhone = cleanPhone;
@@ -778,7 +803,18 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         sock.subBotStartTime = subBotStartTime;
                         console.log(`🎉 [Sub-Bot] تم ربط وتنصيب البوت الفرعي بنجاح! (+${cleanPhone})`);
 
-                        // إذا لم يكن LID الحج مستخرجاً، نستخرجه فوراً عبر السوكيت بعد الاتصال مباشرة
+                        // إذا لم يكن LID الحج مستخرجاً، نستخرجه فوراً عبر قاعدة البيانات أو السوكيت بعد الاتصال مباشرة
+                        if (!cleanLid && cleanAdmin) {
+                            try {
+                                const dbPath = path.join(process.cwd(), 'scramble_db.json');
+                                if (fs.existsSync(dbPath)) {
+                                    const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                                    if (db.lidMap && db.lidMap[cleanAdmin]) {
+                                        cleanLid = db.lidMap[cleanAdmin];
+                                    }
+                                }
+                            } catch (_) {}
+                        }
                         if (!cleanLid && cleanAdmin && cleanAdmin.length <= 13) {
                             try {
                                 const waCheck = await sock.onWhatsApp(`${cleanAdmin}@s.whatsapp.net`);
@@ -800,6 +836,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             adminLocal ? `${adminLocal}@s.whatsapp.net` : ''
                         ].filter(Boolean);
 
+                        const initialSubHajjs = [cleanAdmin, adminLocal, cleanLid].filter(Boolean);
+
                         const cfgData = {
                             phone: cleanPhone,
                             botName: botName,
@@ -810,7 +848,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             adminLid: cleanLid || '',
                             adminJid: cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '',
                             adminNumbers: adminNumbersList,
-                            subHajjUsers: [],
+                            subHajjUsers: initialSubHajjs,
+                            bannedUsers: [],
                             installedAt: new Date().toISOString(),
                             status: 'active',
                             sleep: false,
@@ -1451,36 +1490,89 @@ export function getSubBotsReport() {
     const registry = loadSubBotsRegistry() || {};
     let registryModified = false;
 
-    // 1. فحص البوتات النشطة في الذاكرة حالياً وإضافتها إذا لم تكن مسجلة بالسجل
+    // 1. مزامنة البوتات النشطة في الذاكرة حالياً مع السجل
     for (const [phone, activeObj] of activeSubBots.entries()) {
         const clean = cleanPhoneNumber(phone);
-        if (clean && !registry[clean]) {
-            registry[clean] = activeObj.cfg || {
+        if (!clean) continue;
+        const liveCfg = activeObj.cfg || {};
+        const liveSock = activeObj.sock || {};
+
+        if (!registry[clean]) {
+            registry[clean] = {
                 phone: clean,
-                botName: activeObj.sock?.botName || 'بوت فرعي',
-                callName: activeObj.sock?.callName || 'فرعي',
-                gender: activeObj.sock?.gender || 'male',
-                personality: activeObj.sock?.personality || 'respectful',
+                adminPhone: liveCfg.adminPhone || '',
+                adminLid: liveCfg.adminLid || '',
+                botName: liveSock.botName || liveCfg.botName || 'بوت فرعي',
+                callName: liveSock.callName || liveCfg.callName || 'فرعي',
+                gender: liveSock.gender || liveCfg.gender || 'male',
+                personality: liveSock.personality || liveCfg.personality || 'respectful',
                 status: 'active',
                 installedAt: new Date().toISOString()
             };
             registryModified = true;
+        } else {
+            // تحديث بالبيانات الحية المباشرة من الذاكرة إذا تغير أي حقل
+            if (liveSock.botName && registry[clean].botName !== liveSock.botName) {
+                registry[clean].botName = liveSock.botName;
+                registryModified = true;
+            }
+            if (liveSock.callName && registry[clean].callName !== liveSock.callName) {
+                registry[clean].callName = liveSock.callName;
+                registryModified = true;
+            }
+            if (liveSock.personality && registry[clean].personality !== liveSock.personality) {
+                registry[clean].personality = liveSock.personality;
+                registryModified = true;
+            }
+            if (liveSock.gender && registry[clean].gender !== liveSock.gender) {
+                registry[clean].gender = liveSock.gender;
+                registryModified = true;
+            }
         }
     }
 
-    // 2. فحص مجلدات الجلسات في sessions/sub_bots لضمان عدم ضياع أي بوت مسجل على السيرفر
+    // 2. فحص مجلدات الجلسات في sessions/sub_bots لضمان أحدث إعدادات مسجلة على القرص
     if (fs.existsSync(SUB_BOTS_DIR)) {
         try {
             const dirs = fs.readdirSync(SUB_BOTS_DIR);
             for (const d of dirs) {
                 const clean = cleanPhoneNumber(d);
-                if (clean && !registry[clean]) {
+                if (clean) {
                     const cfgFile = path.join(SUB_BOTS_DIR, d, 'config.json');
                     if (fs.existsSync(cfgFile)) {
                         try {
                             const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
-                            registry[clean] = cfg;
-                            registryModified = true;
+                            if (!registry[clean]) {
+                                registry[clean] = cfg;
+                                registryModified = true;
+                            } else {
+                                let updated = false;
+                                if (cfg.botName && registry[clean].botName !== cfg.botName) {
+                                    registry[clean].botName = cfg.botName;
+                                    updated = true;
+                                }
+                                if (cfg.callName && registry[clean].callName !== cfg.callName) {
+                                    registry[clean].callName = cfg.callName;
+                                    updated = true;
+                                }
+                                if (cfg.personality && registry[clean].personality !== cfg.personality) {
+                                    registry[clean].personality = cfg.personality;
+                                    updated = true;
+                                }
+                                if (cfg.gender && registry[clean].gender !== cfg.gender) {
+                                    registry[clean].gender = cfg.gender;
+                                    updated = true;
+                                }
+                                if (cfg.adminPhone && registry[clean].adminPhone !== cfg.adminPhone) {
+                                    registry[clean].adminPhone = cfg.adminPhone;
+                                    updated = true;
+                                }
+                                if (cfg.adminLid && registry[clean].adminLid !== cfg.adminLid) {
+                                    registry[clean].adminLid = cfg.adminLid;
+                                    updated = true;
+                                }
+                                if (updated) registryModified = true;
+                            }
                         } catch (_) {}
                     }
                 }
@@ -1505,11 +1597,20 @@ export function getSubBotsReport() {
         if (isRunning) activeCount++;
         else stoppedCount++;
 
+        const currentName = item.botName || 'بوت فرعي';
+        const currentCall = item.callName || currentName;
+        const currentPersonality = (item.personality === 'bad' || item.personality === 'toxic')
+            ? 'قليل الأدب 🤬🔥'
+            : 'محترم ومؤدب 😇🤍';
+        const currentGender = item.gender === 'female' ? 'أنثى 👧' : 'ذكر 👦';
+
         list.push(
             `━━━━━━━━━━━━━━━━━━━━\n` +
-            `*${idx + 1}️⃣ ${item.botName || 'بوت فرعي'}* (نداء: ${item.callName || item.botName || 'فرعي'})\n` +
-            `📱 *رقم البوت:* +${item.phone}\n` +
+            `*${idx + 1}️⃣ ${currentName}* (نداء: ${currentCall})\n` +
+            `📱 *رقم البوت:* +${item.phone || phone}\n` +
             `👑 *الحج الأساسي:* +${item.adminPhone || 'غير محدد'}${item.adminLid ? ` (ID: ${item.adminLid})` : ''}\n` +
+            `🎭 *الشخصية:* ${currentPersonality}\n` +
+            `🚻 *النوع:* ${currentGender}\n` +
             `🟢 *الحالة:* ${isRunning ? '⚡ شغال الآن' : (item.status === 'stopped' ? '🛑 متوقف' : '⚠️ غير متصل')}\n` +
             `📅 *تاريخ التنصيب:* ${item.installedAt ? new Date(item.installedAt).toLocaleDateString('ar-EG') : 'غير مسجل'}`
         );
