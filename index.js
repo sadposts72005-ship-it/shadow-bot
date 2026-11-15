@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
@@ -73,7 +73,18 @@ export function getMsgTimestamp(m) {
     return num;
 }
 
+let isReconnecting = false;
+
 async function startShadowBot() {
+    // 🛑 تنظيف أي سوكيت قديم لمنع التعليق وتراكم السوكيتات عند انقطاع الإنترنت أو قفل الهاتف
+    if (global.conn) {
+        try {
+            global.conn.ws?.removeAllListeners();
+            global.conn.ws?.close();
+            global.conn.ev?.removeAllListeners();
+        } catch (_) {}
+    }
+
     // 📁 استخدام مجلد الجلسة الخاص بالبوت لضمان حفظ الاتصال
     const { state, saveCreds } = await useMultiFileAuthState('session_data');
     
@@ -81,19 +92,24 @@ async function startShadowBot() {
     const { version } = await fetchLatestBaileysVersion();
 
     const conn = makeWASocket({
-        auth: state,
-        version,
-        // 🌐 محاكاة متصفح حقيقي مقبولة من سيرفرات واتساب
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
-        // 🔥 قفل كلي وصارم لكل أنواع اللوجات والباينري لمنع التهنيج وسرعة الاستجابة في الترمكس
-        logger: pino({ level: 'silent', enabled: false }),
-        authProvider: {
-            logger: pino({ level: 'silent', enabled: false })
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent', enabled: false }))
         },
+        version,
+        // 🌐 محاكاة متصفح حديث لمنع الفصل التلقائي والتعليق
+        browser: ['Ubuntu', 'Chrome', '122.0.6261.129'],
+        // 🔥 قفل كلي وصارم لكل أنواع اللوجات والباينري لمنع التهنيج وسرعة الاستجابة
+        logger: pino({ level: 'silent', enabled: false }),
         printQRInTerminal: false,
         syncPhonenumber: true,
-        defaultQueryTimeoutMs: undefined,
+        defaultQueryTimeoutMs: 60000,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
+        retryRequestDelayMs: 2000,
+        maxMsgRetryCount: 5,
         markOnlineOnConnect: true,
+        generateHighQualityLinkPreview: true,
         syncFullHistory: false,
         fireInitQueries: false,
         shouldSyncHistoryMessage: () => false, // تجاهل الرسائل القديمة تماماً لعدم تكرار الردود عند التشغيل
@@ -205,9 +221,18 @@ async function startShadowBot() {
 
         if (connection === 'close') {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(`⚠️ انفصل البوت! الكود: ${reason}. جاري إعادة الاتصال...`);
+            console.log(`⚠️ انفصل البوت! الكود: ${reason}. جاري إعادة الاتصال التلقائي النظيف...`);
             if (reason !== DisconnectReason.loggedOut) {
-                setTimeout(() => startShadowBot(), 3000); // إعادة تشغيل تلقائي بعد 3 ثوانٍ
+                if (!isReconnecting) {
+                    isReconnecting = true;
+                    const delayMs = reason === 515 ? 1000 : 3000;
+                    setTimeout(() => {
+                        isReconnecting = false;
+                        startShadowBot();
+                    }, delayMs);
+                }
+            } else {
+                console.log('❌ تم تسجيل الخروج من جلسة البوت الرئيسية من تطبيق واتساب.');
             }
         }
     });

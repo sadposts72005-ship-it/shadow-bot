@@ -231,7 +231,7 @@ async function createSubBotSocket(phone, sessionDir) {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent', enabled: false }))
         },
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
+        browser: ['Ubuntu', 'Chrome', '122.0.6261.129'],
         syncPhonenumber: true,
         markOnlineOnConnect: true,
         generateHighQualityLinkPreview: true,
@@ -449,16 +449,24 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 activeSubBots.delete(cleanPhone);
+                try {
+                    sock.ws?.removeAllListeners();
+                    sock.ws?.close();
+                    sock.ev?.removeAllListeners();
+                } catch (_) {}
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
 
                 // لا نقوم بحذف الجلسة مطلقاً، ونعيد الاتصال تلقائياً طالما لم يتم إيقافه يدوياً بأمر (ايقاف تنصيب)
                 const isManuallyStopped = cfg.status === 'stopped';
-                if (!isManuallyStopped) {
-                    console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي تلقائياً (+${cleanPhone}) بعد 5 ثوانٍ...`);
+                if (!isManuallyStopped && statusCode !== DisconnectReason.loggedOut) {
+                    const delayMs = statusCode === 515 ? 1500 : 4000;
+                    console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي تلقائياً (+${cleanPhone}) بعد ${delayMs / 1000} ثوانٍ...`);
                     setTimeout(() => {
                         bootSubBot(cleanPhone, cfg, mainConn || global.conn).catch(e => console.error(e));
-                    }, 5000);
+                    }, delayMs);
+                } else if (statusCode === DisconnectReason.loggedOut) {
+                    console.log(`❌ [Sub-Bot] تم تسجيل الخروج من البوت الفرعي (+${cleanPhone}) من تطبيق واتساب.`);
                 }
             }
         });

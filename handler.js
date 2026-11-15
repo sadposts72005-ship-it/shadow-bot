@@ -160,6 +160,72 @@ const wordSpamTracker = {};
 const wordBannedUsers = {};
 const dynamicState = {};
 const installState = new Map();
+const installTimers = new Map();
+
+function clearInstallTimer(key) {
+    if (key && installTimers.has(key)) {
+        clearTimeout(installTimers.get(key));
+        installTimers.delete(key);
+    }
+}
+
+function setInstallState(key, data, conn = null, jid = null) {
+    if (!key) return;
+    clearInstallTimer(key);
+    data.createdAt = Date.now();
+    installState.set(key, data);
+
+    // ⏱️ إلغاء تلقائي للتنصيب بعد 3 دقائق بالضبط إذا لم يكمل المستخدم الخطوات
+    const timer = setTimeout(async () => {
+        if (installState.has(key)) {
+            const currentObj = installState.get(key);
+            installState.delete(key);
+            installTimers.delete(key);
+            if (currentObj?.otherKey) {
+                installState.delete(currentObj.otherKey);
+                clearInstallTimer(currentObj.otherKey);
+            }
+            if (conn && jid) {
+                try {
+                    await conn.sendMessage(jid, {
+                        text: '⌛ *تم إلغاء عملية التنصيب تلقائياً لمرور 3 دقائق دون إكمال الخطوات.* 🛑\n💡 _لو حبيت تبدأ من جديد في أي وقت، اكتب (تنصيب)._'
+                    });
+                } catch (_) {}
+            }
+        }
+    }, 3 * 60 * 1000);
+    installTimers.set(key, timer);
+}
+
+function removeInstallState(key) {
+    if (!key) return;
+    clearInstallTimer(key);
+    installState.delete(key);
+}
+
+function isSubBotNameTaken(nameToTest, excludeAdminPhone = '') {
+    if (!nameToTest) return false;
+    const cleanTest = normalizeArabic(nameToTest.toLowerCase().replace(/[*_~`]/g, '').trim());
+    if (['شادو', 'shadow', 'shado'].includes(cleanTest)) return true;
+
+    try {
+        const registry = loadSubBotsRegistry();
+        for (const [phone, cfg] of Object.entries(registry)) {
+            if (!cfg) continue;
+            const adminP = cleanPhoneNumber(cfg.adminPhone) || String(cfg.adminPhone || '');
+            const botP = cleanPhoneNumber(phone) || String(phone || '');
+            if (excludeAdminPhone && (adminP === excludeAdminPhone || botP === excludeAdminPhone)) {
+                continue; // إذا كان نفس صاحب البوت يعدل أو ينصب بوته
+            }
+            const existBotName = normalizeArabic((cfg.botName || '').toLowerCase().replace(/[*_~`]/g, '').trim());
+            const existCallName = normalizeArabic((cfg.callName || '').toLowerCase().replace(/[*_~`]/g, '').trim());
+            if (existBotName === cleanTest || existCallName === cleanTest) {
+                return true;
+            }
+        }
+    } catch (_) {}
+    return false;
+}
 
 // ⏱️ دالة التأخير المخصصة لمنع الحظر والسبام
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -1329,18 +1395,19 @@ export async function handleAllMessages(mek, currentConn) {
         if (installKey && !currentConn.isSubBot) {
             const currentInstall = installState.get(installKey);
 
-            // التحقق من انتهاء مهلة الجلسة (10 دقائق)
-            if (Date.now() - (currentInstall.createdAt || 0) > 10 * 60 * 1000) {
-                installState.delete(installKey);
-                installState.delete(cleanSender);
-                installState.delete(cleanFrom);
+            // التحقق من انتهاء مهلة الجلسة (3 دقائق)
+            if (Date.now() - (currentInstall.createdAt || 0) > 3 * 60 * 1000) {
+                removeInstallState(installKey);
+                removeInstallState(cleanSender);
+                removeInstallState(cleanFrom);
             } else if (!isRealGroup) {
                 // معالجة خطوات التنصيب في الخاص فقط
 
                 // إمكانية الإلغاء
                 if (['الغاء', 'إلغاء', 'خروج', 'stop', 'cancel'].includes(normalizedBody)) {
-                    installState.delete(cleanSender);
-                    installState.delete(installKey);
+                    removeInstallState(cleanSender);
+                    removeInstallState(installKey);
+                    removeInstallState(cleanFrom);
                     await respondWithStrictTiming('❌', async () => {
                         await currentConn.sendMessage(from, { text: '❌ تم إلغاء عملية تنصيب البوت الفرعي بنجاح.' }, { quoted: mek });
                     });
@@ -1361,7 +1428,7 @@ export async function handleAllMessages(mek, currentConn) {
                         currentInstall.personality = saved.personality || 'respectful';
                         currentInstall.step = 4; // الانتقال مباشرة لإدخال رقم هاتف البوت!
                         delete currentInstall.savedProfile;
-                        installState.set(cleanSender, currentInstall);
+                        setInstallState(cleanSender, currentInstall, currentConn, from);
 
                         const askPhoneText = 
                             `✅ *تم استرجاع إعدادات وتسمية بوتك بنجاح!* 🌸\n` +
@@ -1381,7 +1448,7 @@ export async function handleAllMessages(mek, currentConn) {
                         removeSavedBotProfile(cleanSender);
                         currentInstall.step = 1;
                         delete currentInstall.savedProfile;
-                        installState.set(cleanSender, currentInstall);
+                        setInstallState(cleanSender, currentInstall, currentConn, from);
 
                         const startNewText = 
                             `✨ *تمام! هنبدأ تنصيب جديد خطوة بخطوة:* 🆕\n\n` +
@@ -1423,9 +1490,19 @@ export async function handleAllMessages(mek, currentConn) {
                         return;
                     }
 
+                    // 🔍 فحص ما إذا كان الاسم مشغولاً ومستخدماً من قبل شخص آخر
+                    if (isSubBotNameTaken(chosenName, cleanSender)) {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { 
+                                text: `⚠️ *عذراً يا غالي.. هذا الاسم « ${chosenName} » مشغول بالفعل ومستخدم من قبل!* 🚫\nبرجاء اختيار اسم آخر ومميز لبوتك:` 
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
+
                     currentInstall.step = 2;
                     currentInstall.botName = chosenName;
-                    installState.set(cleanSender, currentInstall);
+                    setInstallState(cleanSender, currentInstall, currentConn, from);
 
                     const step2Text = 
                         `✅ *الاسم الرسمي للبوت:* « ${chosenName} » 🏷️\n\n` +
@@ -1450,9 +1527,19 @@ export async function handleAllMessages(mek, currentConn) {
                         return;
                     }
 
+                    // 🔍 فحص ما إذا كان اسم النداء مشغولاً ومستخدماً من قبل
+                    if (isSubBotNameTaken(chosenCall, cleanSender)) {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { 
+                                text: `⚠️ *عذراً يا غالي.. اسم النداء « ${chosenCall} » مشغول بالفعل ومستخدم من قبل!* 🚫\nبرجاء كتابة اسم نداء آخر ومميز:` 
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
+
                     currentInstall.step = 3;
                     currentInstall.callName = chosenCall;
-                    installState.set(cleanSender, currentInstall);
+                    setInstallState(cleanSender, currentInstall, currentConn, from);
 
                     const step3Text = 
                         `✅ *تم اعتماد اسم النداء:* « ${chosenCall} » 🗣️\n\n` +
@@ -1483,7 +1570,7 @@ export async function handleAllMessages(mek, currentConn) {
 
                     currentInstall.step = 4;
                     currentInstall.gender = chosenGender;
-                    installState.set(cleanSender, currentInstall);
+                    setInstallState(cleanSender, currentInstall, currentConn, from);
 
                     const step4Text = 
                         `✅ *تم تحديد جنس البوت:* « ${chosenGender === 'female' ? 'أنثى 👧' : 'ذكر 👦'} »\n\n` +
@@ -1516,7 +1603,7 @@ export async function handleAllMessages(mek, currentConn) {
 
                     currentInstall.step = 5;
                     currentInstall.personality = chosenPersonality;
-                    installState.set(cleanSender, currentInstall);
+                    setInstallState(cleanSender, currentInstall, currentConn, from);
 
                     const step5Text = 
                         `✅ *تم تحديد شخصية البوت:* « ${chosenPersonality === 'bad' ? 'قليل الأدب 😈🔥 (على مسؤوليتك الكاملة)' : 'محترم 😇✨'} »\n\n` +
@@ -1560,7 +1647,7 @@ export async function handleAllMessages(mek, currentConn) {
 
                     currentInstall.step = 6;
                     currentInstall.targetPhone = targetBotPhone;
-                    installState.set(cleanSender, currentInstall);
+                    setInstallState(cleanSender, currentInstall, currentConn, from);
 
                     const step6Text = 
                         `✅ *تم تحديد رقم البوت:* « +${targetBotPhone} » 📱\n\n` +
@@ -1675,9 +1762,9 @@ export async function handleAllMessages(mek, currentConn) {
                     const finalBotGender = currentInstall.gender || 'male';
                     const finalBotPersonality = currentInstall.personality || 'respectful';
                     const finalBotPhone = currentInstall.targetPhone;
-                    installState.delete(installKey);
-                    installState.delete(cleanSender);
-                    installState.delete(cleanFrom);
+                    removeInstallState(installKey);
+                    removeInstallState(cleanSender);
+                    removeInstallState(cleanFrom);
 
                     await respondWithStrictTiming('⏳', async () => {
                         await currentConn.sendMessage(from, { 
@@ -1738,15 +1825,15 @@ export async function handleAllMessages(mek, currentConn) {
                         }, { quoted: mek });
                     });
                     const privateJid = `${cleanSender}@s.whatsapp.net`;
-                    installState.set(cleanSender, { step: 'CONFIRM_REUSE', savedProfile: userSaved, createdAt: Date.now() });
+                    setInstallState(cleanSender, { step: 'CONFIRM_REUSE', savedProfile: userSaved }, currentConn, privateJid);
                     try {
                         await currentConn.sendMessage(privateJid, { text: restorePrompt });
                     } catch (_) {}
                     return;
                 }
 
-                installState.set(cleanSender, { step: 'CONFIRM_REUSE', savedProfile: userSaved, createdAt: Date.now() });
-                if (cleanFrom) installState.set(cleanFrom, { step: 'CONFIRM_REUSE', savedProfile: userSaved, createdAt: Date.now() });
+                setInstallState(cleanSender, { step: 'CONFIRM_REUSE', savedProfile: userSaved, otherKey: cleanFrom }, currentConn, from);
+                if (cleanFrom) setInstallState(cleanFrom, { step: 'CONFIRM_REUSE', savedProfile: userSaved, otherKey: cleanSender }, currentConn, from);
 
                 await respondWithStrictTiming('🤖', async () => {
                     await currentConn.sendMessage(from, { text: restorePrompt }, { quoted: mek });
@@ -1771,7 +1858,7 @@ export async function handleAllMessages(mek, currentConn) {
                     `(اكتب الاسم فقط في رسالة، مثال: إمبراطور الظلام / شادو 2 / الصقر الملكي)\n\n` +
                     `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
-                installState.set(cleanSender, { step: 1, createdAt: Date.now() });
+                setInstallState(cleanSender, { step: 1 }, currentConn, privateJid);
                 try {
                     await currentConn.sendMessage(privateJid, { text: startInstallText });
                 } catch (_) {}
@@ -1779,8 +1866,8 @@ export async function handleAllMessages(mek, currentConn) {
             }
 
             // إذا كُتب في الخاص مباشرة
-            installState.set(cleanSender, { step: 1, createdAt: Date.now() });
-            if (cleanFrom) installState.set(cleanFrom, { step: 1, createdAt: Date.now() });
+            setInstallState(cleanSender, { step: 1, otherKey: cleanFrom }, currentConn, from);
+            if (cleanFrom) setInstallState(cleanFrom, { step: 1, otherKey: cleanSender }, currentConn, from);
 
             const startInstallText = 
                 `✨ *مرحباً بك في نظام تنصيب البوتات الفرعية (Sub-Bot)!* 🤖\n\n` +
@@ -2041,6 +2128,15 @@ export async function handleAllMessages(mek, currentConn) {
             if (!newChosenName || newChosenName.length < 2) {
                 await respondWithStrictTiming('⚠️', async () => {
                     await currentConn.sendMessage(from, { text: '⚠️ اكتب الاسم الجديد بعد الأمر، مثال:\n(تعديل اسم البوت الصقر)' }, { quoted: mek });
+                });
+                return;
+            }
+
+            if (isSubBotNameTaken(newChosenName, myNumber)) {
+                await respondWithStrictTiming('⚠️', async () => {
+                    await currentConn.sendMessage(from, { 
+                        text: `⚠️ *عذراً يا غالي.. هذا الاسم « ${newChosenName} » مشغول بالفعل ومستخدم من قبل!* 🚫\nبرجاء اختيار اسم آخر للبوت الخاص بك.` 
+                    }, { quoted: mek });
                 });
                 return;
             }
