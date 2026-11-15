@@ -290,12 +290,19 @@ function isUserMuted(senderJid, fromGid, localDB) {
     if (!Array.isArray(mutedList) || mutedList.length === 0) return false;
 
     const senderClean = getCleanNumber(senderJid);
+    if (!senderClean) return false;
+
     const mappedPhone = localDB.lidMap?.[senderClean] || '';
 
-    return mutedList.some(u => {
-        const cleanU = getCleanNumber(u);
-        return cleanU === senderClean || (mappedPhone && cleanU === mappedPhone) || (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) || u === senderJid;
-    });
+    for (let i = 0; i < mutedList.length; i++) {
+        const u = mutedList[i];
+        const cleanU = typeof u === 'string' ? (u.includes('@') ? getCleanNumber(u) : u) : String(u);
+        if (cleanU === senderClean) return true;
+        if (mappedPhone && cleanU === mappedPhone) return true;
+        if (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) return true;
+        if (u === senderJid) return true;
+    }
+    return false;
 }
 
 function extractTarget(mek, bodyText = '') {
@@ -1113,11 +1120,9 @@ const datelsHandler = {
                 return cleanK === cleanSenderNum || (localDB.lidMap?.[cleanSenderNum] && cleanK === localDB.lidMap[cleanSenderNum]);
             });
 
-            // 🔇 0️⃣ [حذف رسائل الأعضاء المكتومين بالجروب فوراً]
+            // 🔇 0️⃣ [حذف رسائل الأعضاء المكتومين بالجروب فوراً بدون تعطيل البوت]
             if (isGroup && isUserMuted(sender, from, localDB)) {
-                try {
-                    await currentConn.sendMessage(from, { delete: mek.key });
-                } catch (_) {}
+                currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
                 return true;
             }
 
@@ -2111,34 +2116,67 @@ const datelsHandler = {
                         return true;
                     }
 
+                    // البحث عن العضو في قائمة المشاركين بالجروب لربط الـ Phone والـ LID بدقة
+                    let foundParticipant = participants.find(p => {
+                        const pId = getCleanNumber(p.id);
+                        const pLid = getCleanNumber(p.lid);
+                        const pPhone = getCleanNumber(p.phoneNumber);
+                        return (pId && (pId === targetNum || p.id === target)) ||
+                               (pLid && (pLid === targetNum || p.lid === target)) ||
+                               (pPhone && pPhone === targetNum);
+                    });
+
+                    let phoneClean = '';
+                    let lidClean = '';
+                    if (foundParticipant) {
+                        if (foundParticipant.id?.endsWith('@s.whatsapp.net')) phoneClean = getCleanNumber(foundParticipant.id);
+                        else if (foundParticipant.id?.endsWith('@lid')) lidClean = getCleanNumber(foundParticipant.id);
+                        if (foundParticipant.lid?.endsWith('@lid')) lidClean = getCleanNumber(foundParticipant.lid);
+                        else if (foundParticipant.lid?.endsWith('@s.whatsapp.net')) phoneClean = getCleanNumber(foundParticipant.lid);
+                        if (!phoneClean && foundParticipant.phoneNumber) phoneClean = getCleanNumber(foundParticipant.phoneNumber);
+                    }
+
+                    if (phoneClean && lidClean) {
+                        if (!localDB.lidMap) localDB.lidMap = {};
+                        localDB.lidMap[phoneClean] = lidClean;
+                        localDB.lidMap[lidClean] = phoneClean;
+                    }
+
+                    const mappedTarget = localDB.lidMap?.[targetNum] || phoneClean || lidClean || '';
+
                     if (!localDB.mutedUsers) localDB.mutedUsers = {};
                     if (!localDB.mutedUsers[from]) localDB.mutedUsers[from] = [];
 
-                    const mappedTarget = localDB.lidMap?.[targetNum] || '';
                     const alreadyMuted = localDB.mutedUsers[from].some(u => {
                         const cu = getCleanNumber(u);
-                        return cu === targetNum || (mappedTarget && cu === mappedTarget) || u === target;
+                        return cu === targetNum || 
+                               (mappedTarget && cu === mappedTarget) || 
+                               (phoneClean && cu === phoneClean) || 
+                               (lidClean && cu === lidClean) || 
+                               u === target;
                     });
+
+                    const displayTarget = (phoneClean && phoneClean.length <= 13) ? phoneClean : targetNum;
 
                     if (alreadyMuted) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} مكتوم بالفعل في هذا الجروب!`, mentions: [target] }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${displayTarget} مكتوم بالفعل في هذا الجروب!`, mentions: [target] }, { quoted: mek });
                         return true;
                     }
 
-                    localDB.mutedUsers[from].push(targetNum);
-                    if (mappedTarget && !localDB.mutedUsers[from].includes(mappedTarget)) {
-                        localDB.mutedUsers[from].push(mappedTarget);
-                    }
-                    if (!localDB.mutedUsers[from].includes(target)) {
-                        localDB.mutedUsers[from].push(target);
-                    }
+                    // تخزين أرقام نقية فريدة فقط في قاعدة البيانات لمنع أي تكرار
+                    const currentMuted = new Set((localDB.mutedUsers[from] || []).map(u => getCleanNumber(u)).filter(Boolean));
+                    if (targetNum) currentMuted.add(targetNum);
+                    if (phoneClean) currentMuted.add(phoneClean);
+                    if (lidClean) currentMuted.add(lidClean);
+                    if (mappedTarget) currentMuted.add(mappedTarget);
+                    localDB.mutedUsers[from] = Array.from(currentMuted);
                     saveLocalDB(localDB);
 
                     await handleCommandTiming('🔇');
                     await currentConn.sendMessage(from, {
-                        text: `🔇 *تم كتم العضو @${targetNum} بنجاح!* 🛑\n\nلن يستطيع التحدث في المجموعة، وأي رسالة سيرسلها هنا سيقوم البوت بحذفها فوراً وتلقائياً.`,
-                        mentions: [target]
+                        text: `🔇 *تم كتم العضو @${displayTarget} بنجاح!* 🛑\n\nلن يستطيع التحدث في المجموعة، وأي رسالة سيرسلها هنا سيقوم البوت بحذفها فوراً وتلقائياً.`,
+                        mentions: [displayTarget.length > 13 ? `${displayTarget}@lid` : `${displayTarget}@s.whatsapp.net`, target]
                     }, { quoted: mek });
                     return true;
                 }
@@ -2160,7 +2198,26 @@ const datelsHandler = {
                     }
 
                     const targetNum = getCleanNumber(target);
-                    const mappedTarget = localDB.lidMap?.[targetNum] || '';
+                    let foundParticipant = participants.find(p => {
+                        const pId = getCleanNumber(p.id);
+                        const pLid = getCleanNumber(p.lid);
+                        const pPhone = getCleanNumber(p.phoneNumber);
+                        return (pId && (pId === targetNum || p.id === target)) ||
+                               (pLid && (pLid === targetNum || p.lid === target)) ||
+                               (pPhone && pPhone === targetNum);
+                    });
+
+                    let phoneClean = '';
+                    let lidClean = '';
+                    if (foundParticipant) {
+                        if (foundParticipant.id?.endsWith('@s.whatsapp.net')) phoneClean = getCleanNumber(foundParticipant.id);
+                        else if (foundParticipant.id?.endsWith('@lid')) lidClean = getCleanNumber(foundParticipant.id);
+                        if (foundParticipant.lid?.endsWith('@lid')) lidClean = getCleanNumber(foundParticipant.lid);
+                        else if (foundParticipant.lid?.endsWith('@s.whatsapp.net')) phoneClean = getCleanNumber(foundParticipant.lid);
+                        if (!phoneClean && foundParticipant.phoneNumber) phoneClean = getCleanNumber(foundParticipant.phoneNumber);
+                    }
+
+                    const mappedTarget = localDB.lidMap?.[targetNum] || phoneClean || lidClean || '';
 
                     if (!localDB.mutedUsers || !localDB.mutedUsers[from]) {
                         await handleCommandTiming('ℹ️');
@@ -2168,9 +2225,15 @@ const datelsHandler = {
                         return true;
                     }
 
+                    const targetsToRemove = new Set([targetNum, target, getCleanNumber(target)]);
+                    if (mappedTarget) targetsToRemove.add(mappedTarget);
+                    if (phoneClean) targetsToRemove.add(phoneClean);
+                    if (lidClean) targetsToRemove.add(lidClean);
+                    if (localDB.lidMap?.[targetNum]) targetsToRemove.add(localDB.lidMap[targetNum]);
+
                     const isMutedNow = localDB.mutedUsers[from].some(u => {
                         const cu = getCleanNumber(u);
-                        return cu === targetNum || (mappedTarget && cu === mappedTarget) || u === target;
+                        return targetsToRemove.has(cu) || targetsToRemove.has(u);
                     });
 
                     if (!isMutedNow) {
@@ -2179,34 +2242,59 @@ const datelsHandler = {
                         return true;
                     }
 
-                    localDB.mutedUsers[from] = localDB.mutedUsers[from].filter(u => {
+                    localDB.mutedUsers[from] = (localDB.mutedUsers[from] || []).filter(u => {
                         const cu = getCleanNumber(u);
-                        return cu !== targetNum && cu !== mappedTarget && u !== target;
+                        return !targetsToRemove.has(cu) && !targetsToRemove.has(u);
                     });
                     saveLocalDB(localDB);
 
                     await handleCommandTiming('🔊');
+                    const displayNum = (phoneClean && phoneClean.length <= 13) ? phoneClean : targetNum;
                     await currentConn.sendMessage(from, {
-                        text: `🔊 *تم فك الكتم عن @${targetNum} بنجاح!* ✨\nأصبح بإمكانه المشاركة وإرسال الرسائل في المجموعة الآن.`,
-                        mentions: [target]
+                        text: `🔊 *تم فك الكتم عن @${displayNum} بنجاح!* ✨\nأصبح بإمكانه المشاركة وإرسال الرسائل في المجموعة الآن.`,
+                        mentions: [displayNum.length > 13 ? `${displayNum}@lid` : `${displayNum}@s.whatsapp.net`, target]
                     }, { quoted: mek });
                     return true;
                 }
 
-                // عرض قائمة المكتومين
+                // عرض قائمة المكتومين بدون تكرار
                 if (isActualRoomAdminOrOwner && (normalizedBody === 'المكتومين' || normalizedBody === 'قائمة المكتومين')) {
                     await handleCommandTiming('📋');
-                    const mutedList = localDB.mutedUsers?.[from] || [];
-                    if (mutedList.length === 0) {
+                    const rawList = localDB.mutedUsers?.[from] || [];
+                    const uniquePeople = new Set();
+                    const displayList = [];
+
+                    for (const item of rawList) {
+                        const clean = getCleanNumber(item);
+                        if (!clean) continue;
+                        const mappedPhone = localDB.lidMap?.[clean] || '';
+                        // تفضيل رقم الهاتف على معرف الـ LID للعرض
+                        const canonicalNum = (clean.length > 13 && mappedPhone && mappedPhone.length <= 13) ? mappedPhone : clean;
+
+                        if (uniquePeople.has(canonicalNum) || (mappedPhone && uniquePeople.has(mappedPhone))) {
+                            continue;
+                        }
+
+                        uniquePeople.add(canonicalNum);
+                        if (mappedPhone) uniquePeople.add(mappedPhone);
+                        displayList.push(canonicalNum);
+                    }
+
+                    if (displayList.length === 0) {
                         await currentConn.sendMessage(from, { text: '✨ لا يوجد أي أعضاء مكتومين حالياً في هذا الجروب.' }, { quoted: mek });
                         return true;
                     }
-                    let listText = `🔇 *قائمة الأعضاء المكتومين في الجروب (${mutedList.length}):*\n\n`;
-                    for (let i = 0; i < mutedList.length; i++) {
-                        listText += `${i + 1}️⃣ @${getCleanNumber(mutedList[i])}\n`;
+
+                    let listText = `🔇 *قائمة الأعضاء المكتومين في الجروب (${displayList.length}):*\n\n`;
+                    const mentions = [];
+                    for (let i = 0; i < displayList.length; i++) {
+                        const num = displayList[i];
+                        const jid = num.length > 13 ? `${num}@lid` : `${num}@s.whatsapp.net`;
+                        mentions.push(jid);
+                        listText += `${i + 1}️⃣ @${num}\n`;
                     }
                     listText += `\n💡 لفك كتم أي عضو اكتب: *(فك كتم @العضو)*`;
-                    await currentConn.sendMessage(from, { text: listText, mentions: mutedList }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: listText, mentions }, { quoted: mek });
                     return true;
                 }
 

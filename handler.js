@@ -312,12 +312,19 @@ function isUserMuted(senderJid, fromGid, localDB) {
     if (!Array.isArray(mutedList) || mutedList.length === 0) return false;
 
     const senderClean = getCleanNumber(senderJid);
+    if (!senderClean) return false;
+
     const mappedPhone = localDB.lidMap?.[senderClean] || '';
 
-    return mutedList.some(u => {
-        const cleanU = getCleanNumber(u);
-        return cleanU === senderClean || (mappedPhone && cleanU === mappedPhone) || (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) || u === senderJid;
-    });
+    for (let i = 0; i < mutedList.length; i++) {
+        const u = mutedList[i];
+        const cleanU = typeof u === 'string' ? (u.includes('@') ? getCleanNumber(u) : u) : String(u);
+        if (cleanU === senderClean) return true;
+        if (mappedPhone && cleanU === mappedPhone) return true;
+        if (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) return true;
+        if (u === senderJid) return true;
+    }
+    return false;
 }
 
 function isUserInList(jid, list = []) {
@@ -984,11 +991,9 @@ export async function handleAllMessages(mek, currentConn) {
         // 🚫 فحص حظر المستخدم
         if (isUserBanned(sender, localDB) && !isAbsoluteOwner) return;
 
-        // 🔇 فحص كتم المستخدم في هذا الجروب (حذف فوري لرسائل المكتوم)
+        // 🔇 فحص كتم المستخدم في هذا الجروب (حذف فوري لرسائل المكتوم بدون تجميد البوت)
         if (isRealGroup && isUserMuted(sender, from, localDB)) {
-            try {
-                await currentConn.sendMessage(from, { delete: mek.key });
-            } catch (_) {}
+            currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
             return;
         }
 
