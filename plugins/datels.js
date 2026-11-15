@@ -4,6 +4,7 @@ import os from 'os';
 import { spawn } from 'child_process';
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import { loadSubBotsRegistry, updateSubBotHajj, activeSubBots, cleanPhoneNumber } from '../core/subbot.js';
+import { loadLocalDB, saveLocalDB } from '../core/database.js';
 import handleStickerCommand from './sticker.js';
 import handleImageCommand from './image.js';
 
@@ -29,53 +30,6 @@ const recentWelcomes = new Set();
 let cronStarted = false;
 let dynamicPrayers = {};
 
-function loadLocalDB() {
-    try {
-        if (fs.existsSync(dbPath)) {
-            let db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-            if (!db.users) db.users = {};
-            if (!db.warns) db.warns = {};
-            if (!db.warnGivers) db.warnGivers = {};
-            if (!db.hajjUsers) db.hajjUsers = [];
-            if (!db.mainHajjUsers) db.mainHajjUsers = [];
-            if (!db.bannedGroups) db.bannedGroups = [];
-            if (!db.disabledWelcomes) db.disabledWelcomes = [];
-            if (!db.bannedUsers) db.bannedUsers = [];
-            if (!db.timedGroupControls) db.timedGroupControls = {};
-            if (!db.sentRemindersLog) db.sentRemindersLog = { date: "", list: [] };
-            if (!db.lidMap) db.lidMap = {};
-            if (typeof db.isBotSleeping !== 'boolean') db.isBotSleeping = false;
-            // تثبيت معرفات الحج شادو الأصلي
-            db.lidMap['201129249396'] = '194961618301016';
-            db.lidMap['194961618301016'] = '201129249396';
-            return db;
-        }
-    } catch (e) {
-        console.error("Error loading DB in datels:", e);
-    }
-    return {
-        users: {},
-        bannedUsers: [],
-        bannedGroups: [],
-        disabledWelcomes: [],
-        warns: {},
-        warnGivers: {},
-        hajjUsers: [],
-        mainHajjUsers: [],
-        timedGroupControls: {},
-        sentRemindersLog: { date: "", list: [] },
-        lidMap: { '201129249396': '194961618301016', '194961618301016': '201129249396' },
-        isBotSleeping: false
-    };
-}
-
-function saveLocalDB(data) {
-    try {
-        fs.writeFileSync(dbPath, JSON.stringify(data, null, 2), 'utf-8');
-    } catch (e) {
-        console.error("Error saving DB in datels:", e);
-    }
-}
 
 function normalizeArabic(text) {
     if (!text) return '';
@@ -613,7 +567,7 @@ async function getParticipatingGroupIds(conn, localDB) {
     // 1. استخدام سجل الجروبات المعروفة المحفوظة مسبقاً في قاعدة البيانات للبوت الأساسي
     if (!conn.isSubBot && localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
         for (const gid of localDB.knownGroups) {
-            if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
+            if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
                 groupsSet.add(gid);
             }
         }
@@ -622,7 +576,7 @@ async function getParticipatingGroupIds(conn, localDB) {
     // 2. فحص سجل الجروبات الخاص بالبوت الفرعي إن وجد
     if (conn.isSubBot && conn.subBotConfig?.knownGroups && Array.isArray(conn.subBotConfig.knownGroups)) {
         for (const gid of conn.subBotConfig.knownGroups) {
-            if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
+            if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
                 groupsSet.add(gid);
             }
         }
@@ -637,7 +591,7 @@ async function getParticipatingGroupIds(conn, localDB) {
             if (fetched && typeof fetched === 'object') {
                 let dbUpdated = false;
                 for (const gid of Object.keys(fetched)) {
-                    if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid)) {
+                    if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
                         groupsSet.add(gid);
                         if (!conn.isSubBot) {
                             if (localDB) {
@@ -665,7 +619,7 @@ async function getParticipatingGroupIds(conn, localDB) {
 
 async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, sentGids = new Set()) {
     for (let gid of groupIds) {
-        if (!gid || !gid.endsWith('@g.us') || localDB.bannedGroups?.includes(gid)) continue;
+        if (!gid || !gid.endsWith('@g.us') || localDB.bannedGroups?.includes(gid) || localDB.disabledMuslim?.includes(gid)) continue;
         if (sentGids.has(gid)) continue;
 
         if (!conn || !conn.user?.id) break;
@@ -1909,6 +1863,48 @@ const datelsHandler = {
                     return true;
                 }
 
+                // 🕌 تشغيل الأذكار والأذان (تشغيل مسلم)
+                const isEnableMuslim = /^(?:\.|\/|!)?(?:تشغيل\s*مسلم|تفعيل\s*مسلم|فتح\s*مسلم|تشغيل\s*الاذان|تفعيل\s*الاذان|تشغيل\s*الأذان|تفعيل\s*الأذان)$/i.test(normalizedBody);
+                if (isEnableMuslim) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
+                    if (!localDB.disabledMuslim) localDB.disabledMuslim = [];
+                    if (!localDB.disabledMuslim.includes(from)) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: '⚠️ مواقيت الصلاة والأذكار التلقائية مفعلة وشغالة بالفعل في هذا الجروب! 🕌✨' }, { quoted: mek });
+                        return true;
+                    }
+                    localDB.disabledMuslim = localDB.disabledMuslim.filter(g => g !== from);
+                    saveLocalDB(localDB);
+                    await handleCommandTiming('🕌');
+                    await currentConn.sendMessage(from, { text: '✅ *تم تشغيل وتفعيل مواقيت الصلاة والأذكار التلقائية في هذا الجروب بنجاح!* 🕌🎉' }, { quoted: mek });
+                    return true;
+                }
+
+                // 🛑 إيقاف الأذكار والأذان (وقف مسلم)
+                const isDisableMuslim = /^(?:\.|\/|!)?(?:وقف\s*مسلم|قفل\s*مسلم|تعطيل\s*مسلم|ايقاف\s*مسلم|إيقاف\s*مسلم|الغاء\s*مسلم|إلغاء\s*مسلم|وقف\s*الاذان|تعطيل\s*الاذان|ايقاف\s*الاذان|إيقاف\s*الاذان)$/i.test(normalizedBody);
+                if (isDisableMuslim) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
+                    if (!localDB.disabledMuslim) localDB.disabledMuslim = [];
+                    if (localDB.disabledMuslim.includes(from)) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: '⚠️ مواقيت الصلاة والأذكار متوقفة بالفعل في هذا الجروب! 🛑' }, { quoted: mek });
+                        return true;
+                    }
+                    localDB.disabledMuslim.push(from);
+                    saveLocalDB(localDB);
+                    await handleCommandTiming('🛑');
+                    await currentConn.sendMessage(from, { text: '🛑 *تم إيقاف مواقيت الصلاة والأذكار التلقائية في هذا الروم بنجاح!* 📴\n(باقي الرومات ستستمر بالعمل كالمعتاد دون أي تغيير)' }, { quoted: mek });
+                    return true;
+                }
+
                 // قفل وقتي وفتح وقتي
                 if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('قفل وقتي') || normalizedBody.startsWith('فتح وقتي'))) {
                     let cleanBody = convertArabicNumbers(body);
@@ -2372,12 +2368,14 @@ const datelsHandler = {
                     let adminsCount = actualAdminsList.length;
                     let isLocked = !!groupMetadata?.announce;
                     let isWelcome = !localDB.disabledWelcomes?.includes(from);
+                    let isMuslim = !localDB.disabledMuslim?.includes(from);
                     let infoText = `╭━━━〔 📋 *معلومات الجروب* 〕━━━╮\n\n` +
                                    `🏷️ *اسم الجروب:* ${subject}\n` +
                                    `👥 *عدد الأعضاء:* ${membersCount} عضو\n` +
                                    `🛡️ *عدد المشرفين:* ${adminsCount} مشرف\n` +
                                    `🔒 *حالة الإرسال:* ${isLocked ? 'مقفول للمشرفين فقط 🔒' : 'مفتوح للجميع 🔓'}\n` +
-                                   `👋 *الترحيب التلقائي:* ${isWelcome ? 'مفعل ✅' : 'معطل ❌'}\n\n` +
+                                   `👋 *الترحيب التلقائي:* ${isWelcome ? 'مفعل ✅' : 'معطل ❌'}\n` +
+                                   `🕌 *الأذكار والأذان:* ${isMuslim ? 'مفعل 🕌' : 'معطل 🛑'}\n\n` +
                                    `📝 *الوصف:* \n${desc}\n` +
                                    `╰━━━━━━━━━━━━━━━━━━━━╯`;
                     await currentConn.sendMessage(from, { text: infoText }, { quoted: mek });

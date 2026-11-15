@@ -18,27 +18,58 @@ global.subBotSentMsgIds = subBotSentMsgIds;
  * تحميل سجل البوتات الفرعية من ملف sub_bots.json مع استرجاع تلقائي من النسخة الاحتياطية
  */
 export function loadSubBotsRegistry() {
+    let registry = {};
     try {
         if (fs.existsSync(REGISTRY_FILE)) {
             const content = fs.readFileSync(REGISTRY_FILE, 'utf8').trim();
             if (content && content !== '{}') {
-                return JSON.parse(content);
+                try { registry = JSON.parse(content); } catch (_) {}
             }
         }
-        // استرجاع تلقائي من مجلد الجلسات المحمي في حال تم تحديث السيرفر
+        // استرجاع ودمج تلقائي من مجلد الجلسات المحمي في حال تم تحديث السيرفر بالـ Git Pull
         const backupFile = path.join(process.cwd(), 'sessions', 'sub_bots_registry_backup.json');
         if (fs.existsSync(backupFile)) {
-            const backupContent = fs.readFileSync(backupFile, 'utf8').trim();
-            if (backupContent && backupContent !== '{}') {
-                const data = JSON.parse(backupContent);
-                try { fs.writeFileSync(REGISTRY_FILE, JSON.stringify(data, null, 2), 'utf8'); } catch (_) {}
-                return data;
+            try {
+                const backupContent = fs.readFileSync(backupFile, 'utf8').trim();
+                if (backupContent && backupContent !== '{}') {
+                    const data = JSON.parse(backupContent);
+                    if (data && typeof data === 'object') {
+                        for (const [p, cfg] of Object.entries(data)) {
+                            if (!registry[p]) registry[p] = cfg;
+                        }
+                    }
+                }
+            } catch (_) {}
+        }
+
+        // 🔄 فحص مجلدات الجلسات الفعلية لاسترجاع أي بوت فرعي مسجل حتى لو فُقد السجل الرئيسي
+        if (fs.existsSync(SUB_BOTS_DIR)) {
+            let foundAny = false;
+            try {
+                const dirs = fs.readdirSync(SUB_BOTS_DIR);
+                for (const d of dirs) {
+                    const cfgFile = path.join(SUB_BOTS_DIR, d, 'config.json');
+                    const credsFile = path.join(SUB_BOTS_DIR, d, 'creds.json');
+                    if (fs.existsSync(cfgFile) && fs.existsSync(credsFile)) {
+                        try {
+                            const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+                            const cleanD = cleanPhoneNumber(d) || d;
+                            if (!registry[cleanD] || !registry[cleanD].phone) {
+                                registry[cleanD] = cfg;
+                                foundAny = true;
+                            }
+                        } catch (_) {}
+                    }
+                }
+            } catch (_) {}
+            if (foundAny) {
+                try { fs.writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2), 'utf8'); } catch (_) {}
             }
         }
     } catch (e) {
         console.error('❌ خطأ في قراءة سجل البوتات الفرعية:', e?.message || e);
     }
-    return {};
+    return registry;
 }
 
 /**

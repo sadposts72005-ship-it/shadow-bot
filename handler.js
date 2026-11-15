@@ -62,11 +62,17 @@ const botMuteMap = new Map();
 
 // 💾 ملف حفظ واسترجاع حالات التحكم (نام / اصحي / اسكت / اتكلم) عبر التحديثات والريستارت
 const CONTROLS_FILE = path.join(process.cwd(), 'runtime_controls.json');
+const CONTROLS_BACKUP = path.join(process.cwd(), 'session_data', 'runtime_controls_backup.json');
 
 function loadRuntimeControls() {
     try {
+        let raw = null;
         if (fs.existsSync(CONTROLS_FILE)) {
-            const raw = fs.readFileSync(CONTROLS_FILE, 'utf8');
+            raw = fs.readFileSync(CONTROLS_FILE, 'utf8');
+        } else if (fs.existsSync(CONTROLS_BACKUP)) {
+            raw = fs.readFileSync(CONTROLS_BACKUP, 'utf8');
+        }
+        if (raw) {
             const data = JSON.parse(raw);
             if (data.botSleep && typeof data.botSleep === 'object') {
                 for (const [k, v] of Object.entries(data.botSleep)) {
@@ -110,7 +116,13 @@ function saveRuntimeControls() {
             botWakeTime: wakeObj,
             lastUpdated: new Date().toISOString()
         };
-        fs.writeFileSync(CONTROLS_FILE, JSON.stringify(data, null, 2), 'utf8');
+        const jsonStr = JSON.stringify(data, null, 2);
+        fs.writeFileSync(CONTROLS_FILE, jsonStr, 'utf8');
+        try {
+            const dir = path.dirname(CONTROLS_BACKUP);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(CONTROLS_BACKUP, jsonStr, 'utf8');
+        } catch (_) {}
     } catch (err) {
         console.error('⚠️ خطأ في حفظ ملف runtime_controls.json:', err?.message || err);
     }
