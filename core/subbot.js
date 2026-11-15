@@ -242,13 +242,34 @@ async function createSubBotSocket(phone, sessionDir) {
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
         retryRequestDelayMs: 2000,
-        getMessage: async () => ({ conversation: '' })
+        // 🛑 إرجاع undefined عند عدم توفر الرسالة لمنع بايلز من إرسال رسائل فارغة أو نقط (. / conversation: '') عند طلب retry
+        getMessage: async () => undefined
     });
 
     // تتبع وتفادي تكرار ردود البوت على رسائله
     const originalSendMessage = sock.sendMessage.bind(sock);
     sock.sendMessage = async (...args) => {
         try {
+            // 🛑 فلتر أمني صارم: منع إرسال أي رسالة فارغة أو نقط لوحدها (. أو .. إلخ) من البوت الفرعي
+            if (args[1] && typeof args[1] === 'object') {
+                if (args[1].text !== undefined) {
+                    if (typeof args[1].text !== 'string') {
+                        args[1].text = String(args[1].text || '');
+                    }
+                    const cleanText = args[1].text.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+                    if (!cleanText || /^\.+$/.test(cleanText)) {
+                        console.warn(`🛑 [Sub-Bot Filter] تم منع إرسال رسالة فارغة أو نقط فاضية تلقائياً: "${args[1].text}"`);
+                        return null;
+                    }
+                }
+                if (args[1].caption !== undefined && typeof args[1].caption === 'string') {
+                    const cleanCap = args[1].caption.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+                    if (!cleanCap || /^\.+$/.test(cleanCap)) {
+                        args[1].caption = '';
+                    }
+                }
+            }
+
             // توحيد صيغة المذكر والمؤنث لجميع ردود وألعاب وأوامر البوت الأنثى تلقائياً
             if (sock.gender === 'female' || sock.subBotConfig?.gender === 'female') {
                 if (args[1] && typeof args[1] === 'object') {

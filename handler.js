@@ -531,6 +531,15 @@ export async function handleAllMessages(mek, currentConn) {
         let textLower = body.toLowerCase().trim();
         if (!textLower) return;
 
+        // 🛑 تجاهل تام لأي رسالة واردة عبارة عن نقطة أو نقط فقط لوحدها (. أو .. إلخ) ما لم تكن للانضمام بلعبة البكاسة
+        const isOnlyDots = /^[\.\s\u200B-\u200D\uFEFF]+$/.test(textLower);
+        if (isOnlyDots) {
+            const isBakasaWaiting = Boolean(currentConn.bakasa && currentConn.bakasa[from] && (currentConn.bakasa[from].status === 'waiting' || currentConn.bakasa[from].status === 'choosing_category'));
+            if (!isBakasaWaiting) {
+                return;
+            }
+        }
+
         let normalizedBody = normalizeArabic(textLower);
         mek.text = textLower;
         

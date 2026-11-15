@@ -114,9 +114,9 @@ async function startShadowBot() {
         fireInitQueries: false,
         shouldSyncHistoryMessage: () => false, // تجاهل الرسائل القديمة تماماً لعدم تكرار الردود عند التشغيل
         shouldIgnoreJid: () => false,
-        // 🔓 استرجاع محتوى الرسائل بشكل صحيح في الخاص والجروبات لمنع التجاهل الصامت ومنع رسائل السبام
+        // 🛑 إرجاع undefined عند عدم توفر الرسالة لمنع بايلز من إرسال رسائل فارغة أو نقط (. / conversation: '') عند طلب retry
         getMessage: async (key) => {
-            return { conversation: '' };
+            return undefined;
         }
     });
 
@@ -126,6 +126,25 @@ async function startShadowBot() {
     const originalSendMessage = conn.sendMessage.bind(conn);
     conn.sendMessage = async (...args) => {
         try {
+            // 🛑 فلتر أمني صارم: منع إرسال أي رسالة فارغة أو نقط لوحدها (. أو .. إلخ) من البوت الأساسي
+            if (args[1] && typeof args[1] === 'object') {
+                if (args[1].text !== undefined) {
+                    if (typeof args[1].text !== 'string') {
+                        args[1].text = String(args[1].text || '');
+                    }
+                    const cleanText = args[1].text.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+                    if (!cleanText || /^\.+$/.test(cleanText)) {
+                        console.warn(`🛑 [Main-Bot Filter] تم منع إرسال رسالة فارغة أو نقط فاضية تلقائياً: "${args[1].text}"`);
+                        return null;
+                    }
+                }
+                if (args[1].caption !== undefined && typeof args[1].caption === 'string') {
+                    const cleanCap = args[1].caption.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+                    if (!cleanCap || /^\.+$/.test(cleanCap)) {
+                        args[1].caption = '';
+                    }
+                }
+            }
             const res = await originalSendMessage(...args);
             if (res?.key?.id) {
                 botSentMsgIds.add(res.key.id);
