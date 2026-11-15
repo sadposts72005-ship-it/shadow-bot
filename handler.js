@@ -18,6 +18,7 @@ import {
     getSubBotsReport,
     cleanPhoneNumber,
     loadSubBotsRegistry,
+    saveSubBotsRegistry,
     loadSavedBotProfiles,
     saveSavedBotProfile,
     removeSavedBotProfile,
