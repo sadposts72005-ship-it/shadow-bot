@@ -523,6 +523,20 @@ export async function handleAllMessages(mek, currentConn) {
         if (!sender && mek.key?.fromMe) sender = currentConn.user?.id || '';
         if (!sender) return;
 
+        // 🔇 فحص كتم المستخدم في هذا الجروب فوراً وبلا انتظار (حذف فوري لأي رسالة حرفياً: كلام، ملصقات، صور، فيديوهات، ريكوردات، ملفات)
+        if (isRealGroup) {
+            const localDB = loadLocalDB();
+            if (isUserMuted(sender, from, localDB)) {
+                const cleanSender = getCleanNumber(sender);
+                const ownerPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
+                const isOwner = ownerPhoneList.includes(cleanSender) || ownerPhoneList.includes(localDB.lidMap?.[cleanSender]) || mek.key.fromMe;
+                if (!isOwner) {
+                    currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
+                    return;
+                }
+            }
+        }
+
         let cleanSender = getCleanNumber(sender);
         let standardSenderJid = cleanUserJid(sender);
         

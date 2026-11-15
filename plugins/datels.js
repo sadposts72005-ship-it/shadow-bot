@@ -1014,6 +1014,12 @@ const datelsHandler = {
                 mek.key.fromMe
             );
 
+            // 🔇 فحص كتم العضو فوراً قبل استخراج النص لحذف جميع الرسائل والوسائط حرفياً (صور، ملصقات، صوت، ريكوردات، ملفات، إلخ)
+            if (isGroup && isUserMuted(sender, from, localDB) && !isAbsoluteOwner) {
+                currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
+                return true;
+            }
+
             // 👑 فحص صاحب البوت (سواء شادو الأصلي للبوت الرئيسي أو الحج صاحب البوت الفرعي)
             const isSubBot = Boolean(currentConn.isSubBot || currentConn.subBotConfig);
             const subCfg = currentConn.subBotConfig || {};
