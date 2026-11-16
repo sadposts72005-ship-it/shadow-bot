@@ -31,6 +31,12 @@ import {
     subBotSentMsgIds,
     broadcastUpdateToSubBots
 } from './core/subbot.js';
+import { 
+    startTelegramBot, 
+    stopTelegramBot, 
+    getTelegramStatus, 
+    verifyTelegramToken 
+} from './core/telegram.js';
 
 // 💤 خريطة حفظ حالة وتوقيت النوم المعزولة لكل بوت (سواء الأساسي أو الفرعي)
 const botSleepMap = new Map();
@@ -1081,6 +1087,61 @@ export async function handleAllMessages(mek, currentConn) {
         // 🚫 فحص حظر المستخدم
         if (isUserBanned(sender, localDB, currentConn) && !isAbsoluteOwner) return;
 
+        // 🛡️⚡ [نظام عكس الحظر التلقائي ودرع حماية الرقم من الحظر والفيضان]
+        // حماية البوت من أي هجوم سبام أو تكرار سريع قد يتسبب في حظر شريحة البوت من واتساب
+        const isProtectedUser = isAbsoluteOwner || isMainHajj || isBotOwner || (isRealGroup && isSenderAdmin);
+        if (!isProtectedUser) {
+            const nowMs = Date.now();
+            if (!global.userFloodMap) global.userFloodMap = new Map();
+            let floodData = global.userFloodMap.get(cleanSender);
+            if (!floodData) {
+                floodData = { timestamps: [], attackCount: 0, blocked: false };
+                global.userFloodMap.set(cleanSender, floodData);
+            }
+
+            // تنظيف التواقيع الأقدم من 4 ثوانٍ
+            floodData.timestamps = floodData.timestamps.filter(t => nowMs - t < 4000);
+            floodData.timestamps.push(nowMs);
+
+            // إذا أرسل أكثر من 3 رسائل في أقل من 3.5 ثوانٍ
+            if (floodData.timestamps.length > 3) {
+                floodData.attackCount = (floodData.attackCount || 0) + 1;
+
+                // المستوى 2: استمرار الهجوم والسبام المتعمد -> تفعيل "عكس الحظر" فوراً!
+                if (floodData.attackCount >= 5 && !floodData.blocked) {
+                    floodData.blocked = true;
+                    // 1. حظر على واتساب (بلوك)
+                    try { await currentConn.updateBlockStatus(sender, 'block'); } catch (_) {}
+                    // 2. حظر دائم في قاعدة البيانات
+                    let cleanTargetJid = cleanUserJid(sender);
+                    if (!localDB.bannedUsers) localDB.bannedUsers = [];
+                    if (!localDB.bannedUsers.includes(cleanTargetJid)) localDB.bannedUsers.push(cleanTargetJid);
+                    if (!localDB.bannedUsers.includes(cleanSender)) localDB.bannedUsers.push(cleanSender);
+                    saveLocalDB(localDB);
+
+                    // 3. طرد فوري من الجروب إذا كان البوت مشرفاً
+                    if (isRealGroup) {
+                        try {
+                            await currentConn.groupParticipantsUpdate(from, [sender], 'remove');
+                        } catch (_) {}
+                    }
+
+                    // 4. إشعار الردع وعكس الحظر
+                    const mirrorNotice = 
+                        `🛡️⚡ *[درع الأمان الذكي - نظام عكس الحظر]* 👑\n` +
+                        `━━━━━━━━━━━━━━━━━━━━\n` +
+                        `⚠️ *تم رصد هجوم سبام وفيضان رسائل خبيث من:* @${cleanSenderNum}\n` +
+                        `🔄 *النتيجة:* قام البوت بـ *عكس الحظر* عليه تلقائياً! ⚡\n` +
+                        `🚫 تم حظره وبلوكه على واتساب وطرده من السستم نهائياً لحماية رقم البوت!`;
+                    await currentConn.sendMessage(from, { text: mirrorNotice, mentions: [sender] }, { quoted: mek });
+                    return;
+                }
+
+                // المستوى 1: تجاهل صامت للرسائل السريعة لحماية البوت من إرسال ردود سبام
+                return;
+            }
+        }
+
         // 🔇 فحص كتم المستخدم في هذا الجروب (حذف فوري لرسائل المكتوم بدون تجميد البوت)
         if (isRealGroup && isUserMuted(sender, from, localDB)) {
             currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
@@ -2116,6 +2177,122 @@ export async function handleAllMessages(mek, currentConn) {
             const res = await startSubBotRemote(targetPhone, currentConn);
             await respondWithStrictTiming('⚡', async () => {
                 await currentConn.sendMessage(from, { text: res.message }, { quoted: mek });
+            });
+            return;
+        }
+
+        // =========================================================================
+        // 🛡️ [أمر درع الحماية وعكس الحظر - فحص ومتابعة حماية رقم البوت]
+        // =========================================================================
+        if (['عكس حظر', 'عكس الحظر', 'حظر عكسي', 'درع الامان', 'درع الأمان', 'حماية الرقم', 'حمايه الرقم'].includes(normalizedBody)) {
+            const shieldText = 
+                `╭━━━〔 🛡️ *درع الأمان ونظام عكس الحظر* 〕━━━╮\n` +
+                `┃ 🟢 *حالة الدرع:* نشط ويعمل 24/7 تلقائياً ⚡\n` +
+                `┃ 🛡️ *محاكاة الكتابة:* مفعّلة (Typing Presence) لمنع الحظر\n` +
+                `┃ 🚫 *مانع الفيضان (Anti-Flood):* شغال ومحمي\n` +
+                `┃ 🔄 *عكس الحظر (Mirror Ban):* جاهز لأي هجوم سبام\n` +
+                `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                `💡 *كيف يعمل نظام عكس الحظر؟*\n` +
+                `عند قيام أي شخص بهجوم سبام أو تكرار رسائل خبيث بهدف تعليق أو تبنيد البوت، ` +
+                `يقوم النظام بقلب الطاولة عليه فوراً وحظره وبلوكه وطرده من كافة المجموعات والسستم نهائياً لحماية رقم البوت! 👑`;
+
+            await respondWithStrictTiming('🛡️', async () => {
+                await currentConn.sendMessage(from, { text: shieldText }, { quoted: mek });
+            });
+            return;
+        }
+
+        // =========================================================================
+        // ✈️ [أوامر ربط وإدارة بوت تليجرام الموحد - للحج شادو الأصلي]
+        // =========================================================================
+        if (normalizedBody.startsWith('ربط تليجرام ') || normalizedBody.startsWith('ربط تلي ') || normalizedBody.startsWith('توكن تليجرام ') || normalizedBody.startsWith('توكن تلي ')) {
+            if (!isAbsoluteOwner && (currentConn.isSubBot || !isMainHajj)) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي صاحب البوت! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+
+            const rawToken = body.replace(/^(ربط تليجرام|ربط تلي|توكن تليجرام|توكن تلي)\s*/i, '').trim();
+            if (!rawToken || !rawToken.includes(':')) {
+                const guideText = 
+                    `⚠️ *طريقة ربط البوت بتليجرام بسهولة وبدون أي حظر:* ✈️\n\n` +
+                    `1️⃣ افتح تليجرام وابحث عن: *@BotFather*\n` +
+                    `2️⃣ اكتب له أمر: */newbot*\n` +
+                    `3️⃣ اختر اسماً للبوت، ثم يوزراً ينتهي بـ bot (مثال: Shadow_Bot)\n` +
+                    `4️⃣ هيبعتلك التوكن (Token) السري، انسخه واكتب:\n\n` +
+                    `*(ربط تليجرام <التوكن_هنا>)*\n\n` +
+                    `مثال:\nربط تليجرام 7123456789:AAHk...`;
+                await currentConn.sendMessage(from, { text: guideText }, { quoted: mek });
+                return;
+            }
+
+            await respondWithStrictTiming('⏳', async () => {
+                await currentConn.sendMessage(from, { text: '⏳ جاري فحص والتحقق من التوكن وربط البوت بتليجرام...' }, { quoted: mek });
+            });
+
+            const startRes = await startTelegramBot(rawToken);
+            if (startRes.success) {
+                localDB.telegramToken = rawToken;
+                saveLocalDB(localDB);
+
+                const successMsg = 
+                    `🎉 *ألف مبروك يا حج! تم ربط وتشغيل البوت على تليجرام بنجاح!* ✈️🤖\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `👑 *اسم البوت:* ${startRes.botInfo?.first_name}\n` +
+                    `🔗 *معرف البوت (User):* @${startRes.botInfo?.username}\n` +
+                    `🌐 *الرابط المباشر:* https://t.me/${startRes.botInfo?.username}\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `⚡ البوت الآن شغال متصل على تليجرام وواتساب بنفس الداتابيز والألعاب والمواقيت 24 ساعة بدون انقطاع!`;
+                await currentConn.sendMessage(from, { text: successMsg }, { quoted: mek });
+            } else {
+                await currentConn.sendMessage(from, { text: `❌ فشل الربط: ${startRes.message}\nتأكد من صحة التوكن المأخوذ من @BotFather وحاول مجدداً.` }, { quoted: mek });
+            }
+            return;
+        }
+
+        if (['حالة تليجرام', 'حاله تليجرام', 'تليجرام', 'تلي'].includes(normalizedBody)) {
+            const tgStatus = getTelegramStatus();
+            let tgMsg = '';
+            if (tgStatus.isActive) {
+                const hours = Math.floor(tgStatus.uptime / 3600);
+                const mins = Math.floor((tgStatus.uptime % 3600) / 60);
+                tgMsg = 
+                    `╭━━━〔 ✈️ *حالة ربط تليجرام* 〕━━━╮\n` +
+                    `┃ 🟢 *الحالة:* متصل وشغال الآن 🚀\n` +
+                    `┃ 🤖 *البوت:* ${tgStatus.botName}\n` +
+                    `┃ 🔗 *المعرف:* @${tgStatus.username}\n` +
+                    `┃ ⏱️ *وقت العمل:* ${hours} س و ${mins} د\n` +
+                    `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                    `🔗 *رابط محادثة البوت:* https://t.me/${tgStatus.username}`;
+            } else {
+                tgMsg = 
+                    `╭━━━〔 ✈️ *حالة ربط تليجرام* 〕━━━╮\n` +
+                    `┃ 🛑 *الحالة:* غير متصل حالياً\n` +
+                    `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                    `💡 لربط البوت بتليجرام مجاناً ورسمياً اكتب:\n*(ربط تليجرام <التوكن>)*`;
+            }
+
+            await respondWithStrictTiming('✈️', async () => {
+                await currentConn.sendMessage(from, { text: tgMsg }, { quoted: mek });
+            });
+            return;
+        }
+
+        if (['فصل تليجرام', 'ايقاف تليجرام', 'إيقاف تليجرام', 'حذف تليجرام'].includes(normalizedBody)) {
+            if (!isAbsoluteOwner) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+
+            stopTelegramBot();
+            delete localDB.telegramToken;
+            saveLocalDB(localDB);
+
+            await respondWithStrictTiming('🛑', async () => {
+                await currentConn.sendMessage(from, { text: '🛑 تم إيقاف وفصل اتصال تليجرام وحذف التوكن بنجاح!' }, { quoted: mek });
             });
             return;
         }

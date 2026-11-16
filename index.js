@@ -8,6 +8,9 @@ import { handleAllMessages } from './handler.js';
 import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
 import { initAllSubBots } from './core/subbot.js';
+// ✈️ استيراد محرك تليجرام الموحد (Telegram Bot Engine)
+import { startTelegramBot, stopTelegramBot, getTelegramStatus } from './core/telegram.js';
+import { loadLocalDB } from './core/database.js';
 
 // 🌐 خادم ويب مصغر (HTTP Server) لإبقاء البوت نشطاً 24/7 على منصات السحاب (Render / Koyeb / UptimeRobot)
 const PORT = process.env.PORT || 3000;
@@ -17,12 +20,38 @@ const server = http.createServer((req, res) => {
         status: 'online',
         bot: 'Shadow Bot',
         uptime: `${Math.floor(process.uptime())}s`,
+        telegram: getTelegramStatus().isActive ? 'connected' : 'disabled',
         message: 'البوت متصل وشغال 24 ساعة بنجاح! 🚀'
     }));
 });
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 [Web Server] خادم فحص الحالة شغال وجاهز لاستقبال Ping على البورت ${PORT}`);
 });
+
+// 🤖 تشغيل واسترجاع جميع البوتات الفرعية (Sub-Bots) بشكل مستقل تماماً عند إقلاع السيرفر
+// لضمان استمرار عمل جميع البوتات الفرعية حتى لو كان البوت الأساسي محظوراً أو مفصولاً!
+setTimeout(() => {
+    try {
+        console.log('⚡ [Sub-Bots Standalone Boot] بدء تشغيل البوتات الفرعية باستقلالية تامة...');
+        initAllSubBots(global.conn || null);
+    } catch (err) {
+        console.error('❌ خطأ في الإقلاع المستقل للبوتات الفرعية:', err);
+    }
+}, 3000);
+
+// ✈️ تشغيل بوت تليجرام تلقائياً إذا كان هناك توكن محفوظ بقاعدة البيانات أو المتغيرات
+setTimeout(async () => {
+    try {
+        const db = loadLocalDB();
+        const tgToken = process.env.TELEGRAM_BOT_TOKEN || db.telegramToken;
+        if (tgToken) {
+            console.log('✈️ [Telegram] جاري تشغيل خادم تليجرام التلقائي...');
+            await startTelegramBot(tgToken);
+        }
+    } catch (e) {
+        console.error('❌ خطأ في تشغيل بوت تليجرام التلقائي:', e);
+    }
+}, 4000);
 
 // 🛡️ حماية العملية من الانهيار عند حدوث أي خطأ بالشبكة أو السوكيت
 process.on('uncaughtException', (err) => {
@@ -97,8 +126,8 @@ async function startShadowBot() {
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent', enabled: false }))
         },
         version,
-        // 🌐 محاكاة متصفح حديث لمنع الفصل التلقائي والتعليق
-        browser: ['Ubuntu', 'Chrome', '122.0.6261.129'],
+        // 🌐 محاكاة متصفح ويندوز كروم حديث معتمد لتفادي كشف السكربتات التلقائية
+        browser: ['Windows', 'Chrome', '131.0.6778.86'],
         // 🔥 قفل كلي وصارم لكل أنواع اللوجات والباينري لمنع التهنيج وسرعة الاستجابة
         logger: pino({ level: 'silent', enabled: false }),
         printQRInTerminal: false,
@@ -145,7 +174,22 @@ async function startShadowBot() {
                     }
                 }
             }
+            // 🛡️ تشديد أمان واتساب: محاكاة الكتابة البشرية (Typing Presence) لمنع الحظر التلقائي من خوارزميات واتساب
+            const targetJid = args[0];
+            if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                try {
+                    await conn.sendPresenceUpdate('composing', targetJid);
+                    await new Promise(r => setTimeout(r, Math.floor(Math.random() * 350) + 250));
+                } catch (_) {}
+            }
+
             const res = await originalSendMessage(...args);
+
+            try {
+                if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                    conn.sendPresenceUpdate('paused', targetJid).catch(() => {});
+                }
+            } catch (_) {}
             if (res?.key?.id) {
                 botSentMsgIds.add(res.key.id);
                 conn.sentMsgIds = conn.sentMsgIds || new Set();
@@ -251,7 +295,8 @@ async function startShadowBot() {
                     }, delayMs);
                 }
             } else {
-                console.log('❌ تم تسجيل الخروج من جلسة البوت الرئيسية من تطبيق واتساب.');
+                console.log('❌ تم تسجيل الخروج من جلسة البوت الرئيسية من تطبيق واتساب (أو تم حظر الرقم).');
+                console.log('🤖 السيرفر والبوتات الفرعية وتليجرام مستمرة في العمل بكامل كفاءتها واستقلاليتها 24/7 دون توقف!');
             }
         }
     });

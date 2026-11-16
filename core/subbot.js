@@ -262,7 +262,7 @@ async function createSubBotSocket(phone, sessionDir) {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent', enabled: false }))
         },
-        browser: ['Ubuntu', 'Chrome', '122.0.6261.129'],
+        browser: ['Windows', 'Chrome', '131.0.6778.86'],
         syncPhonenumber: true,
         markOnlineOnConnect: true,
         generateHighQualityLinkPreview: true,
@@ -312,7 +312,22 @@ async function createSubBotSocket(phone, sessionDir) {
                     }
                 }
             }
+            // 🛡️ تشديد أمان واتساب للبوت الفرعي: محاكاة الكتابة البشرية (Typing Presence) لمنع الحظر التلقائي من خوارزميات واتساب
+            const targetJid = args[0];
+            if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                try {
+                    await sock.sendPresenceUpdate('composing', targetJid);
+                    await new Promise(r => setTimeout(r, Math.floor(Math.random() * 350) + 250));
+                } catch (_) {}
+            }
+
             const res = await originalSendMessage(...args);
+
+            try {
+                if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                    sock.sendPresenceUpdate('paused', targetJid).catch(() => {});
+                }
+            } catch (_) {}
             if (res?.key?.id) {
                 subBotSentMsgIds.add(res.key.id);
                 sock.sentMsgIds = sock.sentMsgIds || new Set();
