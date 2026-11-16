@@ -569,6 +569,7 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         let cleanSender = getCleanNumber(sender);
+        let cleanSenderNum = cleanSender;
         let standardSenderJid = cleanUserJid(sender);
         
         // 🔓 جلب النص بأعلى مرونة لفك تشفير كافة أنواع الرسائل
@@ -844,6 +845,23 @@ export async function handleAllMessages(mek, currentConn) {
         const isBotOwner = currentConn.isSubBot 
             ? (isAbsoluteOwner || isSubBotAdmin)
             : (isAbsoluteOwner || isMainHajj);
+
+        // فحص إشراف المرسل داخل المجموعة
+        let isSenderAdmin = false;
+        if (isRealGroup) {
+            try {
+                const groupMeta = await getCachedGroupMetadata(currentConn, from);
+                if (groupMeta && Array.isArray(groupMeta.participants)) {
+                    const adminUser = groupMeta.participants.find(p => {
+                        const pNum = getCleanNumber(p.id);
+                        const pLid = p.lid ? getCleanNumber(p.lid) : '';
+                        return (p.admin === 'admin' || p.admin === 'superadmin') && 
+                               (pNum === cleanSender || pLid === cleanSender || localDB.lidMap?.[cleanSender] === pNum);
+                    });
+                    if (adminUser) isSenderAdmin = true;
+                }
+            } catch (_) {}
+        }
         
         const botCallName = subBotConfig?.callName || currentConn.callName || '';
         const normalizedCallName = normalizeArabic((botCallName || '').toLowerCase().trim());
