@@ -212,30 +212,13 @@ async function handleTelegramMessage(token, msg) {
         localDB.telegramOwners = ['Shadwwmy', 'shadwwmy', '37122247649', '201129249396', '194961618301016'];
     }
 
-    // 👑 أمر إثبات وتوثيق هوية الحج شادو فورياً
-    if (['انا الحج', 'أنا الحج', 'انا المطور', 'أنا المطور', '/iamowner', 'انا شادو'].includes(normalizedBody)) {
-        if (!localDB.telegramOwners.includes(String(fromId))) {
-            localDB.telegramOwners.push(String(fromId));
-        }
-        if (fromUsername && !localDB.telegramOwners.includes(fromUsername)) {
-            localDB.telegramOwners.push(fromUsername);
-        }
-        saveLocalDB(localDB);
-        await sendTelegramMessage(token, chatId, `👑 *أهلاً وسهلاً بالحج شادو الأصلي صاحب ومطور البوت!* ⚡❤️\nتم توثيق وتثبيت حسابك (${fromUsername ? '@' + fromUsername : fromId}) كمالك ومطور مطلق للبوت على تليجرام.\nلك كافة الصلاحيات والأوامر والتحكم بالسيرفر والبوتات الفرعية!`, { replyTo: msg.message_id });
-        return;
-    }
-
-    // 👑 التحقق الشامل والمطلق من هوية الحج شادو صاحب البوت:
-    // 1. معرف تليجرام: @Shadwwmy أو Shadwwmy
-    // 2. رقم هاتف الحج أو معرفاته المسجلة
-    // 3. المحادثة الخاصة مع البوت (المالك هو المتحكم)
-    // 4. السجل المحفوظ في قاعدة البيانات
+    // 👑 المالك المطلق هو الحج شادو فقط:
+    // رقم: 01129249396 / 201129249396
+    // يوزر تليجرام: @Shadwwmy
     const isHajjShado = (
-        fromUsername.toLowerCase() === 'shadwwmy' ||
+        (fromUsername && fromUsername.toLowerCase() === 'shadwwmy') ||
         String(fromId) === '194961618301016' ||
-        localDB.telegramOwners.includes(String(fromId)) ||
-        localDB.telegramOwners.includes(fromUsername) ||
-        msg.chat?.type === 'private'
+        (Array.isArray(localDB.telegramOwners) && (localDB.telegramOwners.includes(String(fromId)) || (fromUsername && localDB.telegramOwners.includes(fromUsername))))
     );
 
     const isAbsoluteOwner = isHajjShado;
@@ -359,7 +342,7 @@ async function handleTelegramMessage(token, msg) {
             installSession.step = 4;
             const step4Msg = 
                 `✅ تم تسجيل اسم النداء: *${cName}* 🗣️\n\n` +
-                `🎭 *الخطوة 4 من 4:* \n` +
+                `🎭 *الخطوة 4 من 5:* \n` +
                 `اختر شخصية البوت في الردود والتفاعل:\n` +
                 `1️⃣ *محترم ومؤدب* 😇🤍 (شخصية محترمة ولبقة وأخلاقية)\n` +
                 `2️⃣ *قليل الأدب* 😈🔥 (شخصية مشاكسة وجريئة وردود قوية)\n\n` +
@@ -368,7 +351,7 @@ async function handleTelegramMessage(token, msg) {
             return;
         }
 
-        // الخطوة 4: الشخصية وبدء طلب كود الربط
+        // الخطوة 4: اختيار الشخصية والانتقال لتحديد الحج الأساسي
         if (installSession.step === 4) {
             let personality = 'respectful';
             if (['2', 'قليل الادب', 'قليل أدب', 'مشاكس', 'توكسيك'].includes(normalizedBody)) {
@@ -376,18 +359,53 @@ async function handleTelegramMessage(token, msg) {
             }
 
             installSession.personality = personality;
+            installSession.step = 5;
+
+            const step5Msg = 
+                `✅ تم اختيار الشخصية: *${personality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم ومؤدب 😇🤍'}*\n\n` +
+                `👑 *الخطوة 5 من 5: من هو الحج الأساسي (المالك والمتحكم بالبوت الفرعي)؟*\n` +
+                `• اكتب رقم هاتف الحج مع كود الدولة (مثال: \`01129249396\` أو \`201129249396\` أو \`01012345678\`)\n` +
+                `• أو إذا كنت أنت الحج الأساسي اكتب: *(رقمي)* أو *(نفسي)*:`;
+            await sendTelegramMessage(token, chatId, step5Msg, { replyTo: msg.message_id });
+            return;
+        }
+
+        // الخطوة 5: تحديد رقم الحج الأساسي واستخراج كود الربط
+        if (installSession.step === 5) {
+            let adminPhone = '';
+            let adminLid = '';
+
+            const isSelf = ['رقمي', 'نفسي', 'انا', 'أنا', 'نفس الرقم', 'حسابي'].includes(normalizedBody);
+            if (isSelf) {
+                adminPhone = isHajjShado ? '201129249396' : (installSession.targetPhone || '201129249396');
+                if (isHajjShado || adminPhone === '201129249396') adminLid = '194961618301016';
+            } else {
+                const cleanInput = cleanPhoneNumber(text.replace(/[^0-9]/g, ''));
+                if (cleanInput && cleanInput.length >= 10 && cleanInput.length <= 13) {
+                    adminPhone = cleanInput;
+                }
+            }
+
+            if (!adminPhone || adminPhone.length < 10) {
+                await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم هاتف الحج بالأرقام بشكل صحيح (مثال: \`01129249396\` أو \`201012345678\`) أو اكتب *(رقمي)*:`, { replyTo: msg.message_id });
+                return;
+            }
+
+            if (adminPhone === '201129249396' || adminPhone === '01129249396') {
+                adminLid = '194961618301016';
+            }
+
+            installSession.adminPhone = adminPhone;
+            installSession.adminLid = adminLid;
             if (installSession.timer) clearTimeout(installSession.timer);
             telegramInstallState.delete(chatId);
 
-            const { targetPhone, botName, callName } = installSession;
+            const { targetPhone, botName, callName, personality } = installSession;
 
-            await sendTelegramMessage(token, chatId, `⏳ *جاري الاتصال بخوادم واتساب وتوليد كود الاقتران لبوتك (${botName})... برجاء الانتظار ثوانٍ معدودة!* 🚀`);
+            await sendTelegramMessage(token, chatId, `⏳ *جاري الاتصال بخوادم واتساب وتوليد كود الاقتران لبوتك (${botName})...*\n👑 *الحج الأساسي:* +${adminPhone}\nبرجاء الانتظار ثوانٍ معدودة! 🚀`);
 
             // استدعاء محرك الاقتران مع موجه الرسائل لتليجرام
             try {
-                const adminPhone = isHajjShado ? '201129249396' : targetPhone;
-                const adminLid = isHajjShado ? '194961618301016' : '';
-
                 await requestSubBotPairing(
                     targetPhone,
                     botName,
@@ -675,25 +693,77 @@ async function handleTelegramMessage(token, msg) {
         return;
     }
 
+    // 👑 أوامر رفع وتنزيل المشرفين والمطورين - للحج شادو الأصلي فقط
+    if (normalizedBody.startsWith('رفع ادمن ') || normalizedBody.startsWith('رفع مطور ')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const target = text.replace(/^(رفع ادمن|رفع مطور)\s+/i, '').trim().replace(/^@/, '');
+        if (!target) {
+            await sendTelegramMessage(token, chatId, `⚠️ اكتب يوزر أو آيدي الشخص بعد الأمر، مثال:\n\`رفع ادمن @username\``, { replyTo: msg.message_id });
+            return;
+        }
+        if (!localDB.telegramOwners) localDB.telegramOwners = [];
+        if (!localDB.telegramOwners.includes(target)) {
+            localDB.telegramOwners.push(target);
+            saveLocalDB(localDB);
+        }
+        await sendTelegramMessage(token, chatId, `👑 *أمر ملكي من الحج شادو:*\n✅ تم ترقية ورفع [ @${target} ] كمشرف/مطور في شادو بوت بنجاح! 🎉`, { replyTo: msg.message_id });
+        return;
+    }
+
+    if (normalizedBody.startsWith('تنزيل ادمن ') || normalizedBody.startsWith('تنزيل مطور ')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const target = text.replace(/^(تنزيل ادمن|تنزيل مطور)\s+/i, '').trim().replace(/^@/, '');
+        if (!target) {
+            await sendTelegramMessage(token, chatId, `⚠️ اكتب يوزر أو آيدي الشخص بعد الأمر، مثال:\n\`تنزيل ادمن @username\``, { replyTo: msg.message_id });
+            return;
+        }
+        if (target.toLowerCase() === 'shadwwmy' || target === '194961618301016' || target === '201129249396' || target === '01129249396') {
+            await sendTelegramMessage(token, chatId, `❌ هوب هوب يا فنان! دا بابا المجال الحج شادو الأصلي.. محدش يقدر ينزله نهائياً! 👑🛡️`, { replyTo: msg.message_id });
+            return;
+        }
+        if (localDB.telegramOwners) {
+            localDB.telegramOwners = localDB.telegramOwners.filter(u => u !== target && u !== `@${target}`);
+            saveLocalDB(localDB);
+        }
+        await sendTelegramMessage(token, chatId, `👑 *أمر ملكي من الحج شادو:*\n📉 تم تنزيل وسحب صلاحيات [ @${target} ] بنجاح!`, { replyTo: msg.message_id });
+        return;
+    }
+
     // أمر تنصيب فوري سطر واحد: تنصيب <رقم_البوت> <اسم_البوت>
     if (normalizedBody.startsWith('تنصيب ') || normalizedBody.startsWith('/install ')) {
         const parts = text.replace(/^(تنصيب|\/install)\s+/i, '').trim().split(/\s+/);
         const rawPhone = parts[0]?.replace(/[^0-9]/g, '');
         const cleanPhone = cleanPhoneNumber(rawPhone);
-        const botName = parts.slice(1).join(' ') || 'بوت فرعي';
+        let adminPhone = '201129249396';
+        let adminLid = '194961618301016';
+
+        let nameTokens = parts.slice(1);
+        if (nameTokens.length >= 2) {
+            const lastTok = nameTokens[nameTokens.length - 1].replace(/[^0-9]/g, '');
+            if (lastTok && (lastTok.length === 11 || lastTok.length === 12 || lastTok.length === 13)) {
+                adminPhone = cleanPhoneNumber(lastTok);
+                adminLid = (adminPhone === '201129249396') ? '194961618301016' : '';
+                nameTokens.pop();
+            }
+        }
+
+        const botName = nameTokens.join(' ') || 'بوت فرعي';
         const callName = botName.split(' ')[0] || 'فرعي';
 
         if (!cleanPhone || cleanPhone.length < 10) {
-            await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم الهاتف بشكل صحيح، مثال:\n\`تنصيب 201012345678 بوت الزعيم\``, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم الهاتف بشكل صحيح، مثال:\n\`تنصيب 201012345678 بوت الزعيم\`\nأو مع تحديد رقم الحج:\n\`تنصيب 201012345678 بوت الزعيم 201129249396\``, { replyTo: msg.message_id });
             return;
         }
 
-        await sendTelegramMessage(token, chatId, `⏳ *جاري الاتصال وتوليد كود الاقتران للرقم (+${cleanPhone}) باسم [${botName}]...* 🚀`, { replyTo: msg.message_id });
+        await sendTelegramMessage(token, chatId, `⏳ *جاري الاتصال وتوليد كود الاقتران للرقم (+${cleanPhone}) باسم [${botName}]...*\n👑 *الحج الأساسي:* +${adminPhone} 🚀`, { replyTo: msg.message_id });
 
         try {
-            const adminPhone = isHajjShado ? '201129249396' : cleanPhone;
-            const adminLid = isHajjShado ? '194961618301016' : '';
-
             await requestSubBotPairing(
                 cleanPhone,
                 botName,
@@ -734,7 +804,7 @@ async function handleTelegramMessage(token, msg) {
             `┃ 👑 مرحباً بك في خدمة تنصيب شادو بوت المجانية!\n` +
             `┃ 💡 يمكنك تشغيل نسختك الخاصة من البوت برقم واتسابك.\n` +
             `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
-            `📱 *الخطوة 1 من 4:* \n` +
+            `📱 *الخطوة 1 من 5:* \n` +
             `أرسل الآن *رقم هاتف واتساب* الذي تريد تشغيل البوت عليه مع كود الدولة:\n` +
             `مثال: \`201012345678\` أو \`9647901234567\`\n\n` +
             `💡 _اكتب *(الغاء)* في أي وقت للتراجع._`;

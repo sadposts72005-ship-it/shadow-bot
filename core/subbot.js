@@ -50,15 +50,34 @@ export function loadSubBotsRegistry() {
                 for (const d of dirs) {
                     const cfgFile = path.join(SUB_BOTS_DIR, d, 'config.json');
                     const credsFile = path.join(SUB_BOTS_DIR, d, 'creds.json');
-                    if (fs.existsSync(cfgFile) && fs.existsSync(credsFile)) {
-                        try {
-                            const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
-                            const cleanD = cleanPhoneNumber(d) || d;
-                            if (!registry[cleanD] || !registry[cleanD].phone) {
-                                registry[cleanD] = cfg;
-                                foundAny = true;
-                            }
-                        } catch (_) {}
+                    const cleanD = cleanPhoneNumber(d) || d;
+                    if (fs.existsSync(credsFile)) {
+                        let cfg = null;
+                        if (fs.existsSync(cfgFile)) {
+                            try { cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8')); } catch (_) {}
+                        }
+                        if (!cfg || !cfg.phone) {
+                            cfg = {
+                                phone: cleanD,
+                                botName: 'بوت فرعي',
+                                callName: 'فرعي',
+                                gender: 'male',
+                                personality: 'respectful',
+                                adminPhone: '201129249396',
+                                adminLid: '194961618301016',
+                                adminJid: '201129249396@s.whatsapp.net',
+                                adminNumbers: ['201129249396', '01129249396', '194961618301016'],
+                                subHajjUsers: ['201129249396', '01129249396', '194961618301016'],
+                                bannedUsers: [],
+                                status: 'active',
+                                installedAt: new Date().toISOString()
+                            };
+                            try { fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2), 'utf8'); } catch (_) {}
+                        }
+                        if (!registry[cleanD] || !registry[cleanD].phone) {
+                            registry[cleanD] = cfg;
+                            foundAny = true;
+                        }
                     }
                 }
             } catch (_) {}
@@ -425,14 +444,10 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 try {
                     if (!m.message) continue;
 
-                    // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة وصلت أثناء انقطاع أو إغلاق البوت
+                    // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 3 دقائق) لمنع مشاكل فرق توقيت السيرفر
                     const msgTime = getMsgTimestamp(m);
                     if (msgTime > 0) {
-                        if (msgTime < (activeStart - 2) || msgTime < (nowSec - 30)) {
-                            continue;
-                        }
-                    } else {
-                        if ((nowSec - activeStart) < 45) {
+                        if (msgTime < (activeStart - 10) || (nowSec - msgTime) > 180) {
                             continue;
                         }
                     }
@@ -642,6 +657,36 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
     const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
     const credsPath = path.join(sessionDir, 'creds.json');
+
+    // تجهيز وتوثيق إعدادات البوت مبكراً لضمان توفرها في أي مرحلة
+    const adminLocalEarly = (cleanAdmin.startsWith('201') && cleanAdmin.length === 12) ? ('01' + cleanAdmin.slice(2)) : '';
+    const adminNumbersListEarly = [
+        cleanAdmin, 
+        adminLocalEarly, 
+        `+${cleanAdmin}`, 
+        cleanLid, 
+        cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '', 
+        cleanLid ? `${cleanLid}@lid` : '',
+        adminLocalEarly ? `${adminLocalEarly}@s.whatsapp.net` : ''
+    ].filter(Boolean);
+
+    let cfgData = {
+        phone: cleanPhone,
+        botName: botName,
+        callName: finalCallName,
+        gender: finalGender,
+        personality: finalPersonality,
+        adminPhone: cleanAdmin,
+        adminLid: cleanLid || '',
+        adminJid: cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : '',
+        adminNumbers: adminNumbersListEarly,
+        subHajjUsers: [cleanAdmin, adminLocalEarly, cleanLid].filter(Boolean),
+        bannedUsers: [],
+        installedAt: new Date().toISOString(),
+        status: 'active',
+        sleep: false,
+        muted: false
+    };
 
     // تنظيف أي جلسة غير مكتملة أو معلقة سابقة لضمان توليد مفاتيح ربط جديدة نقية
     if (fs.existsSync(sessionDir) && !activeSubBots.has(cleanPhone)) {
@@ -878,7 +923,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                         const initialSubHajjs = [cleanAdmin, adminLocal, cleanLid].filter(Boolean);
 
-                        const cfgData = {
+                        cfgData = {
                             phone: cleanPhone,
                             botName: botName,
                             callName: finalCallName,
@@ -987,25 +1032,33 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         return;
                     }
 
-                    if (!isConnected) {
-                        // ⚡ الأهم: إعادة الاتصال فوراً لاستكمال المصافحة (Handshake) بعد إدخال الكود (خصوصاً خطأ 515 و 428)
-                        console.log(`🔄 [Sub-Bot Pairing] إعادة الاتصال التلقائي لاستكمال الاقتران (+${cleanPhone})...`);
+                    const isRegistered = Boolean(sock.authState?.creds?.registered);
+
+                    // ⚡ إذا كان البوت مسجلاً ومقترناً بالهاتف (حتى لو انقطع مع كود 515 restart required): يتم تشغيله فوراً
+                    if (isRegistered || isConnected) {
+                        console.log(`🎉 [Sub-Bot Pairing] تم تأكيد اقتران وتسجيل البوت الفرعي (+${cleanPhone})! جاري تشغيله بالنظام الكامل...`);
+                        const reg = loadSubBotsRegistry();
+                        const currentCfg = reg[cleanPhone] || cfgData;
+                        currentCfg.status = 'active';
+                        reg[cleanPhone] = currentCfg;
+                        saveSubBotsRegistry(reg);
+                        try {
+                            fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(currentCfg, null, 2), 'utf8');
+                        } catch (_) {}
+
                         setTimeout(() => {
-                            if (!isExpired) {
-                                startPairingEngine().catch(e => console.error('Retry pairing error:', e));
-                            }
-                        }, 2500);
-                    } else {
-                        // إذا كان متصلاً وانقطع لاحقاً (إعادة تشغيله تلقائياً طالما لم يتم إيقافه يدوياً أو حظره)
-                        const registry = loadSubBotsRegistry();
-                        const currentCfg = registry[cleanPhone] || cfgData;
-                        if (currentCfg?.status !== 'stopped' && currentCfg?.status !== 'banned' && currentCfg?.status !== 'loggedOut') {
-                            console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي المتصل (+${cleanPhone}) تلقائياً بعد 4 ثوانٍ...`);
-                            setTimeout(() => {
-                                bootSubBot(cleanPhone, currentCfg, mainConn || global.conn).catch(e => console.error(e));
-                            }, 4000);
-                        }
+                            bootSubBot(cleanPhone, currentCfg, mainConn || global.conn).catch(e => console.error(e));
+                        }, 2000);
+                        return;
                     }
+
+                    // لم يتم إدخال كود الاقتران بعد: استكمال المحاولة
+                    console.log(`🔄 [Sub-Bot Pairing] إعادة الاتصال التلقائي لاستكمال الاقتران (+${cleanPhone})...`);
+                    setTimeout(() => {
+                        if (!isExpired) {
+                            startPairingEngine().catch(e => console.error('Retry pairing error:', e));
+                        }
+                    }, 2500);
                 }
             });
 
@@ -1019,14 +1072,10 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     try {
                         if (!m.message) continue;
 
-                        // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة
+                        // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة جداً فقط (أكثر من 3 دقائق)
                         const msgTime = getMsgTimestamp(m);
                         if (msgTime > 0) {
-                            if (msgTime < (activeStart - 2) || msgTime < (nowSec - 30)) {
-                                continue;
-                            }
-                        } else {
-                            if ((nowSec - activeStart) < 45) {
+                            if (msgTime < (activeStart - 10) || (nowSec - msgTime) > 180) {
                                 continue;
                             }
                         }
