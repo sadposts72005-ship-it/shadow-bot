@@ -47,20 +47,20 @@ function convertArabicNumbers(text) {
 
 // 🗄️ ذاكرة التخزين المؤقت لبيانات الجروبات لسرعة الاستجابة ومنع الـ Rate-limit
 const groupMetaCache = new Map();
-const GROUP_META_CACHE_TTL = 30000;
+const GROUP_META_CACHE_TTL = 300000; // 5 دقائق
 
 async function getCachedGroupMetadata(conn, gid) {
     if (!conn || !gid || !gid.endsWith('@g.us')) return null;
     const now = Date.now();
     const cached = groupMetaCache.get(gid);
-    if (cached && (now - cached.timestamp < GROUP_META_CACHE_TTL) && cached.data) {
+    if (cached && (now - cached.timestamp < GROUP_META_CACHE_TTL) && cached.data?.participants?.length > 0) {
         return cached.data;
     }
     try {
         const metaPromise = conn.groupMetadata(gid);
-        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 4000));
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 6000));
         const data = await Promise.race([metaPromise, timeoutPromise]);
-        if (data && data.participants) {
+        if (data && Array.isArray(data.participants) && data.participants.length > 0) {
             groupMetaCache.set(gid, { data, timestamp: now });
             return data;
         }
@@ -271,7 +271,7 @@ function isUserMuted(senderJid, fromGid, localDB) {
     return false;
 }
 
-function extractTarget(mek, bodyText = '') {
+export function extractTarget(mek, bodyText = '') {
     let msg = mek?.message;
     if (msg?.ephemeralMessage) msg = msg.ephemeralMessage.message;
     if (msg?.viewOnceMessageV2) msg = msg.viewOnceMessageV2.message;
@@ -666,14 +666,16 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
 
 async function broadcastReminders(messageGeneratorOrText, localDB) {
     const sentGids = new Set();
-    const mainConn = activeRemindersConn;
+    const mainConn = (activeRemindersConn && activeRemindersConn.user?.id) ? activeRemindersConn : global.conn;
 
     if (mainConn && mainConn.user?.id) {
-        const mainGroups = await getParticipatingGroupIds(mainConn, localDB);
-        const mainMsg = typeof messageGeneratorOrText === 'function' ? messageGeneratorOrText(mainConn) : messageGeneratorOrText;
-        if (mainGroups.length > 0) {
-            await sendRemindersWithDelay(mainConn, mainGroups, mainMsg, localDB, sentGids);
-        }
+        try {
+            const mainGroups = await getParticipatingGroupIds(mainConn, localDB);
+            const mainMsg = typeof messageGeneratorOrText === 'function' ? messageGeneratorOrText(mainConn) : messageGeneratorOrText;
+            if (mainGroups.length > 0) {
+                await sendRemindersWithDelay(mainConn, mainGroups, mainMsg, localDB, sentGids);
+            }
+        } catch (_) {}
     }
 
     // دعم بث الأذكار في جروبات البوتات الفرعية النشطة أيضاً بدون تكرار في نفس الروم
@@ -682,6 +684,8 @@ async function broadcastReminders(messageGeneratorOrText, localDB) {
             for (const [subPhone, subData] of activeSubBots.entries()) {
                 const subSock = subData?.sock;
                 if (!subSock || !subSock.user?.id) continue;
+                subSock.isSubBot = true;
+                if (!subSock.subBotConfig && subData.cfg) subSock.subBotConfig = subData.cfg;
                 const subGroups = await getParticipatingGroupIds(subSock, localDB);
                 const uniqueSubGroups = subGroups.filter(g => !sentGids.has(g));
                 const subMsg = typeof messageGeneratorOrText === 'function' ? messageGeneratorOrText(subSock) : messageGeneratorOrText;
@@ -710,8 +714,10 @@ export async function startAutoReminders(currentConn) {
 
     setInterval(async () => {
         try {
-            const conn = activeRemindersConn;
-            if (!conn || !conn.user?.id) return;
+            const mainConn = (activeRemindersConn && activeRemindersConn.user?.id) ? activeRemindersConn : global.conn;
+            const hasMain = Boolean(mainConn && mainConn.user?.id);
+            const hasSubs = Boolean(activeSubBots && activeSubBots.size > 0);
+            if (!hasMain && !hasSubs) return;
 
             if (isRemindingInProgress) return;
 
@@ -793,11 +799,27 @@ export async function startAutoReminders(currentConn) {
                     for (const [gid, sched] of Object.entries(localDB.timedGroupControls)) {
                         if (!gid || !sched || localDB.bannedGroups?.includes(gid)) continue;
 
+                        // تحديد السوكيت المتواجد بهذا الجروب
+                        let targetSock = (mainConn && mainConn.user?.id) ? mainConn : null;
+                        if (activeSubBots && activeSubBots.size > 0) {
+                            for (const subData of activeSubBots.values()) {
+                                const s = subData?.sock;
+                                if (s?.user?.id && s.subBotConfig?.knownGroups?.includes(gid)) {
+                                    targetSock = s;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!targetSock && activeSubBots && activeSubBots.size > 0) {
+                            targetSock = activeSubBots.values().next().value?.sock || null;
+                        }
+                        if (!targetSock) continue;
+
                         // وقت القفل
                         if (sched.closeTime && sched.closeTime === currentTimeStr) {
                             try {
-                                await conn.groupSettingUpdate(gid, 'announcement');
-                                await conn.sendMessage(gid, {
+                                await targetSock.groupSettingUpdate(gid, 'announcement');
+                                await targetSock.sendMessage(gid, {
                                     text: `🔒 *حان موعد قفل المجموعة التلقائي المجدول (${currentTimeStr})!* ⏱️\nتم قفل الشات الآن بواسطة شادو بوت للمشرفين فقط. تصبحون على خير 🌙✨`
                                 }).catch(() => {});
                                 console.log(`🔒 [Scheduled Lock] Closed group: ${gid} at ${currentTimeStr}`);
@@ -809,8 +831,8 @@ export async function startAutoReminders(currentConn) {
                         // وقت الفتح
                         if (sched.openTime && sched.openTime === currentTimeStr) {
                             try {
-                                await conn.groupSettingUpdate(gid, 'not_announcement');
-                                await conn.sendMessage(gid, {
+                                await targetSock.groupSettingUpdate(gid, 'not_announcement');
+                                await targetSock.sendMessage(gid, {
                                     text: `🔓 *حان موعد فتح المجموعة التلقائي المجدول (${currentTimeStr})!* ⏱️\nتم فتح الشات الآن لجميع الأعضاء بواسطة شادو بوت. صباح الخير ويوم سعيد لكم جميعاً ☀️🎉`
                                 }).catch(() => {});
                                 console.log(`🔓 [Scheduled Open] Opened group: ${gid} at ${currentTimeStr}`);
@@ -995,8 +1017,32 @@ const datelsHandler = {
             const subAdminPhone = cleanPhoneNumber(subCfg.adminPhone) || subCfg.adminPhone || '';
             const subAdminLid = subCfg.adminLid ? String(subCfg.adminLid).replace(/[^0-9]/g, '') : '';
             const subAdminNumbers = Array.isArray(subCfg.adminNumbers) ? subCfg.adminNumbers : [];
-            const mappedSender = localDB.lidMap?.[cleanSenderNum] || '';
-            const senderCleanPhone = cleanPhoneNumber(cleanSenderNum);
+            let mappedSender = localDB.lidMap?.[cleanSenderNum] || '';
+            let senderCleanPhone = cleanPhoneNumber(cleanSenderNum);
+
+            // استخراج وتوثيق معرفات بديلة من رسالة بايلز مباشرة
+            if (!mappedSender && (sender.endsWith('@lid') || cleanSenderNum.length > 13)) {
+                const altJids = [
+                    mek.key?.participantAlt,
+                    mek.key?.remoteJidAlt,
+                    mek.message?.extendedTextMessage?.contextInfo?.participantAlt,
+                    mek.message?.extendedTextMessage?.contextInfo?.remoteJidAlt
+                ];
+                for (const alt of altJids) {
+                    if (alt && typeof alt === 'string' && alt.endsWith('@s.whatsapp.net')) {
+                        const p = cleanPhoneNumber(getCleanNumber(alt));
+                        if (p && p.length >= 10 && p.length <= 13) {
+                            mappedSender = p;
+                            senderCleanPhone = p;
+                            if (!localDB.lidMap) localDB.lidMap = {};
+                            localDB.lidMap[cleanSenderNum] = p;
+                            localDB.lidMap[p] = cleanSenderNum;
+                            saveLocalDB(localDB);
+                            break;
+                        }
+                    }
+                }
+            }
 
             const isSubBotOwner = isSubBot && (
                 (subAdminPhone && (cleanSenderNum === subAdminPhone || senderCleanPhone === subAdminPhone)) ||

@@ -8,7 +8,7 @@ import gameBakasa from './plugins/game-bakasa.js';
 import gamePuzzle from './plugins/puzzle.js';
 import gameMovies from './plugins/game-movies.js';
 import menuHandler from './plugins/menu.js';
-import datelsHandler, { extractMessageBody } from './plugins/datels.js';
+import datelsHandler, { extractMessageBody, extractTarget } from './plugins/datels.js';
 import { 
     requestSubBotPairing, 
     stopSubBot, 
@@ -43,19 +43,19 @@ const botSleepMap = new Map();
 
 // 👥 كاش بيانات ومشاركي المجموعات لتسريع الفحص ومنع تكرار الاستعلامات
 const groupMetaCache = new Map();
-const GROUP_META_CACHE_TTL = 30000;
+const GROUP_META_CACHE_TTL = 300000; // 5 دقائق
 async function getCachedGroupMetadata(conn, gid) {
     if (!conn || !gid || !gid.endsWith('@g.us')) return null;
     const now = Date.now();
     const cached = groupMetaCache.get(gid);
-    if (cached && (now - cached.timestamp < GROUP_META_CACHE_TTL) && cached.data) {
+    if (cached && (now - cached.timestamp < GROUP_META_CACHE_TTL) && cached.data?.participants?.length > 0) {
         return cached.data;
     }
     try {
         const metaPromise = conn.groupMetadata(gid);
-        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 3000));
+        const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 6000));
         const data = await Promise.race([metaPromise, timeoutPromise]);
-        if (data) {
+        if (data && Array.isArray(data.participants) && data.participants.length > 0) {
             groupMetaCache.set(gid, { data, timestamp: now });
             return data;
         }
@@ -2739,55 +2739,77 @@ export async function handleAllMessages(mek, currentConn) {
         // 👑 [الأوامر الملكية للحج والمساعدين - الإضافة والسحب والتحصين]
         // =========================================================================
         
-        // 🪙 [أمر إعطاء النقاط الملكي - للحج الأصلي فقط]
-        if (normalizedBody.startsWith('اعطي ') || normalizedBody.startsWith('اعطي')) {
-            if (!isAbsoluteOwner) {
+        // 🪙 [أمر إعطاء النقاط الملكي - للحج الأصلي والحجاج المرفوعين وملاك البوتات]
+        if (
+            normalizedBody.startsWith('اعطي ') || normalizedBody.startsWith('اعطي') ||
+            normalizedBody.startsWith('اعطاء ') || normalizedBody.startsWith('اعطاء') ||
+            normalizedBody.startsWith('زيد ') || normalizedBody.startsWith('زيد')
+        ) {
+            const canGivePoints = isAbsoluteOwner || isMainHajj || (currentConn.isSubBot && (isSubBotAdmin || isSubBotMainOwner));
+            if (!canGivePoints) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ عفوًا! أمر إعطاء النقاط مخصص حصرياً للحج شادو الأصلي (صاحب البوت)! 👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ عفوًا! أمر إعطاء النقاط مخصص حصرياً للحج الأصلي ومساعديه المعتمدين! 👑' }, { quoted: mek });
                 });
                 return;
             }
-            let rawTarget = mek.message?.extendedTextMessage?.contextInfo?.participant || mek.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-            if (rawTarget) {
-                let targetUser = rawTarget;
-                let targetNumberOnly = getCleanNumber(targetUser);
-                let cleanDBUser = cleanUserJid(targetUser);
 
-                let amountText = normalizedBody.replace('اعطي', '').trim();
-                let pointsToGive = 0;
-                let isInfiniteCommand = amountText.includes('لا نهائي') || amountText.includes('لانهايي') || amountText.includes('لا نهايه') || amountText.includes('لانهايه');
+            let targetUser = extractTarget(mek, body);
+            if (!targetUser) {
+                await respondWithStrictTiming('⚠️', async () => {
+                    await currentConn.sendMessage(from, { 
+                        text: `⚠️ *يرجى تحديد العضو المراد إعطاؤه النقاط!*\n\n• بالرد على رسالة الشخص: *اعطي 5000* أو *اعطي فلوس 5000*\n• بالمنشن: *اعطي 5000 @منشن*\n• برقم الهاتف: *اعطي 201129249396 5000*\n• رصيد غير محدود: *اعطي فلوس لا نهائي* (بالرد أو المنشن)` 
+                    }, { quoted: mek });
+                });
+                return;
+            }
 
-                let targetData = findUserData(targetUser, localDB);
-                if (!targetData) {
-                    targetData = { name: mek.message?.extendedTextMessage?.contextInfo?.pushName || 'عضو جديد', age: 'غير مسجل', status: 'غير مسجل', bio: 'لا يوجد بايو حالياً', points: 1000, level: 1, joinedAt: getArabicDateTime(), hasRegistered: false, isInfinite: false };
-                    localDB.users[cleanDBUser] = targetData;
-                }
+            let targetNumberOnly = getCleanNumber(targetUser);
+            let cleanDBUser = cleanUserJid(targetUser);
 
-                if (isInfiniteCommand) {
-                    targetData.isInfinite = true;
-                    targetData.points = 999999999999;
+            let amountText = normalizedBody.replace(/^(اعطي|اعطاء|زيد|منح)\s*(فلوس|نقاط)?/i, '').trim();
+            // إزالة رقم الهاتف من النص إذا وُجد لكي لا يختلط بالمبلغ
+            if (targetNumberOnly && amountText.includes(targetNumberOnly)) {
+                amountText = amountText.replace(targetNumberOnly, '').trim();
+            }
+
+            let pointsToGive = 0;
+            let isInfiniteCommand = amountText.includes('لا نهائي') || amountText.includes('لانهايي') || amountText.includes('لا نهايه') || amountText.includes('لانهايه');
+
+            let targetData = findUserData(targetUser, localDB);
+            if (!targetData) {
+                targetData = { name: mek.message?.extendedTextMessage?.contextInfo?.pushName || 'عضو جديد', age: 'غير مسجل', status: 'غير مسجل', bio: 'لا يوجد بايو حالياً', points: 1000, level: 1, joinedAt: getArabicDateTime(), hasRegistered: false, isInfinite: false };
+                localDB.users[cleanDBUser] = targetData;
+            }
+
+            if (isInfiniteCommand) {
+                targetData.isInfinite = true;
+                targetData.points = 999999999999;
+                targetData.level = 999;
+                saveLocalDB(localDB);
+                await respondWithStrictTiming('👑', async () => {
+                    await currentConn.sendMessage(from, { text: `👑 *أمر ملكي معتمد:*\n✅ تم منح رصيد نقاط [ ♾️ لا نهائي ] إلى بروفايل @${targetNumberOnly} بنجاح! 👑🎉`, mentions: [targetUser] }, { quoted: mek });
+                });
+                return;
+            } else {
+                if (amountText.includes('مليون')) pointsToGive = 1000000;
+                else if (amountText.includes('مليار')) pointsToGive = 1000000000;
+                else pointsToGive = parseInt(amountText.replace(/[^0-9]/g, '')) || 0;
+
+                if (pointsToGive > 0) {
+                    targetData.isInfinite = false;
+                    targetData.points = (targetData.points || 0) + pointsToGive;
                     saveLocalDB(localDB);
-                    await respondWithStrictTiming('👑', async () => {
-                        await currentConn.sendMessage(from, { text: `👑 *أمر ملكي من الحج الأصلي:*\n✅ تم منح رصيد نقاط [ ♾️ لا نهائي ] إلى بروفايل @${targetNumberOnly} بنجاح! 👑🎉`, mentions: [targetUser] }, { quoted: mek });
+                    await respondWithStrictTiming('🪙', async () => {
+                        await currentConn.sendMessage(from, { text: `👑 *أمر ملكي معتمد:*\n✅ تم إضافة [ ${pointsToGive.toLocaleString('ar-EG')} ] نقطة إلى بروفايل @${targetNumberOnly} بنجاح! 🎉\nرصيده الحالي: [ ${targetData.points.toLocaleString('ar-EG')} ]`, mentions: [targetUser] }, { quoted: mek });
                     });
                     return;
                 } else {
-                    if (amountText.includes('مليون')) pointsToGive = 1000000;
-                    else if (amountText.includes('مليار')) pointsToGive = 1000000000;
-                    else pointsToGive = parseInt(amountText.replace(/[^0-9]/g, '')) || 0;
-
-                    if (pointsToGive > 0) {
-                        targetData.isInfinite = false;
-                        targetData.points = (targetData.points || 0) + pointsToGive;
-                        saveLocalDB(localDB);
-                        await respondWithStrictTiming('🪙', async () => {
-                            await currentConn.sendMessage(from, { text: `👑 *أمر ملكي من الحج الأصلي:*\n✅ تم إضافة [ ${pointsToGive.toLocaleString('ar-EG')} ] نقطة إلى بروفايل @${targetNumberOnly} بنجاح! 🎉`, mentions: [targetUser] }, { quoted: mek });
-                        });
-                        return;
-                    }
+                    await respondWithStrictTiming('⚠️', async () => {
+                        await currentConn.sendMessage(from, { text: `⚠️ برجاء كتابة عدد النقاط بشكل صحيح، مثال:\n• اعطي 5000 (بالرد على الشخص)\n• اعطي 1000000 @منشن` }, { quoted: mek });
+                    });
+                    return;
                 }
             }
-            return;
         }
 
         // 🔄 [أمر التحديث السحابي التلقائي - للحج شادو الأصلي فقط]
@@ -2819,62 +2841,81 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // 💸 [أمر سحب النقاط الملكي المطوّر - للحج الأصلي فقط]
-        if (normalizedBody.startsWith('سحب ') || normalizedBody.startsWith('سحب')) {
-            if (!isAbsoluteOwner) {
+        // 💸 [أمر سحب النقاط الملكي المطوّر - للحج الأصلي والمساعدين]
+        if (
+            normalizedBody.startsWith('سحب ') || normalizedBody.startsWith('سحب') ||
+            normalizedBody.startsWith('اخصم ') || normalizedBody.startsWith('اخصم')
+        ) {
+            const canWithdrawPoints = isAbsoluteOwner || isMainHajj || (currentConn.isSubBot && (isSubBotAdmin || isSubBotMainOwner));
+            if (!canWithdrawPoints) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: `❌ عفوًا! أمر السحب مخصص حصرياً للحج شادو الأصلي (صاحب البوت)! 👑` }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `❌ عفوًا! أمر السحب مخصص حصرياً للحج الأصلي ومساعديه المعتمدين! 👑` }, { quoted: mek });
                 });
                 return;
             }
-            let rawTarget = mek.message?.extendedTextMessage?.contextInfo?.participant || mek.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-            if (rawTarget) {
-                let targetUser = rawTarget;
-                let targetNumberOnly = getCleanNumber(targetUser);
-                let cleanDBUser = cleanUserJid(targetUser);
 
-                const isTargetOriginalHajj = (targetNumberOnly === ownerPhone || targetNumberOnly === ownerLid || targetNumberOnly === ownerAltPhone);
-                if (isTargetOriginalHajj) {
-                    await respondWithStrictTiming('❌', async () => {
-                        await currentConn.sendMessage(from, { text: `❌ هوب هوب يا فنان! دا بابا المجال الحج شادو الأصلي.. محدش يقدر يقرب لنقاطه أو يسحب منه نهائيًا! 👑🛡️` }, { quoted: mek });
-                    });
-                    return;
-                }
+            let targetUser = extractTarget(mek, body);
+            if (!targetUser) {
+                await respondWithStrictTiming('⚠️', async () => {
+                    await currentConn.sendMessage(from, { 
+                        text: `⚠️ *يرجى تحديد العضو المراد سحب النقاط منه!*\n\n• بالرد على رسالة الشخص: *سحب 5000* أو *سحب فلوس 5000*\n• بالمنشن: *سحب 5000 @منشن*\n• تصفير كل النقاط: *سحب كل النقاط* (بالرد أو المنشن)` 
+                    }, { quoted: mek });
+                });
+                return;
+            }
 
-                let targetData = findUserData(targetUser, localDB);
-                if (!targetData) {
-                    targetData = { name: mek.message?.extendedTextMessage?.contextInfo?.pushName || 'عضو جديد', age: 'غير مسجل', status: 'غير مسجل', bio: 'لا يوجد بايو حالياً', points: 1000, level: 1, joinedAt: getArabicDateTime(), hasRegistered: false, isInfinite: false };
-                    localDB.users[cleanDBUser] = targetData;
-                }
+            let targetNumberOnly = getCleanNumber(targetUser);
+            let cleanDBUser = cleanUserJid(targetUser);
 
-                let amountText = normalizedBody.replace('سحب', '').trim();
-                let isClearAll = amountText.includes('كل') || amountText.includes('الكل') || amountText.includes('النقاط') || amountText.includes('نقاطه');
-                if (isClearAll) {
-                    targetData.points = 0;
+            const isTargetOriginalHajj = (targetNumberOnly === ownerPhone || targetNumberOnly === ownerLid || targetNumberOnly === ownerAltPhone);
+            if (isTargetOriginalHajj) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: `❌ هوب هوب يا فنان! دا بابا المجال الحج شادو الأصلي.. محدش يقدر يقرب لنقاطه أو يسحب منه نهائيًا! 👑🛡️` }, { quoted: mek });
+                });
+                return;
+            }
+
+            let targetData = findUserData(targetUser, localDB);
+            if (!targetData) {
+                targetData = { name: mek.message?.extendedTextMessage?.contextInfo?.pushName || 'عضو جديد', age: 'غير مسجل', status: 'غير مسجل', bio: 'لا يوجد بايو حالياً', points: 1000, level: 1, joinedAt: getArabicDateTime(), hasRegistered: false, isInfinite: false };
+                localDB.users[cleanDBUser] = targetData;
+            }
+
+            let amountText = normalizedBody.replace(/^(سحب|اخصم|خصم)\s*(فلوس|نقاط)?/i, '').trim();
+            if (targetNumberOnly && amountText.includes(targetNumberOnly)) {
+                amountText = amountText.replace(targetNumberOnly, '').trim();
+            }
+
+            let isClearAll = amountText.includes('كل') || amountText.includes('الكل') || amountText.includes('النقاط') || amountText.includes('نقاطه');
+            if (isClearAll) {
+                targetData.points = 0;
+                targetData.isInfinite = false;
+                saveLocalDB(localDB);
+                await respondWithStrictTiming('📉', async () => {
+                    await currentConn.sendMessage(from, { text: `👑 *أمر ملكي معتمد:* \n📉 تم سحب وتصفير جميع نقاط بروفايل @${targetNumberOnly} بنجاح! 💸`, mentions: [targetUser] }, { quoted: mek });
+                });
+                return;
+            } else {
+                let pointsToSubtract = 0;
+                if (amountText.includes('مليون')) pointsToSubtract = 1000000;
+                else if (amountText.includes('مليار')) pointsToSubtract = 1000000000;
+                else pointsToSubtract = parseInt(amountText.replace(/[^0-9]/g, '')) || 0;
+
+                if (pointsToSubtract > 0) {
                     targetData.isInfinite = false;
+                    targetData.points = Math.max(0, (targetData.points || 0) - pointsToSubtract);
                     saveLocalDB(localDB);
                     await respondWithStrictTiming('📉', async () => {
-                        await currentConn.sendMessage(from, { text: `👑 *أمر ملكي من الحج الأصلي:* \n📉 تم سحب وتصفير جميع نقاط بروفايل @${targetNumberOnly} بنجاح! 💸`, mentions: [targetUser] }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `👑 *أمر ملكي معتمد:* \n📉 تم سحب [ ${pointsToSubtract.toLocaleString('ar-EG')} ] نقطة من بروفايل @${targetNumberOnly} بنجاح! 🎉\nرصيده المتبقي: [ ${targetData.points.toLocaleString('ar-EG')} ]`, mentions: [targetUser] }, { quoted: mek });
                     });
                     return;
                 } else {
-                    let pointsToSubtract = 0;
-                    if (amountText.includes('مليون')) pointsToSubtract = 1000000;
-                    else if (amountText.includes('مليار')) pointsToSubtract = 1000000000;
-                    else pointsToSubtract = parseInt(amountText.replace(/[^0-9]/g, '')) || 0;
-
-                    if (pointsToSubtract > 0) {
-                        targetData.isInfinite = false;
-                        targetData.points = Math.max(0, (targetData.points || 0) - pointsToSubtract);
-                        saveLocalDB(localDB);
-                        await respondWithStrictTiming('📉', async () => {
-                            await currentConn.sendMessage(from, { text: `👑 *أمر ملكي من الحج الأصلي:* \n📉 تم سحب [ ${pointsToSubtract.toLocaleString('ar-EG')} ] نقطة من بروفايل @${targetNumberOnly} بنجاح! 🎉`, mentions: [targetUser] }, { quoted: mek });
-                        });
-                        return;
-                    }
+                    await respondWithStrictTiming('⚠️', async () => {
+                        await currentConn.sendMessage(from, { text: `⚠️ برجاء كتابة عدد النقاط المراد سحبها، مثال:\n• سحب 5000 (بالرد على الشخص)\n• سحب كل النقاط` }, { quoted: mek });
+                    });
+                    return;
                 }
             }
-            return;
         }
 
         if (isExactShatema && isHajj) {
@@ -3286,12 +3327,16 @@ export async function handleAllMessages(mek, currentConn) {
             saveLocalDB(localDB);
         }
 
-        if (normalizedBody.startsWith('سجل')) {
-            const registrationData = body.substring(3).trim();
-            const parts = registrationData ? registrationData.split(/[\|\-\/\,\،]+/).map(p => p.trim()).filter(Boolean) : [];
-            if (!registrationData || parts.length < 2) {
+        if (normalizedBody.startsWith('سجل') || normalizedBody.startsWith('تسجيل')) {
+            const registrationData = body.replace(/^(سجل|تسجيل)\s*/i, '').trim();
+            let parts = registrationData ? registrationData.split(/[\|\-\/\,\،]+/).map(p => p.trim()).filter(Boolean) : [];
+            if (parts.length < 2 && registrationData) {
+                const spaceParts = registrationData.split(/\s+/).filter(Boolean);
+                if (spaceParts.length >= 2) parts = spaceParts;
+            }
+            if (!registrationData || parts.length < 1) {
                 await respondWithStrictTiming('⚠️', async () => {
-                    await currentConn.sendMessage(from, { text: `*⚠️ طريقة التسجيل الصحيحة:*\n\nاكتب: سجل الاسم | السن | الحالة الاجتماعية | نبذة عنك\n(يمكنك استخدام أي فاصل مثل | أو - أو / أو ،)\n\n*💡 ملحوظة:* كل تعديل بيكلفك خصم 20 نقطة من رصيدك (مجاناً للحج).` }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `*⚠️ طريقة التسجيل الصحيحة:*\n\nاكتب: سجل الاسم | السن | الحالة الاجتماعية | نبذة عنك\n(يمكنك استخدام أي فاصل مثل | أو - أو / أو مسافة)\n\n*💡 ملحوظة:* كل تعديل بيكلفك خصم 20 نقطة من رصيدك (مجاناً للحج).` }, { quoted: mek });
                 });
                 return;
             }
@@ -3306,10 +3351,10 @@ export async function handleAllMessages(mek, currentConn) {
             }
             
             const partsList = parts;
-            let regName = partsList[0] ? partsList[0].replace(/^(الاسم|الاسم\s*:|اسم\s*:)\s*/i, '').trim() : 'عضو جديد';
-            let regAge = partsList[1] ? partsList[1].replace(/^(السن|العمر|السن\s*:|العمر\s*:)\s*/i, '').trim() : 'غير مسجل';
-            let regStatus = partsList[2] ? partsList[2].replace(/^(الحالة|الحاله|الحالة\s*الاجتماعية|الحاله\s*الاجتماعيه)\s*:\s*/i, '').trim() : 'غير مسجل';
-            let regBio = partsList[3] ? partsList[3].replace(/^(البايو|نبذة|نبذه|الوصف)\s*:\s*/i, '').trim() : 'لا يوجد بايو حالياً';
+            let regName = partsList[0] ? partsList[0].replace(/^(الاسم|الاسم\s*:|اسم\s*:)\s*/i, '').trim() : (userProfileData.name || 'عضو جديد');
+            let regAge = partsList[1] ? partsList[1].replace(/^(السن|العمر|السن\s*:|العمر\s*:)\s*/i, '').trim() : (userProfileData.age || 'غير مسجل');
+            let regStatus = partsList[2] ? partsList[2].replace(/^(الحالة|الحاله|الحالة\s*الاجتماعية|الحاله\s*الاجتماعيه)\s*:\s*/i, '').trim() : (userProfileData.status || 'غير مسجل');
+            let regBio = partsList[3] ? partsList[3].replace(/^(البايو|نبذة|نبذه|الوصف)\s*:\s*/i, '').trim() : (userProfileData.bio || 'لا يوجد بايو حالياً');
 
             userProfileData.name = regName || 'عضو جديد';
             userProfileData.age = regAge || 'غير مسجل';
@@ -3359,7 +3404,17 @@ export async function handleAllMessages(mek, currentConn) {
         }
         
         // 📇 [عرض البروفايل]
-        if (normalizedBody.startsWith('بطاقتي') || normalizedBody.startsWith('بروفيل') || normalizedBody.startsWith('بروفايل')) {
+        if (
+            normalizedBody.startsWith('بطاقتي') || 
+            normalizedBody.startsWith('بطاقة') || 
+            normalizedBody.startsWith('بطاقه') || 
+            normalizedBody.startsWith('بروفيل') || 
+            normalizedBody.startsWith('بروفايل') ||
+            normalizedBody.startsWith('بروفايلي') ||
+            normalizedBody.startsWith('كارتي') ||
+            normalizedBody.startsWith('كرتي') ||
+            normalizedBody.startsWith('حسابي')
+        ) {
             let targetUser = mek.message?.extendedTextMessage?.contextInfo?.participant;
             if (!targetUser) {
                 let mentioned = mek.message?.extendedTextMessage?.contextInfo?.mentionedJid;

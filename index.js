@@ -132,6 +132,11 @@ setTimeout(async () => {
         console.log('✈️ [Telegram] جاري تشغيل بوت تليجرام السحابي 24/7 على الاستضافة...');
         await startTelegramBot(tgToken);
         startTelegramWatchdog(tgToken);
+
+        // ⏰ تشغيل نظام الأذكار والصلوات ومواقيت القفل والفتح 24/7 للبوتات الفرعية والأساسي
+        try {
+            startAutoReminders();
+        } catch (_) {}
     } catch (e) {
         console.error('❌ خطأ في تشغيل بوت تليجرام التلقائي:', e);
         startTelegramWatchdog(OFFICIAL_TELEGRAM_TOKEN);

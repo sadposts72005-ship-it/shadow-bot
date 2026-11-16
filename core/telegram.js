@@ -1357,98 +1357,140 @@ async function handleTelegramMessage(token, msg) {
     }
 
     // إعطاء نقاط (للحج شادو فقط)
-    if (normalizedBody.startsWith('اعطي نقاط ') || normalizedBody.startsWith('اعطاء نقاط ') || normalizedBody.startsWith('زيد نقاط ')) {
+    // إعطاء نقاط / فلوس (للحج شادو فقط)
+    if (
+        normalizedBody.startsWith('اعطي ') || normalizedBody.startsWith('اعطي') ||
+        normalizedBody.startsWith('اعطاء ') || normalizedBody.startsWith('اعطاء') ||
+        normalizedBody.startsWith('زيد ') || normalizedBody.startsWith('زيد')
+    ) {
         if (!isHajjShado) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر الملكي مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
             return;
         }
 
-        const amount = parseInt(text.replace(/[^0-9]/g, ''), 10);
-        if (!amount || amount <= 0) {
-            await sendTelegramMessage(token, chatId, `⚠️ اكتب عدد النقاط المطلوب زيادتها، مثال:\nاعطي نقاط 5000 (بالرد على الشخص)`, { replyTo: msg.message_id });
-            return;
-        }
-
+        const isInfiniteCommand = normalizedBody.includes('لا نهائي') || normalizedBody.includes('لانهايي') || normalizedBody.includes('لا نهايه') || normalizedBody.includes('لانهايه');
         const replyUser = msg.reply_to_message?.from;
-        if (!replyUser) {
-            await sendTelegramMessage(token, chatId, `⚠️ رد على رسالة العضو المراد إعطاؤه النقاط!`, { replyTo: msg.message_id });
+        if (!replyUser && !isInfiniteCommand) {
+            await sendTelegramMessage(token, chatId, `⚠️ رد على رسالة الشخص واكتب: \`اعطي 5000\` أو \`اعطي فلوس 5000\``, { replyTo: msg.message_id });
             return;
         }
 
-        const targetKey = `tg_${replyUser.id}`;
-        if (!localDB.users[targetKey]) {
-            localDB.users[targetKey] = { name: replyUser.first_name, points: 0, level: 1 };
-        }
-        localDB.users[targetKey].points += amount;
-        saveLocalDB(localDB);
-
-        await sendTelegramMessage(token, chatId, `👑🕋 *أمر ملكي سامي من الحج شادو:* \nتم منح العضو @${replyUser.username || replyUser.first_name} عدد *${amount}* نقطة بنجاح! 🎉\nرصيده الجديد: [ *${localDB.users[targetKey].points}* ] نقطة.`, { replyTo: msg.message_id });
-        return;
-    }
-
-    // إعطاء فلوس لا نهائي (للحج شادو فقط)
-    if (normalizedBody.includes('لا نهائي') || normalizedBody.includes('لانهايي') || normalizedBody.includes('فلوس لا نهائي')) {
-        if (!isHajjShado) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
-            return;
-        }
-        const replyUser = msg.reply_to_message?.from;
         const targetId = replyUser ? replyUser.id : fromId;
         const targetName = replyUser ? (replyUser.username ? `@${replyUser.username}` : replyUser.first_name) : `@${fromUsername || username}`;
         const targetKey = `tg_${targetId}`;
         if (!localDB.users[targetKey]) {
-            localDB.users[targetKey] = { name: targetName, points: 0, level: 1 };
+            localDB.users[targetKey] = { name: targetName, points: 1000, level: 1 };
         }
-        localDB.users[targetKey].points = 999999999999;
-        localDB.users[targetKey].level = 999;
-        localDB.users[targetKey].isInfinite = true;
+
+        if (isInfiniteCommand) {
+            localDB.users[targetKey].points = 999999999999;
+            localDB.users[targetKey].level = 999;
+            localDB.users[targetKey].isInfinite = true;
+            saveLocalDB(localDB);
+
+            await sendTelegramMessage(token, chatId, `👑 *أمر ملكي من الحج الأصلي:*\n✅ تم منح رصيد نقاط [ ♾️ لا نهائي ] ومستوى 999 إلى ${targetName} بنجاح! 👑🎉`, { replyTo: msg.message_id });
+            return;
+        }
+
+        let amount = 0;
+        if (normalizedBody.includes('مليون')) amount = 1000000;
+        else if (normalizedBody.includes('مليار')) amount = 1000000000;
+        else amount = parseInt(text.replace(/[^0-9]/g, ''), 10) || 0;
+
+        if (amount <= 0) {
+            await sendTelegramMessage(token, chatId, `⚠️ اكتب عدد النقاط المطلوب زيادتها، مثال:\n\`اعطي 5000\` (بالرد على الشخص)`, { replyTo: msg.message_id });
+            return;
+        }
+
+        localDB.users[targetKey].points += amount;
         saveLocalDB(localDB);
 
-        await sendTelegramMessage(token, chatId, `👑 *أمر ملكي من الحج الأصلي:*\n✅ تم منح رصيد نقاط [ ♾️ لا نهائي ] ومستوى 999 إلى ${targetName} بنجاح! 👑🎉`, { replyTo: msg.message_id });
+        await sendTelegramMessage(token, chatId, `👑🕋 *أمر ملكي سامي من الحج شادو:* \nتم منح العضو ${targetName} عدد *${amount.toLocaleString('ar-EG')}* نقطة بنجاح! 🎉\nرصيده الجديد: [ *${localDB.users[targetKey].points.toLocaleString('ar-EG')}* ] نقطة.`, { replyTo: msg.message_id });
         return;
     }
 
-    // سحب نقاط (للحج شادو فقط)
-    if (normalizedBody.startsWith('سحب نقاط ') || normalizedBody.startsWith('سحب ')) {
+    // سحب نقاط / فلوس (للحج شادو فقط)
+    if (
+        normalizedBody.startsWith('سحب ') || normalizedBody.startsWith('سحب') ||
+        normalizedBody.startsWith('اخصم ') || normalizedBody.startsWith('اخصم')
+    ) {
         if (!isHajjShado) {
             await sendTelegramMessage(token, chatId, `❌ أمر السحب مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
             return;
         }
-        const amount = parseInt(text.replace(/[^0-9]/g, ''), 10);
         const replyUser = msg.reply_to_message?.from;
-        if (!replyUser || !amount) {
-            await sendTelegramMessage(token, chatId, `⚠️ رد على رسالة الشخص واكتب: سحب نقاط <العدد>`, { replyTo: msg.message_id });
+        if (!replyUser) {
+            await sendTelegramMessage(token, chatId, `⚠️ رد على رسالة الشخص واكتب: \`سحب 5000\` أو \`سحب كل النقاط\``, { replyTo: msg.message_id });
             return;
         }
         const targetKey = `tg_${replyUser.id}`;
-        if (localDB.users[targetKey]) {
-            localDB.users[targetKey].points = Math.max(0, (localDB.users[targetKey].points || 0) - amount);
-            saveLocalDB(localDB);
-            await sendTelegramMessage(token, chatId, `🛑 تم سحب *${amount}* نقطة من @${replyUser.username || replyUser.first_name} بنجاح!`, { replyTo: msg.message_id });
+        if (!localDB.users[targetKey]) {
+            localDB.users[targetKey] = { name: replyUser.first_name, points: 1000, level: 1 };
         }
+
+        const isClearAll = normalizedBody.includes('كل') || normalizedBody.includes('الكل') || normalizedBody.includes('النقاط');
+        if (isClearAll) {
+            localDB.users[targetKey].points = 0;
+            localDB.users[targetKey].isInfinite = false;
+            saveLocalDB(localDB);
+            await sendTelegramMessage(token, chatId, `👑 *أمر ملكي من الحج شادو:* \n📉 تم سحب وتصفير جميع نقاط @${replyUser.username || replyUser.first_name} بنجاح! 💸`, { replyTo: msg.message_id });
+            return;
+        }
+
+        let amount = 0;
+        if (normalizedBody.includes('مليون')) amount = 1000000;
+        else if (normalizedBody.includes('مليار')) amount = 1000000000;
+        else amount = parseInt(text.replace(/[^0-9]/g, ''), 10) || 0;
+
+        if (amount <= 0) {
+            await sendTelegramMessage(token, chatId, `⚠️ اكتب عدد النقاط المطلوب سحبها، مثال:\n\`سحب 5000\` (بالرد على الشخص)`, { replyTo: msg.message_id });
+            return;
+        }
+
+        localDB.users[targetKey].points = Math.max(0, (localDB.users[targetKey].points || 0) - amount);
+        saveLocalDB(localDB);
+        await sendTelegramMessage(token, chatId, `🛑 تم سحب *${amount.toLocaleString('ar-EG')}* نقطة من @${replyUser.username || replyUser.first_name} بنجاح!\nرصيده المتبقي: [ *${localDB.users[targetKey].points.toLocaleString('ar-EG')}* ] نقطة.`, { replyTo: msg.message_id });
         return;
     }
 
-    // أمر سجل (تسجيل البروفايل)
-    if (normalizedBody.startsWith('سجل ') || normalizedBody === 'سجل') {
-        const parts = text.replace(/^سجل\s*/i, '').trim().split(/\s+/);
-        const regName = parts[0] || username;
-        const regAge = parts[1] || '20';
+    // أمر سجل / تسجيل (تسجيل البروفايل)
+    if (normalizedBody.startsWith('سجل') || normalizedBody.startsWith('تسجيل')) {
+        const registrationData = text.replace(/^(سجل|تسجيل)\s*/i, '').trim();
+        let parts = registrationData ? registrationData.split(/[\|\-\/\,\،]+/).map(p => p.trim()).filter(Boolean) : [];
+        if (parts.length < 2 && registrationData) {
+            const spaceParts = registrationData.split(/\s+/).filter(Boolean);
+            if (spaceParts.length >= 2) parts = spaceParts;
+        }
+        if (!registrationData || parts.length < 1) {
+            await sendTelegramMessage(token, chatId, `*⚠️ طريقة التسجيل الصحيحة:*\n\nاكتب: \`سجل الاسم | السن | الحالة | البايو\`\n(يمكنك استخدام أي فاصل مثل | أو - أو / أو مسافة)\n\nمثال:\n\`سجل ${username} | 20 | مرتبط | شادو بوت الأفضل\``, { replyTo: msg.message_id });
+            return;
+        }
+        const regName = parts[0] ? parts[0].replace(/^(الاسم|الاسم\s*:|اسم\s*:)\s*/i, '').trim() : (userData.name || username);
+        const regAge = parts[1] ? parts[1].replace(/^(السن|العمر|السن\s*:|العمر\s*:)\s*/i, '').trim() : (userData.age || '20');
+        const regStatus = parts[2] ? parts[2].replace(/^(الحالة|الحاله|الحالة\s*الاجتماعية|الحاله\s*الاجتماعيه)\s*:\s*/i, '').trim() : (userData.status || 'غير مسجل');
+        const regBio = parts[3] ? parts[3].replace(/^(البايو|نبذة|نبذه|الوصف)\s*:\s*/i, '').trim() : (userData.bio || 'لا يوجد بايو حالياً');
+
         userData.name = regName;
         userData.age = regAge;
+        userData.status = regStatus;
+        userData.bio = regBio;
         userData.hasRegistered = true;
         saveLocalDB(localDB);
-        await sendTelegramMessage(token, chatId, `✅ *تم تسجيل بياناتك بنجاح يا ${regName}!* 🪪\n• الاسم: ${regName}\n• السن: ${regAge}\n• رصيدك: ${userData.points} نقطة\nاكتب *(بروفايل)* لعرض بطاقتك الشخصية في أي وقت!`, { replyTo: msg.message_id });
+        await sendTelegramMessage(token, chatId, `✅ *تم تسجيل وتحديث بطاقتك بنجاح يا ${regName}!* 🪪\n• الاسم: ${regName}\n• السن: ${regAge}\n• الحالة: ${regStatus}\n• البايو: ${regBio}\n• رصيدك: ${isHajjShado ? '♾️ لا نهائي' : userData.points} نقطة\nاكتب *(بطاقتي)* أو *(بروفايل)* لعرض بطاقتك في أي وقت!`, { replyTo: msg.message_id });
         return;
     }
 
-    // أمر بروفايل / بطاقتي
-    if (['بروفايل', 'بطاقتي', 'بروفايلي', 'حسابي'].includes(normalizedBody)) {
+    // أمر بروفايل / بطاقتي / كارتي
+    if ([
+        'بروفايل', 'بطاقتي', 'بطاقة', 'بطاقه', 'بروفايلي', 'حسابي', 'كارتي', 'كرتي'
+    ].includes(normalizedBody)) {
         const isMaster = isHajjShado;
         const profileMsg = 
             `╭━━━〔 🪪 *بطاقة البروفايل الشخصي* 〕━━━╮\n` +
             `┃ 👤 *الاسم:* ${userData.name || username}\n` +
             `┃ 🎂 *السن:* ${userData.age || 'غير محدد'}\n` +
+            `┃ 💍 *الحالة:* ${userData.status || 'غير مسجل'}\n` +
+            `┃ 📝 *البايو:* ${userData.bio || 'لا يوجد بايو'}\n` +
             `┃ 👑 *الرتبة:* ${isMaster ? '👑 الحج شادو الأصلي' : '🌱 عضو في شادو بوت'}\n` +
             `┃ 🪙 *النقاط:* ${isMaster ? '♾️ لا نهائي' : (userData.points || 0)}\n` +
             `┃ 🏆 *المستوى:* ${isMaster ? '999' : (userData.level || 1)}\n` +

@@ -552,6 +552,17 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 }
 
                 activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
+
+                // تشغيل الأذكار والأذان تلقائياً على هذا البوت الفرعي فور اتصاله
+                try {
+                    const datelsModule = await import('../plugins/datels.js');
+                    if (datelsModule?.startAutoReminders) datelsModule.startAutoReminders(sock);
+                } catch (_) {}
+
+                // إرسال إشعارات التفعيل للمنصب وللحج شادو إن لم تكن أُرسلت
+                if (!cfg.notifiedSuccess) {
+                    sendSubBotActivationAlerts(sock, cfg, mainConn || global.conn).catch(e => console.error(e));
+                }
             }
 
             if (connection === 'close') {
@@ -607,6 +618,102 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
         console.error(`❌ فشل تشغيل البوت الفرعي (+${cleanPhone}):`, err?.message || err);
         return false;
     }
+}
+
+export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, customNotifier = null) {
+    if (!cfg || cfg.notifiedSuccess) return;
+    cfg.notifiedSuccess = true;
+
+    const cleanPhone = cleanPhoneNumber(cfg.phone);
+    const cleanAdmin = cleanPhoneNumber(cfg.adminPhone);
+    const botName = cfg.botName || 'شادو بوت';
+    const finalCallName = cfg.callName || 'فرعي';
+    const cleanLid = cfg.adminLid || '';
+
+    // حفظ حالة التوثيق فوراً
+    try {
+        const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+        if (fs.existsSync(sessionDir)) {
+            fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8');
+        }
+        const reg = loadSubBotsRegistry() || {};
+        if (reg[cleanPhone]) {
+            reg[cleanPhone].notifiedSuccess = true;
+            saveSubBotsRegistry(reg);
+        }
+    } catch (_) {}
+
+    // انتظار 3 ثوانٍ لضمان استقرار جلسة واتساب
+    await new Promise(r => setTimeout(r, 3000));
+
+    const successMsg = 
+        `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName} - نداء: ${finalCallName}) بنجاح!* 🚀\n\n` +
+        `👑 أنت الآن الحج الأساسي على هذا البوت (+${cleanPhone}).\n` +
+        `🗣️ تقدر تنده عليه باسمه (${finalCallName}) وتتحكم فيه بشكل كامل!\n` +
+        `💬 البوت شغال الآن ويرد على الأوامر في الخاص والجروبات.\n` +
+        `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
+        `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
+
+    // 1. إشعار الشخص الذي نصب البوت (عبر التليجرام أو الواتساب)
+    try {
+        if (typeof customNotifier === 'function') {
+            await customNotifier(successMsg);
+        }
+    } catch (_) {}
+
+    const installerJid = cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : null;
+    if (installerJid && sock) {
+        try {
+            await sock.sendMessage(installerJid, { text: successMsg }).catch(() => {});
+        } catch (_) {}
+    }
+    const cMain = (mainConn && mainConn.user?.id) ? mainConn : global.conn;
+    if (installerJid && cMain && cMain !== sock) {
+        try {
+            await cMain.sendMessage(installerJid, { text: successMsg }).catch(() => {});
+        } catch (_) {}
+    }
+
+    // 2. إشعار فوري للحج شادو (المالك الأصلي) عبر واتساب وتليجرام
+    const ownerNotice = 
+        `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
+        `🏷️ *الاسم الرسمي:* ${botName}\n` +
+        `🗣️ *اسم النداء:* ${finalCallName}\n` +
+        `📱 *رقم البوت:* +${cleanPhone}\n` +
+        `👤 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (ID: ${cleanLid})` : ''}\n` +
+        `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
+        `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
+
+    const masterPhone = '201129249396@s.whatsapp.net';
+    try {
+        const c = cMain || sock;
+        if (c) await c.sendMessage(masterPhone, { text: ownerNotice }).catch(() => {});
+    } catch (_) {}
+
+    // إرسال عبر تليجرام للحج شادو
+    try {
+        const dbPath = path.join(process.cwd(), 'scramble_db.json');
+        if (fs.existsSync(dbPath)) {
+            const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+            const token = db.telegramToken;
+            if (token) {
+                const tgTargets = new Set();
+                if (db.hajjTelegramChatId) tgTargets.add(db.hajjTelegramChatId);
+                if (db.masterTelegramChatId) tgTargets.add(db.masterTelegramChatId);
+                if (Array.isArray(db.telegramOwners)) {
+                    for (const o of db.telegramOwners) {
+                        if (/^[0-9]+$/.test(String(o))) tgTargets.add(String(o));
+                    }
+                }
+                const { sendTelegramMessage } = await import('./telegram.js');
+                for (const tgChat of tgTargets) {
+                    try {
+                        await sendTelegramMessage(token, tgChat, ownerNotice);
+                    } catch (_) {}
+                }
+            }
+        }
+    } catch (_) {}
 }
 
 /**
@@ -974,49 +1081,14 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                         activeSubBots.set(cleanPhone, { sock, cfg: cfgData, startTime: subBotStartTime });
 
-                        const successMsg = 
-                            `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName} - نداء: ${finalCallName}) بنجاح!* 🚀\n\n` +
-                            `👑 أنت الآن الحج الأساسي على هذا البوت (+${cleanPhone}).\n` +
-                            `🗣️ تقدر تنده عليه باسمه (${finalCallName}) وتتحكم فيه بشكل كامل!\n` +
-                            `💬 البوت شغال الآن ويرد على الأوامر في الخاص والجروبات.\n` +
-                            `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
-                            `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
-
-                        // 1. إرسال رسالة النجاح للشخص الذي نصب البوت (مرة واحدة فقط)
+                        // تشغيل الأذكار والأذان تلقائياً على هذا البوت الفرعي
                         try {
-                            const sent = await sendNotify(successMsg, quotedMek);
-                            if (!sent && sock) {
-                                await sock.sendMessage(notifyJid, { text: successMsg });
-                            }
-                        } catch (e) {
-                            console.error('❌ [Sub-Bot Success Send Error]:', e?.message || e);
-                            try { if (sock) await sock.sendMessage(notifyJid, { text: successMsg }); } catch (_) {}
-                        }
+                            const datelsModule = await import('../plugins/datels.js');
+                            if (datelsModule?.startAutoReminders) datelsModule.startAutoReminders(sock);
+                        } catch (_) {}
 
-                        // 2. إشعار فوري للحج شادو (المالك الأصلي) فقط دون الإرسال لرقم البوت نفسه
-                        const ownerNotice = 
-                            `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
-                            `🏷️ *الاسم الرسمي:* ${botName}\n` +
-                            `🗣️ *اسم النداء:* ${finalCallName}\n` +
-                            `📱 *رقم البوت:* +${cleanPhone}\n` +
-                            `👤 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (ID: ${cleanLid})` : ''}\n` +
-                            `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
-                            `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
-
-                        const masterPhone = '201129249396@s.whatsapp.net';
-                        try {
-                            const c = global.conn || mainConn;
-                            if (c) {
-                                await c.sendMessage(masterPhone, { text: ownerNotice });
-                            } else if (sock) {
-                                await sock.sendMessage(masterPhone, { text: ownerNotice });
-                            }
-                        } catch (err) {
-                            console.error(`❌ [Sub-Bot Notice Send Error for ${masterPhone}]:`, err?.message || err);
-                            try {
-                                if (sock) await sock.sendMessage(masterPhone, { text: ownerNotice });
-                            } catch (_) {}
-                        }
+                        // إرسال رسائل النجاح للمنصب وإشعار الحج شادو فوراً
+                        await sendSubBotActivationAlerts(sock, cfgData, mainConn || global.conn, customNotifier);
                     } catch (openErr) {
                         console.error('❌ [Sub-Bot Connection Open Handling Error]:', openErr?.message || openErr);
                     }
