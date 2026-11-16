@@ -1158,8 +1158,27 @@ const datelsHandler = {
                 return true;
             }
 
-            // 🛡️ [مكافحة نصوص الكراش والفيروسات الضخمة لحماية الجروب من التبنيد]
+            // 🛡️ [حماية الجروب المفعلة: مسح جهات الاتصال + مكافحة الكراش والفيروسات]
             if (isGroup && localDB.groupProtection?.[from] && !isActualRoomAdminOrOwner) {
+                // 1. مسح أي كارت جهة اتصال (Contact / vCard) فوراً لحماية خصوصية وأمان الجروب
+                let mObj = mek.message;
+                if (mObj?.ephemeralMessage) mObj = mObj.ephemeralMessage.message;
+                if (mObj?.viewOnceMessageV2) mObj = mObj.viewOnceMessageV2.message;
+                if (mObj?.viewOnceMessage) mObj = mObj.viewOnceMessage.message;
+                const isContactMsg = Boolean(mObj?.contactMessage || mObj?.contactsArrayMessage || (body && body.includes('BEGIN:VCARD')));
+
+                if (isContactMsg) {
+                    try {
+                        await currentConn.sendMessage(from, { delete: mek.key });
+                        await currentConn.sendMessage(from, {
+                            text: `⚠️ *درع الحماية نشط:* ممنوع مشاركة جهات الاتصال في المجموعة! تم مسح كارت الاتصال من @${cleanSenderNum} بنجاح. 🛡️📵`,
+                            mentions: [sender]
+                        });
+                    } catch (_) {}
+                    return true;
+                }
+
+                // 2. مكافحة نصوص الكراش والفيروسات الضخمة لحماية الجروب من التبنيد
                 const rawLen = (body || '').length;
                 const hasCrash = rawLen > 7000 || /[\u200B-\u200D\uFEFF]{20,}/.test(body) || /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]{1000,}/.test(body);
                 if (hasCrash) {
@@ -2422,6 +2441,7 @@ const datelsHandler = {
                             `🛡️ *تم تفعيل درع حماية الجروب ضد التبنيد والتخريب بنجاح!* 🔒\n\n` +
                             `✅ *الإجراءات الأمنية المفعلة الآن:*\n` +
                             `• 🔒 *قفل معلومات الجروب:* تم قفل تعديل الاسم والوصف والصورة للمشرفين فقط لمنع أي مخرب من تغيير الاسم لكلمات محظورة تسبب حظر الجروب.\n` +
+                            `• 📵 *منع ومسح جهات الاتصال:* الحذف الفوري لأي كارت جهة اتصال (Contact / vCard) يتم إرساله بالجروب لحماية الخصوصية.\n` +
                             `• 💣 *مكافحة الفيروسات والكراش:* الحذف الفوري لأي رسائل كراش أو فيروسات هبوط (Virtex/Crash Text) قد تتسبب في تبنيد الروم.\n` +
                             `• 🚫 *حماية مشددة ضد الروابط:* منع اللينكات وحذفها تلقائياً.\n` +
                             `• 👤 *مراقبة التخريب:* حماية الروم من الطرد العشوائي.\n\n` +

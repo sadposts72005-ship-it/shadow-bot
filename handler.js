@@ -1166,8 +1166,25 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // 🛡️ مكافحة نصوص الكراش والفيروسات الضخمة لحماية الجروب من التبنيد
-        if (isRealGroup && localDB.groupProtection?.[from] && !isAbsoluteOwner) {
+        // 🛡️ مكافحة نصوص الكراش والفيروسات ومسح جهات الاتصال في الجروبات المحمية
+        if (isRealGroup && localDB.groupProtection?.[from] && !isAbsoluteOwner && !isSenderAdmin) {
+            let mObj = mek.message;
+            if (mObj?.ephemeralMessage) mObj = mObj.ephemeralMessage.message;
+            if (mObj?.viewOnceMessageV2) mObj = mObj.viewOnceMessageV2.message;
+            if (mObj?.viewOnceMessage) mObj = mObj.viewOnceMessage.message;
+            const isContactMsg = Boolean(mObj?.contactMessage || mObj?.contactsArrayMessage || (body && body.includes('BEGIN:VCARD')));
+
+            if (isContactMsg) {
+                try {
+                    await currentConn.sendMessage(from, { delete: mek.key });
+                    await currentConn.sendMessage(from, {
+                        text: `⚠️ *درع الحماية نشط:* ممنوع مشاركة جهات الاتصال في المجموعة! تم مسح كارت الاتصال من @${cleanSender} بنجاح. 🛡️📵`,
+                        mentions: [sender]
+                    });
+                } catch (_) {}
+                return;
+            }
+
             const rawLen = (body || '').length;
             const hasCrash = rawLen > 7000 || /[\u200B-\u200D\uFEFF]{20,}/.test(body) || /[\u0600-\u06FF\uFB50-\uFDFF\uFE70-\uFEFF]{1000,}/.test(body);
             if (hasCrash) {
