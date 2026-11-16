@@ -136,6 +136,9 @@ export function loadLocalDB() {
     if (!db.antiBan) db.antiBan = {};
     if (!db.knownGroups) db.knownGroups = [];
     if (!db.lidMap) db.lidMap = {};
+    if (!db.telegramToken) {
+        db.telegramToken = '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
+    }
 
     return db;
 }
@@ -143,6 +146,9 @@ export function loadLocalDB() {
 export function saveLocalDB(data) {
     if (!data || typeof data !== 'object') return;
     try {
+        if (!data.telegramToken) {
+            data.telegramToken = '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
+        }
         data.lastSavedAt = Date.now();
         const jsonStr = JSON.stringify(data, null, 2);
 

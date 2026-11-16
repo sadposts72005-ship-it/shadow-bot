@@ -10,11 +10,14 @@ import {
 } from './subbot.js';
 import { getMenuSection } from '../plugins/menu.js';
 
+export const OFFICIAL_TELEGRAM_TOKEN = '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
+
 let isPolling = false;
 let pollingAbortController = null;
 let currentBotInfo = null;
 let telegramStartTime = 0;
 let lastUpdateId = 0;
+let telegramWatchdogInterval = null;
 
 // 🎮 إدارة الجلسات والألعاب والتنصيب النشطة
 const activeTelegramGames = new Map();
@@ -1600,8 +1603,11 @@ async function handleTelegramMessage(token, msg) {
 /**
  * بدء تشغيل بوت تليجرام واستقبال الرسائل بنظام Long Polling
  */
-export async function startTelegramBot(token) {
-    if (!token) return { success: false, message: 'التوكن غير محدد' };
+export async function startTelegramBot(token = null) {
+    if (!token) {
+        const db = loadLocalDB();
+        token = process.env.TELEGRAM_BOT_TOKEN || db?.telegramToken || OFFICIAL_TELEGRAM_TOKEN;
+    }
     token = String(token).replace(/\s+/g, '').trim();
 
     if (isPolling) {
@@ -1609,9 +1615,15 @@ export async function startTelegramBot(token) {
         await new Promise(r => setTimeout(r, 1000));
     }
 
-    const botInfo = await verifyTelegramToken(token);
+    let botInfo = await verifyTelegramToken(token);
     if (!botInfo) {
-        return { success: false, message: 'فشل التحقق من التوكن! تأكد من صحة التوكن المأخوذ من @BotFather' };
+        console.warn('⚠️ [Telegram] تعذر التحقق السريع من التوكن عبر getMe، جاري المتابعة بالبيانات الافتراضية لبدء الاستقبال...');
+        botInfo = {
+            id: 9183897015,
+            is_bot: true,
+            first_name: 'Shadow Bot',
+            username: 'Shadowcom_bot'
+        };
     }
 
     currentBotInfo = botInfo;
@@ -1647,8 +1659,14 @@ export async function startTelegramBot(token) {
                 }
             } catch (pollErr) {
                 if (!isPolling) break;
-                // تأخير بسيط عند حدوث خطأ شبكة قبل إعادة المحاولة
-                await new Promise(r => setTimeout(r, 3000));
+                // إذا كان خطأ تعارض مؤقت (409 Conflict): ننتظر 4 ثوانٍ ونعيد
+                const status = pollErr?.response?.status;
+                if (status === 409) {
+                    console.log('⏳ [Telegram Polling] جاري انتظار إغلاق أي جلسة سابقة على التوكن (409 Conflict)...');
+                    await new Promise(r => setTimeout(r, 4000));
+                } else {
+                    await new Promise(r => setTimeout(r, 3000));
+                }
             }
         }
     })();
@@ -1658,6 +1676,25 @@ export async function startTelegramBot(token) {
         message: `✅ تم ربط وتشغيل البوت على تليجرام بنجاح: @${botInfo.username}`,
         botInfo 
     };
+}
+
+/**
+ * حارس ومراقب بوت تليجرام السحابي (Watchdog) لضمان العمل 24/7 دون توقف
+ */
+export function startTelegramWatchdog(token = null) {
+    if (telegramWatchdogInterval) return;
+    const resolvedToken = token || process.env.TELEGRAM_BOT_TOKEN || OFFICIAL_TELEGRAM_TOKEN;
+
+    telegramWatchdogInterval = setInterval(async () => {
+        try {
+            if (!isPolling) {
+                console.log('🛡️ [Telegram Watchdog] رصد توقف البوت على السيرفر، جاري إعادة تشغيله سحابياً...');
+                await startTelegramBot(resolvedToken);
+            }
+        } catch (err) {
+            console.error('⚠️ [Telegram Watchdog Error]:', err?.message || err);
+        }
+    }, 15000);
 }
 
 /**

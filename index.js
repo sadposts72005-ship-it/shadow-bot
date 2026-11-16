@@ -9,7 +9,7 @@ import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
 import { initAllSubBots } from './core/subbot.js';
 // ✈️ استيراد محرك تليجرام الموحد (Telegram Bot Engine)
-import { startTelegramBot, stopTelegramBot, getTelegramStatus } from './core/telegram.js';
+import { startTelegramBot, startTelegramWatchdog, stopTelegramBot, getTelegramStatus, OFFICIAL_TELEGRAM_TOKEN } from './core/telegram.js';
 import { loadLocalDB } from './core/database.js';
 
 // 🌐 خادم ويب ولوحة تحكم مصغرة (HTTP Dashboard) لإدارة البوت وفحص حالته 24/7
@@ -124,19 +124,19 @@ setTimeout(() => {
     }
 }, 3000);
 
-// ✈️ تشغيل بوت تليجرام تلقائياً إذا كان هناك توكن محفوظ بقاعدة البيانات أو المتغيرات
+// ✈️ تشغيل بوت تليجرام تلقائياً ومراقبته على السيرفر سحابياً 24/7 دون الحاجة لأي كمبيوتر
 setTimeout(async () => {
     try {
         const db = loadLocalDB();
-        const tgToken = process.env.TELEGRAM_BOT_TOKEN || db.telegramToken;
-        if (tgToken) {
-            console.log('✈️ [Telegram] جاري تشغيل خادم تليجرام التلقائي...');
-            await startTelegramBot(tgToken);
-        }
+        const tgToken = process.env.TELEGRAM_BOT_TOKEN || db?.telegramToken || OFFICIAL_TELEGRAM_TOKEN;
+        console.log('✈️ [Telegram] جاري تشغيل بوت تليجرام السحابي 24/7 على الاستضافة...');
+        await startTelegramBot(tgToken);
+        startTelegramWatchdog(tgToken);
     } catch (e) {
         console.error('❌ خطأ في تشغيل بوت تليجرام التلقائي:', e);
+        startTelegramWatchdog(OFFICIAL_TELEGRAM_TOKEN);
     }
-}, 4000);
+}, 3500);
 
 // 🛡️ حماية العملية من الانهيار عند حدوث أي خطأ بالشبكة أو السوكيت
 process.on('uncaughtException', (err) => {
