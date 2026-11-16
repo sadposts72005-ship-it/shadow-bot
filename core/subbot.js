@@ -654,29 +654,51 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
         `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
         `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
 
-    // 1. إشعار الشخص الذي نصب البوت (عبر التليجرام أو الواتساب)
-    try {
-        if (typeof customNotifier === 'function') {
-            await customNotifier(successMsg);
-        }
-    } catch (_) {}
+    // 1. إرسال للشخص الذي نصب البوت عبر تليجرام إن كان التنصيب من تليجرام
+    const tgChatId = cfg.telegramChatId || (String(cfg.notifyJid).startsWith('tg:') ? String(cfg.notifyJid).replace('tg:', '') : null);
+    if (tgChatId) {
+        try {
+            const dbPath = path.join(process.cwd(), 'scramble_db.json');
+            if (fs.existsSync(dbPath)) {
+                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                const token = db.telegramToken;
+                if (token) {
+                    const { sendTelegramMessage } = await import('./telegram.js');
+                    await sendTelegramMessage(token, tgChatId, successMsg).catch(() => {});
+                }
+            }
+        } catch (_) {}
+    }
+    if (typeof customNotifier === 'function') {
+        try { await customNotifier(successMsg); } catch (_) {}
+    }
 
+    // 2. إرسال للشخص المنصّب عبر واتساب:
+    // ⚠️ تنبيه هام: نمنع البوت من إرسال الرسالة لنفسه نهائياً (لو رقم البوت هو نفس رقم المنصّب)!
     const installerJid = cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : null;
-    if (installerJid && sock) {
-        try {
-            await sock.sendMessage(installerJid, { text: successMsg }).catch(() => {});
-        } catch (_) {}
-    }
+    const isBotItself = (cleanAdmin && cleanPhone && cleanAdmin === cleanPhone);
+
     const cMain = (mainConn && mainConn.user?.id) ? mainConn : global.conn;
-    if (installerJid && cMain && cMain !== sock) {
-        try {
-            await cMain.sendMessage(installerJid, { text: successMsg }).catch(() => {});
-        } catch (_) {}
+
+    if (installerJid) {
+        if (!isBotItself && sock) {
+            // رقم المنصّب يختلف عن رقم البوت، يرسلها البوت الفرعي للمنصّب مباشرة
+            try {
+                await sock.sendMessage(installerJid, { text: successMsg }).catch(() => {});
+            } catch (_) {}
+        } else if (isBotItself && cMain && cMain !== sock) {
+            // رقم المنصّب هو نفسه رقم البوت، يرسلها البوت الأساسي لكي لا يبعتها البوت لنفسه في شات نفسه
+            try {
+                await cMain.sendMessage(installerJid, { text: successMsg }).catch(() => {});
+            } catch (_) {}
+        }
     }
 
-    // 2. إشعار فوري للحج شادو (المالك الأصلي) عبر واتساب وتليجرام
+    // 3. إشعار فوري للحج شادو (المالك الأصلي) عبر واتساب وتليجرام
+    const isTelegramInstall = Boolean(tgChatId || String(cfg.notifyJid).startsWith('tg:'));
     const ownerNotice = 
         `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
+        `🌐 *منصة التنصيب:* ${isTelegramInstall ? 'تليجرام ✈️' : 'واتساب 📱'}\n` +
         `🏷️ *الاسم الرسمي:* ${botName}\n` +
         `🗣️ *اسم النداء:* ${finalCallName}\n` +
         `📱 *رقم البوت:* +${cleanPhone}\n` +
@@ -778,6 +800,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
         adminLocalEarly ? `${adminLocalEarly}@s.whatsapp.net` : ''
     ].filter(Boolean);
 
+    const isTelegramInstallEarly = String(notifyJid).startsWith('tg:');
+    const telegramChatIdEarly = isTelegramInstallEarly ? String(notifyJid).replace('tg:', '') : '';
+
     let cfgData = {
         phone: cleanPhone,
         botName: botName,
@@ -790,6 +815,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
         adminNumbers: adminNumbersListEarly,
         subHajjUsers: [cleanAdmin, adminLocalEarly, cleanLid].filter(Boolean),
         bannedUsers: [],
+        notifyJid: notifyJid || '',
+        telegramChatId: telegramChatIdEarly,
+        installPlatform: isTelegramInstallEarly ? 'telegram' : 'whatsapp',
         installedAt: new Date().toISOString(),
         status: 'active',
         sleep: false,
@@ -1039,6 +1067,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                         const initialSubHajjs = [cleanAdmin, adminLocal, cleanLid].filter(Boolean);
 
+                        const isTelegramInstallNow = String(notifyJid).startsWith('tg:') || Boolean(cfgData.telegramChatId);
+                        const telegramChatIdNow = String(notifyJid).startsWith('tg:') ? String(notifyJid).replace('tg:', '') : (cfgData.telegramChatId || '');
+
                         cfgData = {
                             phone: cleanPhone,
                             botName: botName,
@@ -1051,6 +1082,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             adminNumbers: adminNumbersList,
                             subHajjUsers: initialSubHajjs,
                             bannedUsers: [],
+                            notifyJid: notifyJid || cfgData.notifyJid || '',
+                            telegramChatId: telegramChatIdNow,
+                            installPlatform: isTelegramInstallNow ? 'telegram' : 'whatsapp',
                             installedAt: new Date().toISOString(),
                             status: 'active',
                             sleep: false,

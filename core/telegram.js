@@ -621,25 +621,39 @@ async function handleTelegramMessage(token, msg) {
     // =========================================================================
     // 🤖 3️⃣ أوامر إدارة البوتات الفرعية والتنصيب - للحج شادو فقط
     // =========================================================================
-    if (['كام تنصيب', 'كم تنصيب', 'كام بوت', 'لوحة التنصيب', 'قائمة التنصيب'].includes(normalizedBody)) {
-        if (!isHajjShado) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
-            return;
-        }
-        const rep = getSubBotsReport();
-        const dashText = 
-            `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية على تليجرام* 〕━━━╮\n` +
-            `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
-            `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
-            `┃ 🛑 *البوتات المتوقفة والمحظورة:* ${rep.stoppedCount}\n` +
-            `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
-            `${rep.listText}\n\n` +
-            `⚙️ *أوامر التحكم السريع عن بُعد:* \n` +
-            `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
-            `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
-            `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*`;
+    const isHowManySubBotsCmdTg = (
+        /^(?:\.|\/)?(كام|كم)\s*(تنصيب|بوت|بوتات|فرعي)(?:\s*[\?؟])?$/i.test(normalizedBody) ||
+        /^(?:\.|\/)?(البوتات\s*الفرعية|البوتات\s*الفرعيه|قائمة\s*التنصيب|قائمه\s*التنصيب|لوحة\s*التنصيب|لوحه\s*التنصيب|احصائيات\s*التنصيب|إحصائيات\s*التنصيب)(?:\s*[\?؟])?$/i.test(normalizedBody)
+    );
 
-        await sendTelegramMessage(token, chatId, dashText, { replyTo: msg.message_id });
+    if (isHowManySubBotsCmdTg) {
+        const rep = getSubBotsReport();
+        if (isHajjShado) {
+            const dashText = 
+                `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية على تليجرام* 〕━━━╮\n` +
+                `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
+                `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
+                `┃ 🛑 *البوتات المتوقفة والمحظورة:* ${rep.stoppedCount}\n` +
+                `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                `${rep.listText}\n\n` +
+                `⚙️ *أوامر التحكم السريع عن بُعد:* \n` +
+                `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
+                `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
+                `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*`;
+
+            await sendTelegramMessage(token, chatId, dashText, { replyTo: msg.message_id });
+        } else {
+            const publicText = 
+                `╭━━━〔 🤖 *إحصائيات البوتات الفرعية* 〕━━━╮\n` +
+                `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
+                `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
+                `┃ 🛑 *البوتات المتوقفة:* ${rep.stoppedCount}\n` +
+                `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                `💡 *هل تريد تنصيب بوتك الخاص مجاناً؟*\n` +
+                `اكتب *(تنصيب)* في أي وقت وابدأ في إنشاء بوتك الفرعي فوراً! 🚀`;
+
+            await sendTelegramMessage(token, chatId, publicText, { replyTo: msg.message_id });
+        }
         return;
     }
 

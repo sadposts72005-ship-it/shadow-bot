@@ -1125,6 +1125,15 @@
       "joinedAt": "١٣‏/٠٧‏/٢٠٢٦، ٠٦:٤٦:٤٨ م",
       "hasRegistered": true,
       "isInfinite": true
+    },
+    "tg_6058342366": {
+      "name": "الحج شادو",
+      "telegramUsername": "Shadwwmy",
+      "points": 999999999999,
+      "level": 999,
+      "joinedAt": "١٣‏/٠٧‏/٢٠٢٦، ٠٦:٤٦:٤٨ م",
+      "hasRegistered": true,
+      "isInfinite": true
     }
   },
   "warnAdmins": {
@@ -1241,16 +1250,21 @@
   },
   "isBotSleeping": false,
   "telegramToken": "9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE",
+  "hajjTelegramChatId": "6058342366",
   "telegramOwners": [
     "Shadwwmy",
     "shadwwmy",
+    "6058342366",
     "37122247649",
     "201129249396",
     "01129249396",
     "194961618301016"
   ],
-  "lastSavedAt": 1782626600000,
+  "lastSavedAt": 1794868851935,
   "knownGroups": [
     "120363410622948934@g.us"
-  ]
+  ],
+  "disabledMuslim": [],
+  "mutedUsers": {},
+  "antiBan": {}
 }

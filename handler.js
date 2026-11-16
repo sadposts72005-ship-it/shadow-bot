@@ -1225,7 +1225,7 @@ export async function handleAllMessages(mek, currentConn) {
                         const pNum = p.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
                         if (allOtherBotNumbers.has(pNum)) {
                             otherBotsPresentInRoom = true;
-                            if (pNum === mainBotNumber) mainBotPresentInRoom = true;
+                            if (pNum === mainBotNumber && global.conn && global.conn.user?.id) mainBotPresentInRoom = true;
                         }
                     }
                 }
@@ -2063,7 +2063,12 @@ export async function handleAllMessages(mek, currentConn) {
         // =========================================================================
         // 👑 [أوامر إدارة البوتات الفرعية - للحج شادو والتحقق من عدد المنصبين]
         // =========================================================================
-        if (['كام تنصيب', 'كم تنصيب', 'كام بوت', 'كم بوت', 'البوتات الفرعية', 'البوتات الفرعيه', 'قائمة التنصيب', 'قائمه التنصيب', 'لوحة التنصيب', 'احصائيات التنصيب'].includes(normalizedBody)) {
+        const isHowManySubBotsCmd = (
+            /^(?:\.|\/)?(كام|كم)\s*(تنصيب|بوت|بوتات|فرعي)(?:\s*[\?؟])?$/i.test(normalizedBody) ||
+            /^(?:\.|\/)?(البوتات\s*الفرعية|البوتات\s*الفرعيه|قائمة\s*التنصيب|قائمه\s*التنصيب|لوحة\s*التنصيب|لوحه\s*التنصيب|احصائيات\s*التنصيب|إحصائيات\s*التنصيب)(?:\s*[\?؟])?$/i.test(normalizedBody)
+        );
+
+        if (isHowManySubBotsCmd) {
             const rep = getSubBotsReport();
             if (isAbsoluteOwner || (!currentConn.isSubBot && isMainHajj) || mek.key.fromMe) {
                 const dashText = 
