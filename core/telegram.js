@@ -197,6 +197,24 @@ const AZKAR_LIST = [
 ];
 
 /**
+ * فحص هل المستخدم مشرف في مجموعة تليجرام
+ */
+async function isTelegramChatAdmin(token, chatId, userId) {
+    if (!token || !chatId || !userId) return false;
+    try {
+        const res = await axios.post(`https://api.telegram.org/bot${token}/getChatMember`, {
+            chat_id: chatId,
+            user_id: userId
+        });
+        if (res.data?.ok && res.data?.result) {
+            const status = res.data.result.status;
+            return status === 'creator' || status === 'administrator';
+        }
+    } catch (_) {}
+    return false;
+}
+
+/**
  * معالجة رسائل وأوامر التليجرام الواردة
  */
 async function handleTelegramMessage(token, msg) {
@@ -208,6 +226,8 @@ async function handleTelegramMessage(token, msg) {
     const text = (msg.text || msg.caption || '').trim();
     if (!text) return;
 
+    const isGroup = msg.chat?.type === 'group' || msg.chat?.type === 'supergroup';
+
     const normalizedBody = normalizeArabic(text);
     const textLower = text.toLowerCase();
 
@@ -217,14 +237,39 @@ async function handleTelegramMessage(token, msg) {
         localDB.telegramOwners = ['Shadwwmy', 'shadwwmy', '37122247649', '201129249396', '194961618301016'];
     }
 
+    // فحص رقم الهاتف إذا تم إرسال جهة اتصال
+    if (msg.contact?.phone_number) {
+        const cleanContactPhone = cleanPhoneNumber(msg.contact.phone_number);
+        if (cleanContactPhone === '201129249396' || cleanContactPhone === '01129249396') {
+            if (!localDB.telegramOwners.includes(String(fromId))) {
+                localDB.telegramOwners.push(String(fromId));
+                if (fromUsername) localDB.telegramOwners.push(fromUsername);
+                saveLocalDB(localDB);
+            }
+        }
+    }
+
     // 👑 المالك المطلق هو الحج شادو فقط:
     // رقم: 01129249396 / 201129249396
     // يوزر تليجرام: @Shadwwmy
     const isHajjShado = (
         (fromUsername && fromUsername.toLowerCase() === 'shadwwmy') ||
         String(fromId) === '194961618301016' ||
-        (Array.isArray(localDB.telegramOwners) && (localDB.telegramOwners.includes(String(fromId)) || (fromUsername && localDB.telegramOwners.includes(fromUsername))))
+        String(fromId) === '37122247649' ||
+        (Array.isArray(localDB.telegramOwners) && (
+            localDB.telegramOwners.includes(String(fromId)) ||
+            (fromUsername && localDB.telegramOwners.some(u => String(u).toLowerCase() === fromUsername.toLowerCase() || String(u).toLowerCase() === `@${fromUsername.toLowerCase()}`))
+        ))
     );
+
+    const isRaisedHajj = (
+        (Array.isArray(localDB.hajjUsers) && (localDB.hajjUsers.includes(`tg_${fromId}`) || (fromUsername && localDB.hajjUsers.includes(fromUsername)))) ||
+        (Array.isArray(localDB.mainHajjUsers) && (localDB.mainHajjUsers.includes(`tg_${fromId}`) || (fromUsername && localDB.mainHajjUsers.includes(fromUsername))))
+    );
+    const isHajj = isHajjShado || isRaisedHajj;
+
+    const isGroupAdmin = isGroup ? await isTelegramChatAdmin(token, chatId, fromId) : false;
+    const isActualRoomAdminOrOwner = isHajj || isGroupAdmin;
 
     const isAbsoluteOwner = isHajjShado;
     const isMainHajj = isHajjShado;
@@ -262,11 +307,11 @@ async function handleTelegramMessage(token, msg) {
 
     // 🤫 فحص وضع الصمت التام (اسكت)
     if (chatMuteMap.get(chatId)) {
-        if (!isHajjShado) return;
+        if (!isHajj) return;
         if (['اتكلم', 'اصحي', '/unmute', '/wake'].includes(normalizedBody)) {
             chatMuteMap.delete(chatId);
             chatSleepMap.delete(chatId);
-            await sendTelegramMessage(token, chatId, `⚡ *صباح الفل يا حج شادو! تم فك الصمت عن شادو بوت وعاد للتحدث والعمل للجميع بكامل طاقته!* 🚀🔥`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `⚡ *صباح الفل يا حج! تم فك الصمت عن شادو بوت وعاد للتحدث والعمل للجميع بكامل طاقته!* 🚀🔥`, { replyTo: msg.message_id });
             return;
         }
         return;
@@ -274,10 +319,10 @@ async function handleTelegramMessage(token, msg) {
 
     // 💤 فحص وضع النوم (نام)
     if (chatSleepMap.get(chatId)) {
-        if (!isHajjShado) return;
+        if (!isHajj) return;
         if (['اصحي', 'اتكلم', '/wake', '/unmute'].includes(normalizedBody)) {
             chatSleepMap.delete(chatId);
-            await sendTelegramMessage(token, chatId, `⚡ *صباح الفل يا حج شادو! تم استيقاظ شادو بوت في هذا الشات وعاد للعمل للجميع!* 🚀✨`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `⚡ *صباح الفل يا حج! تم استيقاظ شادو بوت في هذا الشات وعاد للعمل للجميع!* 🚀✨`, { replyTo: msg.message_id });
             return;
         }
     }
@@ -547,9 +592,13 @@ async function handleTelegramMessage(token, msg) {
     }
 
     // =========================================================================
-    // 🔄 أمر التحديث السحابي التلقائي (تحديث / ابديت)
+    // 🔄 أمر التحديث السحابي التلقائي (تحديث / ابديت) - للحج شادو فقط
     // =========================================================================
     if (['تحديث', 'ابديت', 'update', '/update', 'تحديث البوت'].includes(normalizedBody)) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
         await sendTelegramMessage(token, chatId, `🔄 *جاري سحب وتثبيت آخر تحديثات شادو بوت من GitHub... برجاء الانتظار!* 🚀`, { replyTo: msg.message_id });
         try {
             const { exec } = await import('child_process');
@@ -570,9 +619,13 @@ async function handleTelegramMessage(token, msg) {
     }
 
     // =========================================================================
-    // 🤖 3️⃣ أوامر إدارة البوتات الفرعية والتنصيب
+    // 🤖 3️⃣ أوامر إدارة البوتات الفرعية والتنصيب - للحج شادو فقط
     // =========================================================================
     if (['كام تنصيب', 'كم تنصيب', 'كام بوت', 'لوحة التنصيب', 'قائمة التنصيب'].includes(normalizedBody)) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
         const rep = getSubBotsReport();
         const dashText = 
             `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية على تليجرام* 〕━━━╮\n` +
@@ -739,6 +792,69 @@ async function handleTelegramMessage(token, msg) {
         } catch (e) {
             await sendTelegramMessage(token, chatId, `❌ فشل تطبيق الإعدادات: ${e?.message || e}`, { replyTo: msg.message_id });
         }
+        return;
+    }
+
+    // 👑 أوامر رفع وتنزيل الحجاج - للحج شادو فقط
+    if (normalizedBody.startsWith('رفع حج اساسي') || normalizedBody.startsWith('رفع حج أساسي') || (normalizedBody.startsWith('رفع حج') && !normalizedBody.includes('مساعد'))) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        let target = text.replace(/^(رفع حج اساسي|رفع حج أساسي|رفع حج)\s*/i, '').trim().replace(/^@/, '');
+        let targetId = null;
+        if (msg.reply_to_message?.from) {
+            target = msg.reply_to_message.from.username || msg.reply_to_message.from.first_name;
+            targetId = String(msg.reply_to_message.from.id);
+        }
+        if (!target && !targetId) {
+            await sendTelegramMessage(token, chatId, `⚠️ منشن الشخص أو اكتب يوزره/آيديه أو رد على رسالته لترقيته حج!`, { replyTo: msg.message_id });
+            return;
+        }
+        if (!localDB.telegramOwners) localDB.telegramOwners = [];
+        if (!localDB.mainHajjUsers) localDB.mainHajjUsers = [];
+        if (!localDB.hajjUsers) localDB.hajjUsers = [];
+        if (target && !localDB.telegramOwners.includes(target)) localDB.telegramOwners.push(target);
+        if (targetId && !localDB.telegramOwners.includes(targetId)) localDB.telegramOwners.push(targetId);
+        if (targetId) {
+            if (!localDB.mainHajjUsers.includes(`tg_${targetId}`)) localDB.mainHajjUsers.push(`tg_${targetId}`);
+            if (!localDB.hajjUsers.includes(`tg_${targetId}`)) localDB.hajjUsers.push(`tg_${targetId}`);
+        }
+        saveLocalDB(localDB);
+        await sendTelegramMessage(token, chatId, `👑🕋 *أمر ملكي سامي من الحج شادو الأصلي:* \nتم ترقية [ @${target || targetId} ] إلى رتبة [ حج أساسي ] في شادو بوت بكامل الصلاحيات! 🎉✨`, { replyTo: msg.message_id });
+        return;
+    }
+
+    if (normalizedBody.startsWith('تنزيل حج') || normalizedBody.startsWith('نزل حج')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        let target = text.replace(/^(تنزيل حج|نزل حج)\s*/i, '').trim().replace(/^@/, '');
+        let targetId = null;
+        if (msg.reply_to_message?.from) {
+            target = msg.reply_to_message.from.username || msg.reply_to_message.from.first_name;
+            targetId = String(msg.reply_to_message.from.id);
+        }
+        if (!target && !targetId) {
+            await sendTelegramMessage(token, chatId, `⚠️ اكتب يوزر الشخص أو رد على رسالته لتنزيله من رتبة الحج!`, { replyTo: msg.message_id });
+            return;
+        }
+        if (target.toLowerCase() === 'shadwwmy' || target === '194961618301016' || target === '201129249396' || target === '01129249396') {
+            await sendTelegramMessage(token, chatId, `❌ هوب هوب يا فنان! ده الحج شادو الأصلي صاحب البوت ومحدش يقدر ينزله نهائياً! 👑🛡️`, { replyTo: msg.message_id });
+            return;
+        }
+        if (localDB.telegramOwners) {
+            localDB.telegramOwners = localDB.telegramOwners.filter(u => u !== target && u !== targetId && u !== `@${target}`);
+        }
+        if (localDB.mainHajjUsers && targetId) {
+            localDB.mainHajjUsers = localDB.mainHajjUsers.filter(u => u !== `tg_${targetId}` && u !== target);
+        }
+        if (localDB.hajjUsers && targetId) {
+            localDB.hajjUsers = localDB.hajjUsers.filter(u => u !== `tg_${targetId}` && u !== target);
+        }
+        saveLocalDB(localDB);
+        await sendTelegramMessage(token, chatId, `📉 تم تنزيل [ @${target || targetId} ] من رتبة الحج وسحب صلاحياته بنجاح!`, { replyTo: msg.message_id });
         return;
     }
 
@@ -1345,7 +1461,7 @@ async function handleTelegramMessage(token, msg) {
 
     // أوامر قفل وفتح الشات في الجروبات
     if (['قفل', 'قفل الروم', 'قفل الشات', '/lock'].includes(normalizedBody)) {
-        if (!isHajjShado) {
+        if (!isActualRoomAdminOrOwner) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
             return;
         }
@@ -1362,7 +1478,7 @@ async function handleTelegramMessage(token, msg) {
     }
 
     if (['فتح', 'فتح الروم', 'فتح الشات', '/unlock'].includes(normalizedBody)) {
-        if (!isHajjShado) {
+        if (!isActualRoomAdminOrOwner) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
             return;
         }
@@ -1504,7 +1620,7 @@ async function handleTelegramMessage(token, msg) {
         }
 
         // فحص صلاحية الأدمن أو الحج
-        if (!isHajjShado) {
+        if (!isActualRoomAdminOrOwner) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
             return;
         }
@@ -1530,7 +1646,7 @@ async function handleTelegramMessage(token, msg) {
             return;
         }
 
-        if (!isHajjShado) {
+        if (!isActualRoomAdminOrOwner) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
             return;
         }
@@ -1557,7 +1673,7 @@ async function handleTelegramMessage(token, msg) {
             return;
         }
 
-        if (!isHajjShado) {
+        if (!isActualRoomAdminOrOwner) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
             return;
         }
@@ -1581,25 +1697,70 @@ async function handleTelegramMessage(token, msg) {
         return;
     }
 
+    // حظر مستخدم من البوت بالكامل
+    if (normalizedBody.startsWith('حظر مستخدم') || normalizedBody.startsWith('حظر عضو')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const replyUser = msg.reply_to_message?.from;
+        let targetId = replyUser ? String(replyUser.id) : text.replace(/^(حظر مستخدم|حظر عضو)\s*/i, '').trim().replace(/^@/, '');
+        if (!targetId) {
+            await sendTelegramMessage(token, chatId, `⚠️ رد على رسالة المستخدم أو اكتب يوزره/آيديه لحظره!`, { replyTo: msg.message_id });
+            return;
+        }
+        if (targetId.toLowerCase() === 'shadwwmy' || targetId === '194961618301016' || targetId === '201129249396' || targetId === '01129249396') {
+            await sendTelegramMessage(token, chatId, `❌ لا يمكن حظر الحج شادو الأصلي! 👑🛡️`, { replyTo: msg.message_id });
+            return;
+        }
+        if (!localDB.bannedUsers) localDB.bannedUsers = [];
+        const banKey = `tg_${targetId}`;
+        if (!localDB.bannedUsers.includes(banKey)) localDB.bannedUsers.push(banKey);
+        if (!localDB.bannedUsers.includes(targetId)) localDB.bannedUsers.push(targetId);
+        saveLocalDB(localDB);
+        await sendTelegramMessage(token, chatId, `🚫 تم حظر المستخدم [ ${targetId} ] نهائياً من استخدام البوت!`, { replyTo: msg.message_id });
+        return;
+    }
+
+    // فك حظر مستخدم
+    if (normalizedBody.startsWith('فك حظر مستخدم') || normalizedBody.startsWith('فك حظر')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const replyUser = msg.reply_to_message?.from;
+        let targetId = replyUser ? String(replyUser.id) : text.replace(/^(فك حظر مستخدم|فك حظر)\s*/i, '').trim().replace(/^@/, '');
+        if (!targetId) {
+            await sendTelegramMessage(token, chatId, `⚠️ رد على رسالة المستخدم أو اكتب يوزره/آيديه لفك حظره!`, { replyTo: msg.message_id });
+            return;
+        }
+        if (localDB.bannedUsers) {
+            localDB.bannedUsers = localDB.bannedUsers.filter(u => u !== targetId && u !== `tg_${targetId}` && u !== `@${targetId}`);
+            saveLocalDB(localDB);
+        }
+        await sendTelegramMessage(token, chatId, `✅ تم فك حظر المستخدم [ ${targetId} ] بنجاح!`, { replyTo: msg.message_id });
+        return;
+    }
+
     // نوم البوت في الشات (نام)
     if (normalizedBody === 'نام' || normalizedBody === '/sleep') {
-        if (!isHajjShado) {
-            await sendTelegramMessage(token, chatId, `❌ أمر النوم مخصص للحج شادو فقط! 👑`, { replyTo: msg.message_id });
+        if (!isHajj) {
+            await sendTelegramMessage(token, chatId, `❌ أمر النوم مخصص للحج فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         chatSleepMap.set(chatId, true);
-        await sendTelegramMessage(token, chatId, `😴 *أمرك يا حج شادو.. تم تنويم البوت عن العامة في هذا الشات!* لن يرد على أي شخص إلا حضرتك. اكتب *(اصحي)* لإعادته.`, { replyTo: msg.message_id });
+        await sendTelegramMessage(token, chatId, `😴 *أمرك يا حج.. تم تنويم البوت عن العامة في هذا الشات!* لن يرد على أي شخص إلا حضرتك. اكتب *(اصحي)* لإعادته.`, { replyTo: msg.message_id });
         return;
     }
 
     // صمت البوت التام (اسكت)
     if (normalizedBody === 'اسكت' || normalizedBody === 'اخرس') {
-        if (!isHajjShado) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو فقط! 👑`, { replyTo: msg.message_id });
+        if (!isHajj) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         chatMuteMap.set(chatId, true);
-        await sendTelegramMessage(token, chatId, `🤫 *أمرك يا حج شادو.. تم إسكات البوت تماماً.* لن يتحدث حتى تأمره بـ *(اتكلم)*.`, { replyTo: msg.message_id });
+        await sendTelegramMessage(token, chatId, `🤫 *أمرك يا حج.. تم إسكات البوت تماماً.* لن يتحدث حتى تأمره بـ *(اتكلم)*.`, { replyTo: msg.message_id });
         return;
     }
 

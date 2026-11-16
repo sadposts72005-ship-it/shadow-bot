@@ -713,7 +713,7 @@ export async function handleAllMessages(mek, currentConn) {
             localDB.lidMap?.[cleanSender] === ownerPhone ||
             localDB.lidMap?.[cleanSender] === ownerLid ||
             localDB.lidMap?.[cleanSender] === ownerAltPhone ||
-            mek.key.fromMe
+            (!currentConn.isSubBot && ownerPhoneList.includes(myNumber) && mek.key.fromMe)
         );
 
         // صاحب البوت الفرعي هو الحج الأساسي على بوته فقط (فحص شامل بالرقم الدولي والمحلي وLID ومعرف JID وسجل المشرفين)
