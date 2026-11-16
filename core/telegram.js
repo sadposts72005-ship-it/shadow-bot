@@ -20,6 +20,7 @@ let currentBotInfo = null;
 let telegramStartTime = 0;
 let lastUpdateId = 0;
 let telegramWatchdogInterval = null;
+let pollingSessionId = 0;
 
 // 🎮 إدارة الجلسات والألعاب والتنصيب النشطة
 const activeTelegramGames = new Map();
@@ -1873,10 +1874,23 @@ export async function startTelegramBot(token = null) {
     }
     token = String(token).replace(/\s+/g, '').trim();
 
-    if (isPolling) {
-        stopTelegramBot();
-        await new Promise(r => setTimeout(r, 1000));
+    // 1. إلغاء أي جلسة بولينج قديمة على الفور باستخدام المعرف الفرعي للجيل
+    pollingSessionId++;
+    const mySessionId = pollingSessionId;
+    isPolling = false;
+    if (pollingAbortController) {
+        try { pollingAbortController.abort(); } catch (_) {}
+        pollingAbortController = null;
     }
+
+    // 2. إغلاق أي Webhook أو اتصالات سابقة عالقة على سيرفرات تليجرام لحل (409 Conflict) نهائياً
+    try {
+        await axios.post(`https://api.telegram.org/bot${token}/deleteWebhook`, {
+            drop_pending_updates: false
+        }, { timeout: 10000 });
+    } catch (_) {}
+
+    await new Promise(r => setTimeout(r, 1200));
 
     let botInfo = await verifyTelegramToken(token);
     if (!botInfo) {
@@ -1889,6 +1903,10 @@ export async function startTelegramBot(token = null) {
         };
     }
 
+    if (mySessionId !== pollingSessionId) {
+        return { success: false, message: 'Superseded' };
+    }
+
     currentBotInfo = botInfo;
     telegramStartTime = Math.floor(Date.now() / 1000);
     isPolling = true;
@@ -1896,9 +1914,11 @@ export async function startTelegramBot(token = null) {
 
     console.log(`\n🎉 [Telegram Bot] تم ربط وتشغيل بوت تليجرام بنجاح: @${botInfo.username} (${botInfo.first_name}) 🚀`);
 
+    let consecutive409Errors = 0;
+
     // حلقة استقبال الرسائل (Long Polling Loop)
     (async () => {
-        while (isPolling) {
+        while (isPolling && mySessionId === pollingSessionId) {
             try {
                 const res = await axios.get(`https://api.telegram.org/bot${token}/getUpdates`, {
                     params: {
@@ -1909,6 +1929,10 @@ export async function startTelegramBot(token = null) {
                     timeout: 35000,
                     signal: pollingAbortController?.signal
                 });
+
+                if (mySessionId !== pollingSessionId) break;
+
+                consecutive409Errors = 0;
 
                 if (res.data && res.data.ok && Array.isArray(res.data.result)) {
                     for (const update of res.data.result) {
@@ -1921,12 +1945,18 @@ export async function startTelegramBot(token = null) {
                     }
                 }
             } catch (pollErr) {
-                if (!isPolling) break;
-                // إذا كان خطأ تعارض مؤقت (409 Conflict): ننتظر 4 ثوانٍ ونعيد
+                if (!isPolling || mySessionId !== pollingSessionId) break;
+
                 const status = pollErr?.response?.status;
                 if (status === 409) {
-                    console.log('⏳ [Telegram Polling] جاري انتظار إغلاق أي جلسة سابقة على التوكن (409 Conflict)...');
-                    await new Promise(r => setTimeout(r, 4000));
+                    consecutive409Errors++;
+                    if (consecutive409Errors <= 2) {
+                        console.log(`⏳ [Telegram Polling] جاري فض التعارض وإنهاء الجلسات العالقة على التوكن (409 Conflict)...`);
+                    }
+                    try {
+                        await axios.post(`https://api.telegram.org/bot${token}/deleteWebhook`, { drop_pending_updates: false }, { timeout: 10000 });
+                    } catch (_) {}
+                    await new Promise(r => setTimeout(r, Math.min(consecutive409Errors * 3000, 15000)));
                 } else {
                     await new Promise(r => setTimeout(r, 3000));
                 }

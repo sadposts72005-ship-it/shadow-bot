@@ -753,41 +753,45 @@ export async function startAutoReminders(currentConn) {
                 }
             }
 
-            // 2. تذكير الصلاة على النبي ﷺ التلقائي في جميع الجروبات كل 3 ساعات
+            // 2. تذكير الصلاة على النبي ﷺ التلقائي في جميع الجروبات كل 3 ساعات تماماً
             const now = Date.now();
             const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
-            const lastSalawat = Number(localDB.lastSalawatBroadcastTime) || 0;
-            const salawatLogKey = `salawat_${todayDateStr}_${hours}`;
+            if (!localDB.lastSalawatBroadcastTime) {
+                localDB.lastSalawatBroadcastTime = now;
+                saveLocalDB(localDB);
+            }
+            const lastSalawat = Number(localDB.lastSalawatBroadcastTime) || now;
 
-            // فحص إرسال الصلاة على النبي كل 3 ساعات (في الساعات 0, 3, 6, 9, 12, 15, 18, 21 أو عند انقضاء 3 ساعات كاملة)
-            const isThreeHourSlot = (hourNum % 3 === 0 && minNum <= 3 && !localDB.sentRemindersLog.list.includes(salawatLogKey));
-            const isElapsedThreeHours = (lastSalawat > 0 && (now - lastSalawat >= THREE_HOURS_MS));
+            // تحديد فترات الـ 3 ساعات الرسمية (00:00، 03:00، 06:00، 09:00، 12:00، 15:00، 18:00، 21:00)
+            const salawatSlotHour = Math.floor(hourNum / 3) * 3;
+            const salawatLogKey = `salawat_${todayDateStr}_${salawatSlotHour}`;
 
-            if (isThreeHourSlot || isElapsedThreeHours) {
-                // تجنب التكرار السريع إذا أُرسل مؤخراً (خلال آخر ساعتين ونصف مثلاً)
-                if (lastSalawat === 0 || (now - lastSalawat >= 2.5 * 60 * 60 * 1000)) {
-                    isRemindingInProgress = true;
-                    try {
-                        const salawatMessages = [
-                            `✨ *اللهم صلِّ وسلِّم وبارك على نبينا وحبيبنا محمد وعلى آله وصحبه أجمعين* ﷺ ❤️\n\nأكثروا من الصلاة والسلام على خير الأنام تُفرَج همومكم وتُغفَر ذنوبكم 🤲🤍`,
-                            `🌸 *صلوا على الحبيب المصطفى* ﷺ 🌸\n\n«إنَّ أوْلى النَّاسِ بي يَومَ القيامةِ أَكْثَرُهُم عليَّ صَلاةً» 🌿\nاللهم صلِّ وسلم وبارك على محمد وآله وصحبه أجمعين ❤️`,
-                            `🕊️ *تذكير بالصلاة على النبي محمد ﷺ* 🕊️\n\nاللهم صلّ على محمد وعلى آل محمد كما صليت على إبراهيم وعلى آل إبراهيم إنك حميد مجيد ✨\nلا تنس ذكر الله يا غالي 🤍`,
-                            `🌟 *صلِّ على النبي وتبسم* ﷺ 🌟\n\n«من صلّى عليّ صلاة صلّى الله عليه بها عشراً» 🌿\nرطب لسانك وقلبك بالصلاة والسلام على رسول الله ﷺ 🤍`
-                        ];
-                        const randomSalawat = salawatMessages[Math.floor(Math.random() * salawatMessages.length)];
-                        const salawatGenerator = (sock) => {
-                            const bName = sock.subBotConfig?.botName || sock.botName || (sock.isSubBot ? 'بوت فرعي' : 'شادو');
-                            return `${randomSalawat}\n\n🤖 *${bName}*`;
-                        };
-                        await broadcastReminders(salawatGenerator, localDB);
-                        localDB.lastSalawatBroadcastTime = now;
-                        if (!localDB.sentRemindersLog.list.includes(salawatLogKey)) {
-                            localDB.sentRemindersLog.list.push(salawatLogKey);
-                        }
-                        saveLocalDB(localDB);
-                    } finally {
-                        isRemindingInProgress = false;
+            const isExactSlot = (hourNum % 3 === 0 && minNum >= 0 && minNum <= 2 && !localDB.sentRemindersLog?.list?.includes(salawatLogKey));
+            const hasThreeHoursPassed = (now - lastSalawat >= THREE_HOURS_MS);
+
+            if ((isExactSlot || hasThreeHoursPassed) && (now - lastSalawat >= 2.8 * 60 * 60 * 1000)) {
+                isRemindingInProgress = true;
+                try {
+                    const salawatMessages = [
+                        `✨ *اللهم صلِّ وسلِّم وبارك على نبينا وحبيبنا محمد وعلى آله وصحبه أجمعين* ﷺ ❤️\n\nأكثروا من الصلاة والسلام على خير الأنام تُفرَج همومكم وتُغفَر ذنوبكم 🤲🤍`,
+                        `🌸 *صلوا على الحبيب المصطفى* ﷺ 🌸\n\n«إنَّ أوْلى النَّاسِ بي يَومَ القيامةِ أَكْثَرُهُم عليَّ صَلاةً» 🌿\nاللهم صلِّ وسلم وبارك على محمد وآله وصحبه أجمعين ❤️`,
+                        `🕊️ *تذكير بالصلاة على النبي محمد ﷺ* 🕊️\n\nاللهم صلّ على محمد وعلى آل محمد كما صليت على إبراهيم وعلى آل إبراهيم إنك حميد مجيد ✨\nلا تنس ذكر الله يا غالي 🤍`,
+                        `🌟 *صلِّ على النبي وتبسم* ﷺ 🌟\n\n«من صلّى عليّ صلاة صلّى الله عليه بها عشراً» 🌿\nرطب لسانك وقلبك بالصلاة والسلام على رسول الله ﷺ 🤍`
+                    ];
+                    const randomSalawat = salawatMessages[Math.floor(Math.random() * salawatMessages.length)];
+                    const salawatGenerator = (sock) => {
+                        const bName = sock.subBotConfig?.botName || sock.botName || (sock.isSubBot ? 'بوت فرعي' : 'شادو');
+                        return `${randomSalawat}\n\n🤖 *${bName}*`;
+                    };
+                    await broadcastReminders(salawatGenerator, localDB);
+                    localDB.lastSalawatBroadcastTime = now;
+                    if (!localDB.sentRemindersLog) localDB.sentRemindersLog = { date: todayDateStr, list: [] };
+                    if (!localDB.sentRemindersLog.list.includes(salawatLogKey)) {
+                        localDB.sentRemindersLog.list.push(salawatLogKey);
                     }
+                    saveLocalDB(localDB);
+                } finally {
+                    isRemindingInProgress = false;
                 }
             }
 
