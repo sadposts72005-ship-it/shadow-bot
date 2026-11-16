@@ -6,7 +6,9 @@ import {
     startSubBotRemote, 
     deleteSubBotRemote,
     cleanPhoneNumber,
-    requestSubBotPairing
+    requestSubBotPairing,
+    updateSubBotName,
+    updateSubBotCallName
 } from './subbot.js';
 import { getMenuSection } from '../plugins/menu.js';
 
@@ -630,6 +632,50 @@ async function handleTelegramMessage(token, msg) {
         }
         const res = await deleteSubBotRemote(targetPhone, null, false);
         await sendTelegramMessage(token, chatId, res.message, { replyTo: msg.message_id });
+        return;
+    }
+
+    if (normalizedBody.startsWith('تعديل اسم ') || normalizedBody.startsWith('تغيير اسم ') || normalizedBody.startsWith('تعديل اسم البوت ')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const cleanCmd = text.replace(/^(تعديل اسم البوت|تعديل اسم|تغيير اسم البوت|تغيير اسم)\s*/i, '').trim();
+        const parts = cleanCmd.split(/\s+/);
+        const targetPhone = cleanPhoneNumber(parts[0]);
+        const newName = parts.slice(1).join(' ').trim();
+        if (!targetPhone || !newName) {
+            await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم البوت والاسم الجديد، مثال:\n\`تعديل اسم 201012345678 بوت الزعيم\``, { replyTo: msg.message_id });
+            return;
+        }
+        const ok = updateSubBotName(targetPhone, newName);
+        if (ok) {
+            await sendTelegramMessage(token, chatId, `✅ *تم تغيير اسم البوت (+${targetPhone}) إلى [${newName}] بنجاح!* 🎉`, { replyTo: msg.message_id });
+        } else {
+            await sendTelegramMessage(token, chatId, `❌ لم يتم العثور على بوت مسجل برقم (+${targetPhone})!`, { replyTo: msg.message_id });
+        }
+        return;
+    }
+
+    if (normalizedBody.startsWith('تعديل نداء ') || normalizedBody.startsWith('تغيير نداء ') || normalizedBody.startsWith('تعديل اسم النداء ')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const cleanCmd = text.replace(/^(تعديل اسم النداء|تعديل نداء|تغيير نداء)\s*/i, '').trim();
+        const parts = cleanCmd.split(/\s+/);
+        const targetPhone = cleanPhoneNumber(parts[0]);
+        const newCallName = parts.slice(1).join(' ').trim();
+        if (!targetPhone || !newCallName) {
+            await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم البوت واسم النداء الجديد، مثال:\n\`تعديل نداء 201012345678 زعيم\``, { replyTo: msg.message_id });
+            return;
+        }
+        const ok = updateSubBotCallName(targetPhone, newCallName);
+        if (ok) {
+            await sendTelegramMessage(token, chatId, `✅ *تم تغيير اسم النداء للبوت (+${targetPhone}) إلى [${newCallName}] بنجاح!* 🎉`, { replyTo: msg.message_id });
+        } else {
+            await sendTelegramMessage(token, chatId, `❌ لم يتم العثور على بوت مسجل برقم (+${targetPhone})!`, { replyTo: msg.message_id });
+        }
         return;
     }
 

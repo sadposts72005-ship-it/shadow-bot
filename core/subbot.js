@@ -57,14 +57,15 @@ export function loadSubBotsRegistry() {
                             try { cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8')); } catch (_) {}
                         }
                         if (!cfg || !cfg.phone) {
+                            const regExisting = registry[cleanD] || {};
                             cfg = {
                                 phone: cleanD,
-                                botName: 'بوت فرعي',
-                                callName: 'فرعي',
-                                gender: 'male',
-                                personality: 'respectful',
-                                adminPhone: '201129249396',
-                                adminLid: '194961618301016',
+                                botName: (regExisting.botName && regExisting.botName !== 'بوت فرعي') ? regExisting.botName : (cfg?.botName || 'بوت فرعي'),
+                                callName: (regExisting.callName && regExisting.callName !== 'فرعي') ? regExisting.callName : (cfg?.callName || 'فرعي'),
+                                gender: cfg?.gender || regExisting.gender || 'male',
+                                personality: cfg?.personality || regExisting.personality || 'respectful',
+                                adminPhone: cfg?.adminPhone || regExisting.adminPhone || '201129249396',
+                                adminLid: cfg?.adminLid || regExisting.adminLid || '194961618301016',
                                 adminJid: '201129249396@s.whatsapp.net',
                                 adminNumbers: ['201129249396', '01129249396', '194961618301016'],
                                 subHajjUsers: ['201129249396', '01129249396', '194961618301016'],
@@ -705,6 +706,14 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     }
     fs.mkdirSync(sessionDir, { recursive: true });
 
+    // 💾 حفظ إعدادات البوت والاسم والنداء فوراً على القرص والسجل لمنع أي استبدال بأسماء افتراضية
+    try {
+        fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfgData, null, 2), 'utf8');
+        const currentReg = loadSubBotsRegistry() || {};
+        currentReg[cleanPhone] = cfgData;
+        saveSubBotsRegistry(currentReg);
+    } catch (_) {}
+
     let pairingCodeSent = false;
     let isConnected = false;
     let isExpired = false;
@@ -1037,9 +1046,15 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     // ⚡ إذا كان البوت مسجلاً ومقترناً بالهاتف (حتى لو انقطع مع كود 515 restart required): يتم تشغيله فوراً
                     if (isRegistered || isConnected) {
                         console.log(`🎉 [Sub-Bot Pairing] تم تأكيد اقتران وتسجيل البوت الفرعي (+${cleanPhone})! جاري تشغيله بالنظام الكامل...`);
-                        const reg = loadSubBotsRegistry();
-                        const currentCfg = reg[cleanPhone] || cfgData;
-                        currentCfg.status = 'active';
+                        const reg = loadSubBotsRegistry() || {};
+                        const existing = reg[cleanPhone] || {};
+                        const currentCfg = {
+                            ...cfgData,
+                            ...existing,
+                            botName: cfgData.botName || existing.botName || 'بوت فرعي',
+                            callName: cfgData.callName || existing.callName || 'فرعي',
+                            status: 'active'
+                        };
                         reg[cleanPhone] = currentCfg;
                         saveSubBotsRegistry(reg);
                         try {
@@ -1614,11 +1629,11 @@ export function getSubBotsReport() {
             registryModified = true;
         } else {
             // تحديث بالبيانات الحية المباشرة من الذاكرة إذا تغير أي حقل
-            if (liveSock.botName && registry[clean].botName !== liveSock.botName) {
+            if (liveSock.botName && liveSock.botName !== 'بوت فرعي' && registry[clean].botName !== liveSock.botName) {
                 registry[clean].botName = liveSock.botName;
                 registryModified = true;
             }
-            if (liveSock.callName && registry[clean].callName !== liveSock.callName) {
+            if (liveSock.callName && liveSock.callName !== 'فرعي' && registry[clean].callName !== liveSock.callName) {
                 registry[clean].callName = liveSock.callName;
                 registryModified = true;
             }
@@ -1649,11 +1664,11 @@ export function getSubBotsReport() {
                                 registryModified = true;
                             } else {
                                 let updated = false;
-                                if (cfg.botName && registry[clean].botName !== cfg.botName) {
+                                if (cfg.botName && cfg.botName !== 'بوت فرعي' && registry[clean].botName !== cfg.botName) {
                                     registry[clean].botName = cfg.botName;
                                     updated = true;
                                 }
-                                if (cfg.callName && registry[clean].callName !== cfg.callName) {
+                                if (cfg.callName && cfg.callName !== 'فرعي' && registry[clean].callName !== cfg.callName) {
                                     registry[clean].callName = cfg.callName;
                                     updated = true;
                                 }
