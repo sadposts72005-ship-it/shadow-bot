@@ -2772,6 +2772,35 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
+        // 🔄 [أمر التحديث السحابي التلقائي - للحج شادو الأصلي فقط]
+        if (['تحديث', 'ابديت', '.تحديث', '/update', 'تحديث البوت'].includes(normalizedBody)) {
+            if (!isAbsoluteOwner) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ أمر التحديث مخصص حصرياً للحج شادو الأصلي! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+            await respondWithStrictTiming('🔄', async () => {
+                await currentConn.sendMessage(from, { text: '🔄 *جاري سحب وتثبيت آخر تحديثات شادو بوت من GitHub... برجاء الانتظار!* 🚀' }, { quoted: mek });
+            });
+            try {
+                const { exec } = await import('child_process');
+                exec('git pull origin main', async (err, stdout, stderr) => {
+                    if (err) {
+                        await currentConn.sendMessage(from, { text: `❌ فشل سحب التحديث:\n${err.message}` });
+                        return;
+                    }
+                    await currentConn.sendMessage(from, { text: `✅ *تم تحديث شادو بوت بنجاح!* 🎉\n\`${stdout || 'Already up to date.'}\`\n🔄 جاري إعادة تشغيل السيرفر تلقائياً...` });
+                    setTimeout(() => {
+                        process.exit(0);
+                    }, 1500);
+                });
+            } catch (upErr) {
+                await currentConn.sendMessage(from, { text: `❌ خطأ أثناء التحديث: ${upErr?.message || upErr}` });
+            }
+            return;
+        }
+
         // 💸 [أمر سحب النقاط الملكي المطوّر - للحج الأصلي فقط]
         if (normalizedBody.startsWith('سحب ') || normalizedBody.startsWith('سحب')) {
             if (!isAbsoluteOwner) {

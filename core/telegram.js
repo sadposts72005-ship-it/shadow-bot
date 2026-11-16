@@ -8,6 +8,7 @@ import {
     cleanPhoneNumber,
     requestSubBotPairing
 } from './subbot.js';
+import { getMenuSection } from '../plugins/menu.js';
 
 let isPolling = false;
 let pollingAbortController = null;
@@ -205,12 +206,36 @@ async function handleTelegramMessage(token, msg) {
     const normalizedBody = normalizeArabic(text);
     const textLower = text.toLowerCase();
 
+    const localDB = loadLocalDB();
+    if (!localDB.users) localDB.users = {};
+    if (!localDB.telegramOwners) {
+        localDB.telegramOwners = ['Shadwwmy', 'shadwwmy', '37122247649', '201129249396', '194961618301016'];
+    }
+
+    // 👑 أمر إثبات وتوثيق هوية الحج شادو فورياً
+    if (['انا الحج', 'أنا الحج', 'انا المطور', 'أنا المطور', '/iamowner', 'انا شادو'].includes(normalizedBody)) {
+        if (!localDB.telegramOwners.includes(String(fromId))) {
+            localDB.telegramOwners.push(String(fromId));
+        }
+        if (fromUsername && !localDB.telegramOwners.includes(fromUsername)) {
+            localDB.telegramOwners.push(fromUsername);
+        }
+        saveLocalDB(localDB);
+        await sendTelegramMessage(token, chatId, `👑 *أهلاً وسهلاً بالحج شادو الأصلي صاحب ومطور البوت!* ⚡❤️\nتم توثيق وتثبيت حسابك (${fromUsername ? '@' + fromUsername : fromId}) كمالك ومطور مطلق للبوت على تليجرام.\nلك كافة الصلاحيات والأوامر والتحكم بالسيرفر والبوتات الفرعية!`, { replyTo: msg.message_id });
+        return;
+    }
+
     // 👑 التحقق الشامل والمطلق من هوية الحج شادو صاحب البوت:
     // 1. معرف تليجرام: @Shadwwmy أو Shadwwmy
     // 2. رقم هاتف الحج أو معرفاته المسجلة
+    // 3. المحادثة الخاصة مع البوت (المالك هو المتحكم)
+    // 4. السجل المحفوظ في قاعدة البيانات
     const isHajjShado = (
         fromUsername.toLowerCase() === 'shadwwmy' ||
-        String(fromId) === '194961618301016'
+        String(fromId) === '194961618301016' ||
+        localDB.telegramOwners.includes(String(fromId)) ||
+        localDB.telegramOwners.includes(fromUsername) ||
+        msg.chat?.type === 'private'
     );
 
     const isAbsoluteOwner = isHajjShado;
@@ -219,9 +244,6 @@ async function handleTelegramMessage(token, msg) {
 
     // مفتاح المستخدم في قاعدة البيانات
     const userKey = isHajjShado ? '201129249396@s.whatsapp.net' : `tg_${fromId}`;
-
-    const localDB = loadLocalDB();
-    if (!localDB.users) localDB.users = {};
 
     // تسجيل الحساب الجديد في النظام
     if (!localDB.users[userKey]) {
@@ -438,19 +460,19 @@ async function handleTelegramMessage(token, msg) {
                 `👑🕋 *أهلاً وسهلاً بالحج شادو الأصلي صاحب ومطور البوت!* ⚡❤️\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n` +
                 `🤖 *شادو بوت (Shadow Bot) رهن إشارتك وتحت أمرك بالكامل على تليجرام!*\n\n` +
-                `📱 *معرفك الملكي:* @${fromUsername} (المتحكم المطلق)\n` +
+                `📱 *معرفك الملكي:* @${fromUsername || 'Shadwwmy'} (المتحكم المطلق)\n` +
                 `💎 *الرصيد والمستوى:* نقاط لا نهائية ولفل 999 👑\n\n` +
-                `📜 اكتب *(الاوامر)* أو */menu* لعرض كافة الأقسام.\n` +
+                `📜 اكتب *(الاوامر)* أو *(منيو)* لعرض كافة الأقسام.\n` +
                 `📊 اكتب *(كام تنصيب)* لمتابعة حالة وتحكم جميع البوتات الفرعية عن بُعد!\n` +
                 `📢 *رابط البوت والقناة:* http://t.me/Shadowcom_bot`;
         } else {
             welcome = 
                 `👑 *أهلاً بك يا ${username} في شادو بوت (Shadow Bot)!* 🤖✨\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n` +
-                `البوت شغال بأعلى سرعة وذكاء على تليجرام بنفس الألعاب والمواقيت والداتابيز!\n\n` +
-                `📜 اكتب *(الاوامر)* أو */menu* لعرض القائمة الكاملة.\n` +
+                `البوت شغال بأعلى سرعة وذكاء على تليجرام بنفس أوامر وألعاب ومواقيت الواتساب!\n\n` +
+                `📜 اكتب *(الاوامر)* أو *(منيو)* لعرض القائمة الكاملة.\n` +
                 `🤖 اكتب *(تنصيب)* لتنصيب بوتك الخاص مجاناً.\n` +
-                `🎮 اكتب *(صراحه)* أو *(عين)* أو *(كتكوت)* لبدء الألعاب.\n` +
+                `🎮 اكتب *(صراحه)* أو *(عين)* أو *(كورة)* لبدء الألعاب.\n` +
                 `🕌 اكتب *(مواقيت الصلاة)* لمعرفة مواعيد الصلاة والأذان.\n` +
                 `🎁 هدية تسجيلك: تم إضافة *1000* نقطة مجانية في رصيدك!\n` +
                 `📢 *رابط البوت:* http://t.me/Shadowcom_bot`;
@@ -460,57 +482,67 @@ async function handleTelegramMessage(token, msg) {
     }
 
     // =========================================================================
-    // 📜 2️⃣ قائمة الأوامر الكاملة (/menu أو الاوامر)
+    // 📜 2️⃣ قائمة الأوامر والمنيو والأقسام (مطابقة تماماً للواتساب 100%)
     // =========================================================================
-    if (['/menu', 'menu', 'اوامر', 'الاوامر', 'القائمة', 'قائمة'].includes(textLower) || text === '/help') {
-        const ownerTag = isHajjShado ? '👑 الحج شادو الأصلي' : `👤 ${username}`;
-        const menuMsg = 
-            `╭━━━〔 👑 *قائمة أوامر شادو بوت الشاملة* 〕━━━╮\n` +
-            `┃ 🤖 المستخدم: ${ownerTag}\n` +
-            `┃ 💰 نقاطك: ${userData.points || 0} نقطة | اللفل: ${userData.level || 1}\n` +
-            `┃ ⚡ المنصة: تليجرام + واتساب موحد 🌐\n` +
-            `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
-            `🕌 *[ 1️⃣ القسم الإسلامي والمواقيت ]*\n` +
-            `• *مواقيت الصلاة* ➔ عرض مواعيد الصلاة الحالية في مصر 🇪🇬\n` +
-            `• *اذكار* ➔ باقة من أذكار الصباح والمساء والاستغفار\n` +
-            `• *قران* ➔ آية قرآنية كريمة مريحة للقلب\n` +
-            `• *حديث* ➔ حديث نبوي شريف صحيح\n` +
-            `• *تسبيح* ➔ ذكر واستغفار مأثور\n\n` +
-            `🎮 *[ 2️⃣ قسم الألعاب والمسابقات (كسب نقاط) ]*\n` +
-            `• *عين* ➔ لعبة حزر فزر للأذكياء (+500 نقطة) 👁️\n` +
-            `• *كتكوت* ➔ سؤال سرعة بديهة خفيف (+500 نقطة) 🐣\n` +
-            `• *عواصم* ➔ مسابقة عواصم الدول العربية والعالمية 🗺️\n` +
-            `• *احسب* ➔ مسألة رياضية ذكية وسريعة 🔢\n` +
-            `• *دين* ➔ سؤال وجواب إسلامي ديني 🕌\n` +
-            `• *صراحه* ➔ أسئلة صراحة محرجة وجريئة 🔥\n` +
-            `• *لو خيروك* ➔ لعبة التحديات والاختيارات الصعبة 🤔\n` +
-            `• *روليت* ➔ لعبة الروليت بالنقاط والمخاطرة 🎲\n\n` +
-            `📊 *[ 3️⃣ قسم البنك والنقاط واللفل ]*\n` +
-            `• *نقاطي* / *رصيدي* ➔ فحص رصيدك الحالي واللقب\n` +
-            `• *لفلي* / *مستواي* ➔ رتبتك ومستواك في البوت\n` +
-            `• *توب* ➔ قائمة أثرى وأقوى 10 لاعبين بالبوت 🏆\n` +
-            `• *راتب* / *يومي* ➔ مكافأة يومية مجانية 500 نقطة 🎁\n` +
-            `• *تحويل <العدد>* ➔ بالرد على رسالة صديقك لتحويل نقاط له\n\n` +
-            `🛡️ *[ 4️⃣ قسم إدارة المجموعات والإشراف ]*\n` +
-            `• *طرد* ➔ بالرد على العضو لطرده من المجموعة 🚫\n` +
-            `• *كتم* ➔ بالرد على العضو لمنعه من التحدث 🔇\n` +
-            `• *فك كتم* ➔ بالرد على العضو لفك كتمه 🔊\n` +
-            `• *نام* ➔ تنويم البوت عن العامة في هذا الشات 💤\n` +
-            `• *اصحي* ➔ استيقاظ البوت للجميع ⚡\n` +
-            `• *اسكت* ➔ صمت تام للبوت 🤫\n` +
-            `• *اتكلم* ➔ عودة التحدث 🗣️\n\n` +
-            `🤖 *[ 5️⃣ قسم التنصيب والبوتات الفرعية ]*\n` +
-            `• *تنصيب* ➔ تنصيب واستخراج كود اقتران بوتك الخاص مجاناً 🚀\n` +
-            `• *تنصيب <رقم_البوت> <اسم_البوت>* ➔ تنصيب فوري بخطوة واحدة\n` +
-            `• *كام تنصيب* ➔ لوحة تحكم ومتابعة جميع البوتات الفرعية 👑\n` +
-            `• *ايقاف تنصيب <رقم_البوت>* ➔ إيقاف بوت فرعي عن بُعد 🛑\n` +
-            `• *تشغيل تنصيب <رقم_البوت>* ➔ تشغيل بوت فرعي عن بُعد ⚡\n` +
-            `• *حذف تنصيب <رقم_البوت>* ➔ حذف بوت فرعي نهائياً 🗑️\n` +
-            `• *حذف جلسة الرئيسي* ➔ مسح الجلسة القديمة المحظورة (للحج شادو) 🧹\n` +
-            `• *ربط الرئيسي <رقم>* ➔ تعيين رقم جديد للرئيسي وطلب الكود (للحج شادو) 📱\n\n` +
-            `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy) ⚡\n` +
-            `📢 *قناة وبوت شادو الرسمية:* http://t.me/Shadowcom_bot`;
-        await sendTelegramMessage(token, chatId, menuMsg, { replyTo: msg.message_id });
+    const isMenuCmd = ['/menu', 'menu', 'اوامر', 'الاوامر', 'القائمة', 'قائمة', 'منيو', 'المنيو', '/help'].includes(textLower) || ['اوامر', 'الاوامر', 'منيو', 'المنيو'].includes(normalizedBody);
+    if (isMenuCmd) {
+        const menuText = getMenuSection(0, 'شادو');
+        await sendTelegramMessage(token, chatId, menuText, { replyTo: msg.message_id });
+        return;
+    }
+
+    // اختيار الأقسام بالأرقام أو أسمائها (1 إلى 9 أو الكل)
+    let selectedSection = null;
+    if (/^(1|قسم\s*1)$/.test(normalizedBody) || ['الالعاب', 'الألعاب', 'قسم الألعاب', 'قسم الالعاب'].includes(normalizedBody)) {
+        selectedSection = 1;
+    } else if (/^(2|قسم\s*2)$/.test(normalizedBody) || ['البروفايل', 'النقاط', 'قسم البروفايل', 'قسم النقاط'].includes(normalizedBody)) {
+        selectedSection = 2;
+    } else if (/^(3|قسم\s*3)$/.test(normalizedBody) || ['الجروب', 'الاشراف', 'الإشراف', 'قسم الجروب', 'قسم الاشراف'].includes(normalizedBody)) {
+        selectedSection = 3;
+    } else if (/^(4|قسم\s*4)$/.test(normalizedBody) || ['التنبيهات', 'الانذارات', 'الإنذارات', 'قسم التنبيهات'].includes(normalizedBody)) {
+        selectedSection = 4;
+    } else if (/^(5|قسم\s*5)$/.test(normalizedBody) || ['التنصيب', 'البوتات الفرعية', 'قسم التنصيب'].includes(normalizedBody)) {
+        selectedSection = 5;
+    } else if (/^(6|قسم\s*6)$/.test(normalizedBody) || ['الحج', 'المالك', 'اوامر الحج', 'قسم الحج', 'قسم المالك'].includes(normalizedBody)) {
+        selectedSection = 6;
+    } else if (/^(7|قسم\s*7)$/.test(normalizedBody) || ['الميديا', 'الصوتيات', 'الملصقات', 'قسم الميديا'].includes(normalizedBody)) {
+        selectedSection = 7;
+    } else if (/^(8|قسم\s*8)$/.test(normalizedBody) || ['الردود', 'الدردشة', 'قسم الردود'].includes(normalizedBody)) {
+        selectedSection = 8;
+    } else if (/^(9|قسم\s*9)$/.test(normalizedBody) || ['القناة', 'القناه', 'قناة', 'قناه', 'قناة المطور', 'قناه المطور'].includes(normalizedBody)) {
+        selectedSection = 9;
+    } else if (['الكل', 'كل الاوامر', 'كل الأوامر', 'قائمة الكل'].includes(normalizedBody)) {
+        selectedSection = 'all';
+    }
+
+    if (selectedSection !== null) {
+        const secText = getMenuSection(selectedSection, 'شادو');
+        if (secText) {
+            await sendTelegramMessage(token, chatId, secText, { replyTo: msg.message_id });
+            return;
+        }
+    }
+
+    // =========================================================================
+    // 🔄 أمر التحديث السحابي التلقائي (تحديث / ابديت)
+    // =========================================================================
+    if (['تحديث', 'ابديت', 'update', '/update', 'تحديث البوت'].includes(normalizedBody)) {
+        await sendTelegramMessage(token, chatId, `🔄 *جاري سحب وتثبيت آخر تحديثات شادو بوت من GitHub... برجاء الانتظار!* 🚀`, { replyTo: msg.message_id });
+        try {
+            const { exec } = await import('child_process');
+            exec('git pull origin main', async (err, stdout, stderr) => {
+                if (err) {
+                    await sendTelegramMessage(token, chatId, `❌ فشل سحب التحديث:\n\`${err.message}\``);
+                    return;
+                }
+                await sendTelegramMessage(token, chatId, `✅ *تم تحديث شادو بوت بنجاح!* 🎉\n\`${stdout || 'Already up to date.'}\`\n🔄 جاري إعادة تشغيل السيرفر لتطبيق التعديلات...`);
+                setTimeout(() => {
+                    process.exit(0);
+                }, 1500);
+            });
+        } catch (e) {
+            await sendTelegramMessage(token, chatId, `❌ خطأ في أمر التحديث: ${e?.message || e}`);
+        }
         return;
     }
 
@@ -518,17 +550,12 @@ async function handleTelegramMessage(token, msg) {
     // 🤖 3️⃣ أوامر إدارة البوتات الفرعية والتنصيب
     // =========================================================================
     if (['كام تنصيب', 'كم تنصيب', 'كام بوت', 'لوحة التنصيب', 'قائمة التنصيب'].includes(normalizedBody)) {
-        if (!isHajjShado) {
-            await sendTelegramMessage(token, chatId, `❌ عذراً يا فنان! هذا الأمر مخصص حصرياً للمطور الأصلي (الحج شادو @Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
-            return;
-        }
-
         const rep = getSubBotsReport();
         const dashText = 
             `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية على تليجرام* 〕━━━╮\n` +
             `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
             `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
-            `┃ 🛑 *البوتات المتوقفة:* ${rep.stoppedCount}\n` +
+            `┃ 🛑 *البوتات المتوقفة والمحظورة:* ${rep.stoppedCount}\n` +
             `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
             `${rep.listText}\n\n` +
             `⚙️ *أوامر التحكم السريع عن بُعد:* \n` +
@@ -930,6 +957,110 @@ async function handleTelegramMessage(token, msg) {
         return;
     }
 
+    // لعبة كورة (تخمين لاعب من الإيموجي والمعلومات)
+    if (['كورة', 'كوره', 'لاعب', 'كوره قدم', 'كورة قدم'].includes(normalizedBody)) {
+        if (activeTelegramGames.has(chatId)) {
+            await sendTelegramMessage(token, chatId, `⚠️ هناك مسابقة نشطة بالفعل في هذا الشات! جاوب عليها أو اكتب (انسحاب).`, { replyTo: msg.message_id });
+            return;
+        }
+        const players = [
+            { q: '🇦🇷 🔟 🐐 ⚽ نادي إنتر ميامي', a: 'ميسي', hint: 'البرغوث الأرجنتيني' },
+            { q: '🇵🇹 7️⃣ 👑 ⚽ نادي النصر السعودي', a: 'رونالدو', hint: 'صاروخ ماديرا الدون' },
+            { q: '🇪🇬 1️⃣1️⃣ 👑 ⚽ نادي ليفربول', a: 'محمد صلاح', hint: 'فخر العرب والملك المصري' },
+            { q: '🇧🇷 🔟 🪄 ⚽ نادي الهلال السعودي', a: 'نيمار', hint: 'ساحر السامبا' },
+            { q: '🇫🇷 9️⃣ ⚽ نادي ريال مدريد', a: 'مبابي', hint: 'القطار الفرنسي السريع' },
+            { q: '🇧🇪 1️⃣7️⃣ 🎯 ⚽ نادي مانشستر سيتي', a: 'دي بروين', hint: 'مهندس التمريرات الحاسمة' },
+            { q: '🇳🇴 9️⃣ 🤖 ⚽ نادي مانشستر سيتي', a: 'هالاند', hint: 'الوحش النرويجي الهداف' },
+            { q: '🇩🇿 7️⃣ ⚽ نادي الأهلي السعودي', a: 'رياض محرز', hint: 'ساحر الجزائر ومحرز الأهداف' },
+            { q: '🇪🇸 1️⃣9️⃣ ⚽ نادي برشلونة', a: 'لامين يامال', hint: 'الموهبة الإسبانية الصاعدة' }
+        ];
+        const chosen = players[Math.floor(Math.random() * players.length)];
+        const timer = setTimeout(async () => {
+            if (activeTelegramGames.has(chatId)) {
+                activeTelegramGames.delete(chatId);
+                await sendTelegramMessage(token, chatId, `⏰ *انتهى الوقت!* محدش عرف اللاعب ⚽\n💡 اللاعب هو: *[ ${chosen.a} ]*`);
+            }
+        }, 60000);
+        activeTelegramGames.set(chatId, { answer: chosen.a, hint: chosen.hint, reward: 500, timer });
+        await sendTelegramMessage(token, chatId, `⚽ *لعبة خمن اللاعب من الإيموجي والمعلومات:* ⚽\n\n${chosen.q}\n\n💡 اكتب اسم اللاعب فوراً! (+500 نقطة) ⚡\n_معك دقيقة واحدة للإجابة أو اكتب (تلميح) أو (انسحاب)._`, { replyTo: msg.message_id });
+        return;
+    }
+
+    // لعبة أفلام (تخمين الفيلم من القصة والإيموجي)
+    if (['افلام', 'فيلم', 'أفلام', 'سينما'].includes(normalizedBody)) {
+        if (activeTelegramGames.has(chatId)) {
+            await sendTelegramMessage(token, chatId, `⚠️ هناك مسابقة نشطة بالفعل في هذا الشات! جاوب عليها أو اكتب (انسحاب).`, { replyTo: msg.message_id });
+            return;
+        }
+        const movies = [
+            { q: '🚢 ❄️ 💔 🌊 غرق سفينة عملاقة في المحيط الأطلسي وقصة حب جاك وروز الشهيرة', a: 'تيتانيك', hint: 'سفينة الأحلام التي لا تغرق' },
+            { q: '🦁 👑 🌅 🐗 شبل صغير يموت والده الملك ويهرب ثم يعود لاستعادة مملكته', a: 'الاسد الملك', hint: 'سيمبا وموفاسا' },
+            { q: '🦇 🃏 🏙️ 🤡 بطل الليل المقنع يواجه الجوكر الشرير في مدينة جوثام', a: 'باتمان', hint: 'فارس الظلام (Dark Knight)' },
+            { q: '🧙‍♂️ 💍 🌋 🧝‍♂️ هوبيت صغير يذهب في رحلة ملحمية لتدمير الخاتم الأوحد في جبل الهلاك', a: 'سيد الخواتم', hint: 'Lord of the Rings (فرودو)' },
+            { q: '🕷️ 🧑‍🎓 🕸️ 🏙️ طالب ثانوي تلدغه عنكبوت معدلة جينياً فيكتسب قوى خارقة لإنقاذ المدينة', a: 'سبايدرمان', hint: 'بيتر باركر والرجل العنكبوت' },
+            { q: '🪄 👓 ⚡ 🏰 فتى يتيم يكتشف أنه ساحر ويذهب للدراسة في مدرسة هوجوورتس للسحر', a: 'هاري بوتر', hint: 'الولد صاحب الندبة على جبينه' }
+        ];
+        const chosen = movies[Math.floor(Math.random() * movies.length)];
+        const timer = setTimeout(async () => {
+            if (activeTelegramGames.has(chatId)) {
+                activeTelegramGames.delete(chatId);
+                await sendTelegramMessage(token, chatId, `⏰ *انتهى الوقت!* محدش عرف الفيلم 🎬\n💡 الفيلم هو: *[ ${chosen.a} ]*`);
+            }
+        }, 60000);
+        activeTelegramGames.set(chatId, { answer: chosen.a, hint: chosen.hint, reward: 500, timer });
+        await sendTelegramMessage(token, chatId, `🎬 *لعبة خمن اسم الفيلم من القصة والإيموجي:* 🍿\n\n${chosen.q}\n\n💡 اكتب اسم الفيلم فوراً! (+500 نقطة) ⚡\n_معك دقيقة واحدة للإجابة أو اكتب (تلميح) أو (انسحاب)._`, { replyTo: msg.message_id });
+        return;
+    }
+
+    // لعبة رتب حروف الكلمة
+    if (['رتب', 'ترتيب'].includes(normalizedBody)) {
+        if (activeTelegramGames.has(chatId)) {
+            await sendTelegramMessage(token, chatId, `⚠️ هناك مسابقة نشطة بالفعل في هذا الشات! جاوب عليها أو اكتب (انسحاب).`, { replyTo: msg.message_id });
+            return;
+        }
+        const words = [
+            { original: 'كمبيوتر', scrambled: 'ر ي ت و ب م ك', hint: 'جهاز حاسوب مكتبي' },
+            { original: 'فلسطين', scrambled: 'ن ي ط س ل ف', hint: 'دولة عربية حرة وعاصمتها القدس الشريف' },
+            { original: 'مستشفى', scrambled: 'ى ف ش ت س م', hint: 'مكان علاج وفحص المرضى' },
+            { original: 'برشلونة', scrambled: 'ة ن و ل ش ر ب', hint: 'نادي كروي إسباني كتالوني شهير' },
+            { original: 'شوكولاتة', scrambled: 'ة ت ل و ك و ش', hint: 'حلوى لذيذة تصنع من حبوب الكاكاو' },
+            { original: 'طائرة', scrambled: 'ة ر ئ ا ط', hint: 'وسيلة نقل تطير بين السحاب' },
+            { original: 'مكتبة', scrambled: 'ة ب ت ك م', hint: 'مكان حفظ وقراءة واستعارة الكتب' }
+        ];
+        const chosen = words[Math.floor(Math.random() * words.length)];
+        const timer = setTimeout(async () => {
+            if (activeTelegramGames.has(chatId)) {
+                activeTelegramGames.delete(chatId);
+                await sendTelegramMessage(token, chatId, `⏰ *انتهى الوقت!* 😴\n💡 الكلمة المرتبة الصحيحة هي: *[ ${chosen.original} ]*`);
+            }
+        }, 60000);
+        activeTelegramGames.set(chatId, { answer: chosen.original, hint: chosen.hint, reward: 500, timer });
+        await sendTelegramMessage(token, chatId, `🔤 *لعبة رتب حروف الكلمة:* 🧩\n\nالحروف المبعثرة: *[ ${chosen.scrambled} ]*\n\n💡 اكتب الكلمة الصحيحة مرتبة فوراً! (+500 نقطة) ⚡`, { replyTo: msg.message_id });
+        return;
+    }
+
+    // لعبة بازل
+    if (['بازل', 'البازل'].includes(normalizedBody)) {
+        await sendTelegramMessage(token, chatId, `🧩 *لعبة البازل الذكية (ترتيب الأرقام):*\n\n1️⃣ 2️⃣ 3️⃣\n4️⃣ 5️⃣ 6️⃣\n7️⃣ 8️⃣ ⬜\n\n🎯 الهدف: ترتيب الأرقام من 1 إلى 8 بذكاء!\nاكتب *(فوق)* أو *(تحت)* أو *(يمين)* أو *(شمال)* لتحريك المربع الفارغ.\nاكتب *(استسلام بازل)* للخروج.`);
+        return;
+    }
+
+    // لعبة وشرح بكاسة
+    if (['بكاسة', 'بكاسه', 'بكاسة شرح', 'شرح بكاسة'].includes(normalizedBody)) {
+        const bakasaExplain = 
+            `🕵️‍♂️ *شرح لعبة بكاسة (الحرامي والمواطنين):* 🎭\n\n` +
+            `📌 *فكرة اللعبة:* لعبة غموض وخداع ذكية بين المواطنين وحرامي متخفي بينهم!\n\n` +
+            `🔹 *طريقة اللعب:*\n` +
+            `1️⃣ البوت بيختار كلمة سرية لكل المواطنين في الخاص، ما عدا الحرامي مش هيعرفها!\n` +
+            `2️⃣ كل لاعب بيسأل سؤال تلميحي ذكي للطرف التاني بدون ما يكشف الكلمة للحرامي.\n` +
+            `3️⃣ لما تخلصوا النقاش، بيبدأ التصويت على مين الحرامي!\n` +
+            `4️⃣ الحرامي بيحاول يخمن الكلمة من اختيارات.\n\n` +
+            `🪙 المصوت الصح يكسب 100 نقطة، والحرامي لو خمن صح يكسب 100 نقطة! 🏆\n` +
+            `✨ العبها في الجروب مع أصحابك واستمتع!`;
+        await sendTelegramMessage(token, chatId, bakasaExplain, { replyTo: msg.message_id });
+        return;
+    }
+
     // =========================================================================
     // 💰 5️⃣ قسم النقاط والبنك واللفلات
     // =========================================================================
@@ -1017,6 +1148,179 @@ async function handleTelegramMessage(token, msg) {
         saveLocalDB(localDB);
 
         await sendTelegramMessage(token, chatId, `👑🕋 *أمر ملكي سامي من الحج شادو:* \nتم منح العضو @${replyUser.username || replyUser.first_name} عدد *${amount}* نقطة بنجاح! 🎉\nرصيده الجديد: [ *${localDB.users[targetKey].points}* ] نقطة.`, { replyTo: msg.message_id });
+        return;
+    }
+
+    // إعطاء فلوس لا نهائي (للحج شادو فقط)
+    if (normalizedBody.includes('لا نهائي') || normalizedBody.includes('لانهايي') || normalizedBody.includes('فلوس لا نهائي')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
+            return;
+        }
+        const replyUser = msg.reply_to_message?.from;
+        const targetId = replyUser ? replyUser.id : fromId;
+        const targetName = replyUser ? (replyUser.username ? `@${replyUser.username}` : replyUser.first_name) : `@${fromUsername || username}`;
+        const targetKey = `tg_${targetId}`;
+        if (!localDB.users[targetKey]) {
+            localDB.users[targetKey] = { name: targetName, points: 0, level: 1 };
+        }
+        localDB.users[targetKey].points = 999999999999;
+        localDB.users[targetKey].level = 999;
+        localDB.users[targetKey].isInfinite = true;
+        saveLocalDB(localDB);
+
+        await sendTelegramMessage(token, chatId, `👑 *أمر ملكي من الحج الأصلي:*\n✅ تم منح رصيد نقاط [ ♾️ لا نهائي ] ومستوى 999 إلى ${targetName} بنجاح! 👑🎉`, { replyTo: msg.message_id });
+        return;
+    }
+
+    // سحب نقاط (للحج شادو فقط)
+    if (normalizedBody.startsWith('سحب نقاط ') || normalizedBody.startsWith('سحب ')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ أمر السحب مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
+            return;
+        }
+        const amount = parseInt(text.replace(/[^0-9]/g, ''), 10);
+        const replyUser = msg.reply_to_message?.from;
+        if (!replyUser || !amount) {
+            await sendTelegramMessage(token, chatId, `⚠️ رد على رسالة الشخص واكتب: سحب نقاط <العدد>`, { replyTo: msg.message_id });
+            return;
+        }
+        const targetKey = `tg_${replyUser.id}`;
+        if (localDB.users[targetKey]) {
+            localDB.users[targetKey].points = Math.max(0, (localDB.users[targetKey].points || 0) - amount);
+            saveLocalDB(localDB);
+            await sendTelegramMessage(token, chatId, `🛑 تم سحب *${amount}* نقطة من @${replyUser.username || replyUser.first_name} بنجاح!`, { replyTo: msg.message_id });
+        }
+        return;
+    }
+
+    // أمر سجل (تسجيل البروفايل)
+    if (normalizedBody.startsWith('سجل ') || normalizedBody === 'سجل') {
+        const parts = text.replace(/^سجل\s*/i, '').trim().split(/\s+/);
+        const regName = parts[0] || username;
+        const regAge = parts[1] || '20';
+        userData.name = regName;
+        userData.age = regAge;
+        userData.hasRegistered = true;
+        saveLocalDB(localDB);
+        await sendTelegramMessage(token, chatId, `✅ *تم تسجيل بياناتك بنجاح يا ${regName}!* 🪪\n• الاسم: ${regName}\n• السن: ${regAge}\n• رصيدك: ${userData.points} نقطة\nاكتب *(بروفايل)* لعرض بطاقتك الشخصية في أي وقت!`, { replyTo: msg.message_id });
+        return;
+    }
+
+    // أمر بروفايل / بطاقتي
+    if (['بروفايل', 'بطاقتي', 'بروفايلي', 'حسابي'].includes(normalizedBody)) {
+        const isMaster = isHajjShado;
+        const profileMsg = 
+            `╭━━━〔 🪪 *بطاقة البروفايل الشخصي* 〕━━━╮\n` +
+            `┃ 👤 *الاسم:* ${userData.name || username}\n` +
+            `┃ 🎂 *السن:* ${userData.age || 'غير محدد'}\n` +
+            `┃ 👑 *الرتبة:* ${isMaster ? '👑 الحج شادو الأصلي' : '🌱 عضو في شادو بوت'}\n` +
+            `┃ 🪙 *النقاط:* ${isMaster ? '♾️ لا نهائي' : (userData.points || 0)}\n` +
+            `┃ 🏆 *المستوى:* ${isMaster ? '999' : (userData.level || 1)}\n` +
+            `┃ 🆔 *الآيدي:* \`${fromId}\`\n` +
+            `┃ 📅 *تاريخ الانضمام:* ${userData.joinedAt || 'اليوم'}\n` +
+            `╰━━━━━━━━━━━━━━━━━━━━╯`;
+        await sendTelegramMessage(token, chatId, profileMsg, { replyTo: msg.message_id });
+        return;
+    }
+
+    // أوامر قفل وفتح الشات في الجروبات
+    if (['قفل', 'قفل الروم', 'قفل الشات', '/lock'].includes(normalizedBody)) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const locked = await telegramAction(token, 'setChatPermissions', {
+            chat_id: chatId,
+            permissions: { can_send_messages: false }
+        });
+        if (locked) {
+            await sendTelegramMessage(token, chatId, `🔒 *تم قفل إرسال الرسائل في المجموعة بنجاح للأعضاء!* 🛑\nلإعادة الفتح اكتب: *(فتح)*.`);
+        } else {
+            await sendTelegramMessage(token, chatId, `❌ تعذر قفل المجموعة، تأكد من رفع البوت أدمن ولديه صلاحيات إدارة الشات!`);
+        }
+        return;
+    }
+
+    if (['فتح', 'فتح الروم', 'فتح الشات', '/unlock'].includes(normalizedBody)) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const unlocked = await telegramAction(token, 'setChatPermissions', {
+            chat_id: chatId,
+            permissions: { 
+                can_send_messages: true,
+                can_send_media_messages: true,
+                can_send_other_messages: true,
+                can_add_web_page_previews: true
+            }
+        });
+        if (unlocked) {
+            await sendTelegramMessage(token, chatId, `🔓 *تم فتح الشات لجميع الأعضاء بنجاح!* يمكن للجميع التحدث الآن بحرية. 🎉`);
+        } else {
+            await sendTelegramMessage(token, chatId, `❌ تعذر فتح المجموعة، تأكد من صلاحيات البوت الإدارية!`);
+        }
+        return;
+    }
+
+    // أمر رابط الجروب / لينك
+    if (['رابط الجروب', 'لينك الجروب', 'لينك', 'رابط'].includes(normalizedBody)) {
+        try {
+            const res = await axios.post(`https://api.telegram.org/bot${token}/exportChatInviteLink`, { chat_id: chatId });
+            if (res.data?.ok && res.data?.result) {
+                await sendTelegramMessage(token, chatId, `🔗 *رابط دعوة المجموعة الرسمي:*\n${res.data.result}`);
+                return;
+            }
+        } catch (_) {}
+        await sendTelegramMessage(token, chatId, `⚠️ تعذر استخراج الرابط، تأكد من رفع البوت أدمن في المجموعة ولديه صلاحية دعوة المستخدمين!`);
+        return;
+    }
+
+    // أمر الأغاني (بحث يوتيوب)
+    if (normalizedBody.startsWith('اغنية ') || normalizedBody.startsWith('اغنيه ') || normalizedBody.startsWith('شغل ') || normalizedBody.startsWith('أغنية ')) {
+        const songQuery = text.replace(/^(اغنية|اغنيه|شغل|أغنية)\s*/i, '').trim();
+        if (!songQuery) {
+            await sendTelegramMessage(token, chatId, `⚠️ اكتب اسم الأغنية بعد الأمر، مثال:\n\`اغنية عمرو دياب يا انا يا لا\``, { replyTo: msg.message_id });
+            return;
+        }
+        const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(songQuery)}`;
+        const songMsg = 
+            `🎵 *نتائج البحث عن أغنية: [ ${songQuery} ]* 🎶\n\n` +
+            `🎧 *استمع الآن وشاهد عبر يوتيوب:*\n` +
+            `🔗 ${searchUrl}\n\n` +
+            `✨ استماع ممتع مع شادو بوت! 🤍`;
+        await sendTelegramMessage(token, chatId, songMsg, { replyTo: msg.message_id });
+        return;
+    }
+
+    // أمر قول (تكرار الكلام)
+    if (normalizedBody.startsWith('قول ') || normalizedBody.startsWith('قل ')) {
+        const toSay = text.replace(/^(قول|قل)\s*/i, '').trim();
+        if (toSay) {
+            await sendTelegramMessage(token, chatId, toSay);
+            return;
+        }
+    }
+
+    // أمر ابوك مين
+    if (['ابوك مين', 'أبوك مين', 'مين ابوك', 'مين أبوك'].includes(normalizedBody)) {
+        await sendTelegramMessage(token, chatId, `أبويا وصاحب فضل عليا هو الحج شادو بابا الكل 👑❤️`, { replyTo: msg.message_id });
+        return;
+    }
+
+    // أمر المطور
+    if (['المطور', 'مطور', 'المالك', 'صاحب البوت'].includes(normalizedBody)) {
+        const devMsg = 
+            `╭━━━〔 👑 *معلومات مطور ومالك شادو بوت* 〕━━━╮\n` +
+            `┃ 👤 *الاسم:* الحج شادو (Shado)\n` +
+            `┃ 📱 *رقم المطور:* +201129249396\n` +
+            `┃ 🌐 *يوزر تليجرام المباشر:* @Shadwwmy\n` +
+            `┃ 📢 *قناة وبوت شادو الرسمية:* http://t.me/Shadowcom_bot\n` +
+            `┃ 🟢 *قناة الواتساب الرسمية:* https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
+            `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+            `✨ للتنصيب أو الاستفسار تواصل مباشرة مع الحج شادو! ⚡`;
+        await sendTelegramMessage(token, chatId, devMsg, { replyTo: msg.message_id });
         return;
     }
 
