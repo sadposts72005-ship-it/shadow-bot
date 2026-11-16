@@ -993,24 +993,6 @@ const datelsHandler = {
 
             let localDB = loadLocalDB();
 
-            const ownerPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
-            const isAbsoluteOwner = (
-                ownerPhoneList.includes(cleanSenderNum) ||
-                cleanSenderNum === ownerPhone ||
-                cleanSenderNum === ownerLid ||
-                cleanSenderNum === ownerAltPhone ||
-                localDB.lidMap?.[cleanSenderNum] === ownerPhone ||
-                localDB.lidMap?.[cleanSenderNum] === ownerLid ||
-                ownerPhoneList.includes(localDB.lidMap?.[cleanSenderNum]) ||
-                (!isSubBot && ownerPhoneList.includes(myBotNum) && mek.key.fromMe)
-            );
-
-            // 🔇 فحص كتم العضو فوراً قبل استخراج النص لحذف جميع الرسائل والوسائط حرفياً (صور، ملصقات، صوت، ريكوردات، ملفات، إلخ)
-            if (isGroup && isUserMuted(sender, from, localDB) && !isAbsoluteOwner) {
-                currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
-                return true;
-            }
-
             // 👑 فحص صاحب البوت (سواء شادو الأصلي للبوت الرئيسي أو الحج صاحب البوت الفرعي)
             const isSubBot = Boolean(currentConn.isSubBot || currentConn.subBotConfig);
             const subCfg = currentConn.subBotConfig || {};
@@ -1042,6 +1024,24 @@ const datelsHandler = {
                         }
                     }
                 }
+            }
+
+            const ownerPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
+            const isAbsoluteOwner = (
+                ownerPhoneList.includes(cleanSenderNum) ||
+                cleanSenderNum === ownerPhone ||
+                cleanSenderNum === ownerLid ||
+                cleanSenderNum === ownerAltPhone ||
+                localDB.lidMap?.[cleanSenderNum] === ownerPhone ||
+                localDB.lidMap?.[cleanSenderNum] === ownerLid ||
+                ownerPhoneList.includes(localDB.lidMap?.[cleanSenderNum]) ||
+                (!isSubBot && ownerPhoneList.includes(myBotNum) && mek.key.fromMe)
+            );
+
+            // 🔇 فحص كتم العضو فوراً قبل استخراج النص لحذف جميع الرسائل والوسائط حرفياً (صور، ملصقات، صوت، ريكوردات، ملفات، إلخ)
+            if (isGroup && isUserMuted(sender, from, localDB) && !isAbsoluteOwner) {
+                currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
+                return true;
             }
 
             const isSubBotOwner = isSubBot && (
