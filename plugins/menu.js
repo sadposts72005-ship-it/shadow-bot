@@ -23,7 +23,8 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
     const footer = `\n─── 𖤐 ──── 𖤐 ───\n` +
                    `↩️ *للرجوع للقائمة الرئيسية:* أرسل (منيو)\n` +
                    `💡 *للتنقل المباشر:* أرسل رقم القسم (1 - 9)\n` +
-                   `📢 *قناة المطور:* https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F`;
+                   `📢 *قناة الواتساب:* https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
+                   `🌐 *تليجرام البوت والقناة:* http://t.me/Shadowcom_bot`;
 
     // القائمة الرئيسية المرقمة بالأقسام
     if (!section || section === 0 || section === 'main') {
@@ -234,10 +235,13 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
     // 9. قسم قناة المطور
     if (section === 9 || section === '9' || section === 'channel' || section === 'قناة' || section === 'قناه') {
         return header +
-               `📢 *[ 9️⃣ قناة المطور الرسمية ]* 📢\n\n` +
-               `تابع كافة التحديثات، المميزات الجديدة، الإعلانات وشروحات البوت الحصرية عبر قناة الواتساب الرسمية:\n\n` +
-               `🔗 *رابط الانضمام للقناة مباشرة:*\n` +
+               `📢 *[ 9️⃣ قناة المطور وبوت تليجرام الرسمي ]* 📢\n\n` +
+               `تابع كافة التحديثات، المميزات الجديدة، الإعلانات وشروحات البوت الحصرية عبر قنواتنا الرسمية:\n\n` +
+               `🟢 *قناة الواتساب الرسمية:*\n` +
                `https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
+               `🔵 *بوت وقناة تليجرام الرسمية:*\n` +
+               `http://t.me/Shadowcom_bot\n\n` +
+               `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy)\n\n` +
                `✨ نتشرف بوجودكم معنا دائماً! ❤️` +
                footer;
     }
@@ -261,8 +265,9 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                `• استيكر (مع حقوق Shado Bot) | استيكر حقوق [اسمك] | سرقة وتعديل حقوق ستيكر | اغنية / شغل | انطق | صوره | بروف [صورة البروفايل] | كشف [كشف View-Once]\n\n` +
                `💬 *[ الردود السريعة والدردشة ]* ➔ أرسل *8*\n` +
                `• قول | ${botName} / بوت | ابوك مين | ردود الشتائم للبوت قليل الأدب | بموت | حصل | خلصانه | اتصل بمين\n\n` +
-               `📢 *[ قناة المطور الرسمية ]* ➔ أرسل *9*\n` +
-               `• https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F` +
+               `📢 *[ قناة المطور الرسمية وتليجرام ]* ➔ أرسل *9*\n` +
+               `• واتساب: https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
+               `• تليجرام: http://t.me/Shadowcom_bot\n` +
                footer;
     }
 

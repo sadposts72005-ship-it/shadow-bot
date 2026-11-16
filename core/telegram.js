@@ -5,7 +5,8 @@ import {
     stopSubBot, 
     startSubBotRemote, 
     deleteSubBotRemote,
-    cleanPhoneNumber 
+    cleanPhoneNumber,
+    requestSubBotPairing
 } from './subbot.js';
 
 let isPolling = false;
@@ -14,8 +15,9 @@ let currentBotInfo = null;
 let telegramStartTime = 0;
 let lastUpdateId = 0;
 
-// 🎮 إدارة الجلسات والألعاب النشطة في المجموعات والخاص
+// 🎮 إدارة الجلسات والألعاب والتنصيب النشطة
 const activeTelegramGames = new Map();
+const telegramInstallState = new Map();
 const chatSleepMap = new Map();
 const chatMuteMap = new Map();
 
@@ -271,6 +273,123 @@ async function handleTelegramMessage(token, msg) {
     }
 
     // =========================================================================
+    // 🤖 محرك التنصيب التفاعلي للبوتات الفرعية عبر تليجرام (خطوة بخطوة)
+    // =========================================================================
+    if (telegramInstallState.has(chatId)) {
+        const installSession = telegramInstallState.get(chatId);
+
+        // خيار الإلغاء
+        if (['الغاء', 'إلغاء', 'انهاء', 'خروج', '/cancel'].includes(normalizedBody)) {
+            if (installSession.timer) clearTimeout(installSession.timer);
+            telegramInstallState.delete(chatId);
+            await sendTelegramMessage(token, chatId, `✅ *تم إلغاء عملية التنصيب بنجاح.* يمكنك البدء من جديد بكتابة *(تنصيب)* في أي وقت!`, { replyTo: msg.message_id });
+            return;
+        }
+
+        // الخطوة 1: استلام والتحقق من رقم الهاتف
+        if (installSession.step === 1) {
+            const rawDigits = text.replace(/[^0-9]/g, '');
+            const cleanPhone = cleanPhoneNumber(rawDigits);
+            if (!cleanPhone || cleanPhone.length < 10 || cleanPhone.length > 13) {
+                await sendTelegramMessage(token, chatId, `❌ *رقم الهاتف غير صالح (+${rawDigits})!* \nبرجاء إرسال رقم هاتف واتساب بالأرقام مع كود الدولة (مثال: \`201012345678\` أو \`9647901234567\`). \n💡 _اكتب (الغاء) للتراجع._`, { replyTo: msg.message_id });
+                return;
+            }
+
+            installSession.targetPhone = cleanPhone;
+            installSession.step = 2;
+            const step2Msg = 
+                `✅ تم تسجيل رقم الهاتف: *+${cleanPhone}* 📱\n\n` +
+                `🏷️ *الخطوة 2 من 4:* \n` +
+                `ما هو *الاسم الرسمي* الذي تريده لبوتك؟ \n` +
+                `(مثال: \`شادو بوت\`، \`بوت القيصر\`، \`العالمي\`):`;
+            await sendTelegramMessage(token, chatId, step2Msg, { replyTo: msg.message_id });
+            return;
+        }
+
+        // الخطوة 2: الاسم الرسمي للبوت
+        if (installSession.step === 2) {
+            const bName = text.trim();
+            if (!bName || bName.length < 2) {
+                await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة اسم واضح للبوت (حرفين على الأقل)!`, { replyTo: msg.message_id });
+                return;
+            }
+
+            installSession.botName = bName;
+            installSession.step = 3;
+            const step3Msg = 
+                `✅ تم تسجيل الاسم: *${bName}* 🏷️\n\n` +
+                `🗣️ *الخطوة 3 من 4:* \n` +
+                `ما هو *اسم النداء السهل* الذي تريد أن تنده عليه به في الشات؟ \n` +
+                `(كلمة واحدة سهلة، مثال: \`شادو\` أو \`قيصر\`):`;
+            await sendTelegramMessage(token, chatId, step3Msg, { replyTo: msg.message_id });
+            return;
+        }
+
+        // الخطوة 3: اسم النداء
+        if (installSession.step === 3) {
+            const cName = text.trim();
+            if (!cName) {
+                await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة اسم نداء سهل!`, { replyTo: msg.message_id });
+                return;
+            }
+
+            installSession.callName = cName;
+            installSession.step = 4;
+            const step4Msg = 
+                `✅ تم تسجيل اسم النداء: *${cName}* 🗣️\n\n` +
+                `🎭 *الخطوة 4 من 4:* \n` +
+                `اختر شخصية البوت في الردود والتفاعل:\n` +
+                `1️⃣ *محترم ومؤدب* 😇🤍 (شخصية محترمة ولبقة وأخلاقية)\n` +
+                `2️⃣ *قليل الأدب* 😈🔥 (شخصية مشاكسة وجريئة وردود قوية)\n\n` +
+                `👉 _أرسل رقم (1) أو (2):_`;
+            await sendTelegramMessage(token, chatId, step4Msg, { replyTo: msg.message_id });
+            return;
+        }
+
+        // الخطوة 4: الشخصية وبدء طلب كود الربط
+        if (installSession.step === 4) {
+            let personality = 'respectful';
+            if (['2', 'قليل الادب', 'قليل أدب', 'مشاكس', 'توكسيك'].includes(normalizedBody)) {
+                personality = 'bad';
+            }
+
+            installSession.personality = personality;
+            if (installSession.timer) clearTimeout(installSession.timer);
+            telegramInstallState.delete(chatId);
+
+            const { targetPhone, botName, callName } = installSession;
+
+            await sendTelegramMessage(token, chatId, `⏳ *جاري الاتصال بخوادم واتساب وتوليد كود الاقتران لبوتك (${botName})... برجاء الانتظار ثوانٍ معدودة!* 🚀`);
+
+            // استدعاء محرك الاقتران مع موجه الرسائل لتليجرام
+            try {
+                const adminPhone = isHajjShado ? '201129249396' : targetPhone;
+                const adminLid = isHajjShado ? '194961618301016' : '';
+
+                await requestSubBotPairing(
+                    targetPhone,
+                    botName,
+                    callName,
+                    adminPhone,
+                    adminLid,
+                    'male',
+                    personality,
+                    global.conn,
+                    `tg:${chatId}`,
+                    null,
+                    async (notifyText) => {
+                        await sendTelegramMessage(token, chatId, notifyText);
+                    }
+                );
+            } catch (pairErr) {
+                console.error('❌ [Telegram Sub-Bot Pairing Error]:', pairErr);
+                await sendTelegramMessage(token, chatId, `❌ حدث خطأ أثناء محاولة طلب كود الاقتران: ${pairErr?.message || pairErr}`);
+            }
+            return;
+        }
+    }
+
+    // =========================================================================
     // 🎮 فحص ومطابقة إجابات الألعاب النشطة في الشات الحالي
     // =========================================================================
     if (activeTelegramGames.has(chatId)) {
@@ -322,16 +441,19 @@ async function handleTelegramMessage(token, msg) {
                 `📱 *معرفك الملكي:* @${fromUsername} (المتحكم المطلق)\n` +
                 `💎 *الرصيد والمستوى:* نقاط لا نهائية ولفل 999 👑\n\n` +
                 `📜 اكتب *(الاوامر)* أو */menu* لعرض كافة الأقسام.\n` +
-                `📊 اكتب *(كام تنصيب)* لمتابعة حالة وتحكم جميع البوتات الفرعية عن بُعد!`;
+                `📊 اكتب *(كام تنصيب)* لمتابعة حالة وتحكم جميع البوتات الفرعية عن بُعد!\n` +
+                `📢 *رابط البوت والقناة:* http://t.me/Shadowcom_bot`;
         } else {
             welcome = 
                 `👑 *أهلاً بك يا ${username} في شادو بوت (Shadow Bot)!* 🤖✨\n` +
                 `━━━━━━━━━━━━━━━━━━━━\n` +
                 `البوت شغال بأعلى سرعة وذكاء على تليجرام بنفس الألعاب والمواقيت والداتابيز!\n\n` +
                 `📜 اكتب *(الاوامر)* أو */menu* لعرض القائمة الكاملة.\n` +
+                `🤖 اكتب *(تنصيب)* لتنصيب بوتك الخاص مجاناً.\n` +
                 `🎮 اكتب *(صراحه)* أو *(عين)* أو *(كتكوت)* لبدء الألعاب.\n` +
                 `🕌 اكتب *(مواقيت الصلاة)* لمعرفة مواعيد الصلاة والأذان.\n` +
-                `🎁 هدية تسجيلك: تم إضافة *1000* نقطة مجانية في رصيدك!`;
+                `🎁 هدية تسجيلك: تم إضافة *1000* نقطة مجانية في رصيدك!\n` +
+                `📢 *رابط البوت:* http://t.me/Shadowcom_bot`;
         }
         await sendTelegramMessage(token, chatId, welcome, { replyTo: msg.message_id });
         return;
@@ -377,13 +499,17 @@ async function handleTelegramMessage(token, msg) {
             `• *اصحي* ➔ استيقاظ البوت للجميع ⚡\n` +
             `• *اسكت* ➔ صمت تام للبوت 🤫\n` +
             `• *اتكلم* ➔ عودة التحدث 🗣️\n\n` +
-            `🤖 *[ 5️⃣ قسم التنصيب والبوتات الفرعية (للحج شادو) ]*\n` +
-            `• *تنصيب* ➔ طريقة تنصيب بوتك الخاص مجاناً\n` +
+            `🤖 *[ 5️⃣ قسم التنصيب والبوتات الفرعية ]*\n` +
+            `• *تنصيب* ➔ تنصيب واستخراج كود اقتران بوتك الخاص مجاناً 🚀\n` +
+            `• *تنصيب <رقم_البوت> <اسم_البوت>* ➔ تنصيب فوري بخطوة واحدة\n` +
             `• *كام تنصيب* ➔ لوحة تحكم ومتابعة جميع البوتات الفرعية 👑\n` +
             `• *ايقاف تنصيب <رقم_البوت>* ➔ إيقاف بوت فرعي عن بُعد 🛑\n` +
             `• *تشغيل تنصيب <رقم_البوت>* ➔ تشغيل بوت فرعي عن بُعد ⚡\n` +
-            `• *حذف تنصيب <رقم_البوت>* ➔ حذف بوت فرعي نهائياً 🗑️\n\n` +
-            `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy) ⚡`;
+            `• *حذف تنصيب <رقم_البوت>* ➔ حذف بوت فرعي نهائياً 🗑️\n` +
+            `• *حذف جلسة الرئيسي* ➔ مسح الجلسة القديمة المحظورة (للحج شادو) 🧹\n` +
+            `• *ربط الرئيسي <رقم>* ➔ تعيين رقم جديد للرئيسي وطلب الكود (للحج شادو) 📱\n\n` +
+            `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy) ⚡\n` +
+            `📢 *قناة وبوت شادو الرسمية:* http://t.me/Shadowcom_bot`;
         await sendTelegramMessage(token, chatId, menuMsg, { replyTo: msg.message_id });
         return;
     }
@@ -459,16 +585,134 @@ async function handleTelegramMessage(token, msg) {
         return;
     }
 
-    // أمر تنصيب
-    if (['تنصيب', 'تنصيب بوت', 'بوت فرعي', 'كود التنصيب'].includes(normalizedBody)) {
-        const installText = 
-            `🤖 *تنصيب بوتك الخاص مجاناً عبر شادو بوت* 👑\n\n` +
-            `يمكنك إنشاء نسختك المستقلة من البوت باسمك وشخصيتك وبكامل الصلاحيات!\n\n` +
-            `💡 *للتنصيب أو حجز نسختك:*\n` +
-            `تواصل مباشرة مع المطور الأصلي الحج شادو على تليجرام:\n` +
-            `👉 @Shadwwmy\n\n` +
-            `⚡ البوتات الفرعية تعمل بكفاءة 24/7 دون أي انقطاع!`;
-        await sendTelegramMessage(token, chatId, installText, { replyTo: msg.message_id });
+    // أوامر الحج شادو لإدارة جلسة البوت الأساسي المحظورة وتغيير الرقم
+    if (['حذف جلسة الرئيسي', 'تنظيف جلسة الرئيسي', 'مسح الجلسة', 'حذف الجلسة', 'حذف_الجلسة'].includes(normalizedBody)) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للمطور الأصلي (الحج شادو @Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        try {
+            const fs = await import('fs');
+            const path = await import('path');
+            const sessionDir = path.join(process.cwd(), 'session_data');
+            if (fs.existsSync(sessionDir)) {
+                fs.rmSync(sessionDir, { recursive: true, force: true });
+            }
+            await sendTelegramMessage(token, chatId, `✅ *تم حذف ومسح بيانات جلسة البوت الأساسي (session_data) بنجاح يا حج شادو!* 🧹\nالآن يمكنك كتابة: *(ربط الرئيسي <رقم_الهاتف>)* لربط رقمك الجديد فوراً واستخراج كود الاقتران!`, { replyTo: msg.message_id });
+        } catch (e) {
+            await sendTelegramMessage(token, chatId, `❌ حدث خطأ أثناء حذف الجلسة: ${e?.message || e}`, { replyTo: msg.message_id });
+        }
+        return;
+    }
+
+    if (normalizedBody.startsWith('ربط الرئيسي ') || normalizedBody.startsWith('تغيير رقم الرئيسي ') || normalizedBody.startsWith('ربط اساسي ')) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للمطور الأصلي (الحج شادو @Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        const newPhone = text.replace(/^(ربط الرئيسي|تغيير رقم الرئيسي|ربط اساسي)\s*/i, '').replace(/[^0-9]/g, '');
+        if (!newPhone || newPhone.length < 10) {
+            await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم الهاتف الجديد مع كود الدولة، مثال:\n\`ربط الرئيسي 201012345678\``, { replyTo: msg.message_id });
+            return;
+        }
+
+        try {
+            const fs = await import('fs');
+            const path = await import('path');
+            // حفظ الرقم الجديد في bot_number.json
+            fs.writeFileSync(path.join(process.cwd(), 'bot_number.json'), JSON.stringify({ phone: newPhone }, null, 2), 'utf8');
+
+            // مسح الجلسة القديمة
+            const sessionDir = path.join(process.cwd(), 'session_data');
+            if (fs.existsSync(sessionDir)) {
+                fs.rmSync(sessionDir, { recursive: true, force: true });
+            }
+
+            // حفظ الـ chatId للحج شادو لاستقبال الكود
+            const dbPath = path.join(process.cwd(), 'scramble_db.json');
+            if (fs.existsSync(dbPath)) {
+                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                db.hajjTelegramChatId = chatId;
+                db.masterTelegramChatId = chatId;
+                fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
+            }
+
+            await sendTelegramMessage(token, chatId, `✅ *تم تعيين رقم البوت الأساسي الجديد: (+${newPhone}) ومسح الجلسة القديمة!* 🚀\n⏳ جاري تشغيل السوكيت الأساسي وطلب كود الاقتران فوراً... سيصلك الكود هنا في رسالة منفصلة!`, { replyTo: msg.message_id });
+
+            if (typeof global.startShadowBot === 'function') {
+                global.startShadowBot();
+            }
+        } catch (e) {
+            await sendTelegramMessage(token, chatId, `❌ فشل تطبيق الإعدادات: ${e?.message || e}`, { replyTo: msg.message_id });
+        }
+        return;
+    }
+
+    // أمر تنصيب فوري سطر واحد: تنصيب <رقم_البوت> <اسم_البوت>
+    if (normalizedBody.startsWith('تنصيب ') || normalizedBody.startsWith('/install ')) {
+        const parts = text.replace(/^(تنصيب|\/install)\s+/i, '').trim().split(/\s+/);
+        const rawPhone = parts[0]?.replace(/[^0-9]/g, '');
+        const cleanPhone = cleanPhoneNumber(rawPhone);
+        const botName = parts.slice(1).join(' ') || 'بوت فرعي';
+        const callName = botName.split(' ')[0] || 'فرعي';
+
+        if (!cleanPhone || cleanPhone.length < 10) {
+            await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم الهاتف بشكل صحيح، مثال:\n\`تنصيب 201012345678 بوت الزعيم\``, { replyTo: msg.message_id });
+            return;
+        }
+
+        await sendTelegramMessage(token, chatId, `⏳ *جاري الاتصال وتوليد كود الاقتران للرقم (+${cleanPhone}) باسم [${botName}]...* 🚀`, { replyTo: msg.message_id });
+
+        try {
+            const adminPhone = isHajjShado ? '201129249396' : cleanPhone;
+            const adminLid = isHajjShado ? '194961618301016' : '';
+
+            await requestSubBotPairing(
+                cleanPhone,
+                botName,
+                callName,
+                adminPhone,
+                adminLid,
+                'male',
+                'respectful',
+                global.conn,
+                `tg:${chatId}`,
+                null,
+                async (notifyText) => {
+                    await sendTelegramMessage(token, chatId, notifyText);
+                }
+            );
+        } catch (fastErr) {
+            console.error('❌ [Telegram Fast Pairing Error]:', fastErr);
+            await sendTelegramMessage(token, chatId, `❌ فشل استخراج كود الاقتران: ${fastErr?.message || fastErr}`);
+        }
+        return;
+    }
+
+    // أمر تنصيب تفاعلي خطوة بخطوة
+    if (['تنصيب', 'تنصيب بوت', 'بوت فرعي', 'كود التنصيب', '/install'].includes(normalizedBody)) {
+        telegramInstallState.set(chatId, {
+            step: 1,
+            targetPhone: '',
+            botName: '',
+            callName: '',
+            personality: 'respectful',
+            timer: setTimeout(() => {
+                telegramInstallState.delete(chatId);
+            }, 5 * 60 * 1000)
+        });
+
+        const startInstallMsg = 
+            `╭━━━〔 🤖 *نظام تنصيب بوت فرعي سحابي عبر تليجرام* 〕━━━╮\n` +
+            `┃ 👑 مرحباً بك في خدمة تنصيب شادو بوت المجانية!\n` +
+            `┃ 💡 يمكنك تشغيل نسختك الخاصة من البوت برقم واتسابك.\n` +
+            `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+            `📱 *الخطوة 1 من 4:* \n` +
+            `أرسل الآن *رقم هاتف واتساب* الذي تريد تشغيل البوت عليه مع كود الدولة:\n` +
+            `مثال: \`201012345678\` أو \`9647901234567\`\n\n` +
+            `💡 _اكتب *(الغاء)* في أي وقت للتراجع._`;
+
+        await sendTelegramMessage(token, chatId, startInstallMsg, { replyTo: msg.message_id });
         return;
     }
 
@@ -950,6 +1194,7 @@ async function handleTelegramMessage(token, msg) {
             `┃ 🤖 *البوتات الفرعية المسجلة:* ${rep.total} بوت\n` +
             `┃ ⏱️ *وقت التشغيل المستمر:* ${hours} س و ${mins} د و ${secs} ث\n` +
             `┃ 🛡️ *حالة الأمان:* درع عكس الحظر مفعّل 24/7 ⚡\n` +
+            `┃ 📢 *رابط البوت:* http://t.me/Shadowcom_bot\n` +
             `╰━━━━━━━━━━━━━━━━━━━━╯`;
         await sendTelegramMessage(token, chatId, infoMsg, { replyTo: msg.message_id });
         return;

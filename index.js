@@ -189,7 +189,8 @@ export function getMsgTimestamp(m) {
 
 let isReconnecting = false;
 
-async function startShadowBot() {
+export async function startShadowBot() {
+    global.startShadowBot = startShadowBot;
     // 🛑 تنظيف أي سوكيت قديم لمنع التعليق وتراكم السوكيتات عند انقطاع الإنترنت أو قفل الهاتف
     if (global.conn) {
         try {
@@ -318,13 +319,37 @@ async function startShadowBot() {
             isPairingRequested = true;
             setTimeout(async () => {
                 try {
-                    let phoneNumber = '201229409956'.replace(/[^0-9]/g, ''); // رقمك المرتبط بالبوت
+                    let targetBotPhone = '201229409956';
+                    try {
+                        const numFile = path.join(process.cwd(), 'bot_number.json');
+                        if (fs.existsSync(numFile)) {
+                            const parsed = JSON.parse(fs.readFileSync(numFile, 'utf8'));
+                            if (parsed.phone) targetBotPhone = String(parsed.phone);
+                        }
+                    } catch (_) {}
+                    if (process.env.BOT_NUMBER) targetBotPhone = String(process.env.BOT_NUMBER);
+                    let phoneNumber = targetBotPhone.replace(/[^0-9]/g, '');
+
                     let code = await conn.requestPairingCode(phoneNumber);
                     code = code?.match(/.{1,4}/g)?.join('-') || code;
 
                     console.log('\n====================================');
-                    console.log('🤖 SHADOW BOT PAIRING CODE:', code);
+                    console.log(`🤖 SHADOW BOT PAIRING CODE (+${phoneNumber}):`, code);
                     console.log('====================================\n');
+
+                    // إرسال كود الاقتران عبر تليجرام أيضاً إن كان البوت يعمل على تليجرام
+                    try {
+                        const { sendTelegramMessage } = await import('./core/telegram.js');
+                        const dbPath = path.join(process.cwd(), 'scramble_db.json');
+                        if (fs.existsSync(dbPath)) {
+                            const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+                            const token = db.telegramToken;
+                            const hajjChat = db.hajjTelegramChatId || db.masterTelegramChatId;
+                            if (token && hajjChat) {
+                                await sendTelegramMessage(token, hajjChat, `🔑 *كود اقتران البوت الأساسي الجديد (+${phoneNumber}):*\n\n\`${code}\`\n\n📌 انسخ الكود وضعه في واتساب - الأجهزة المرتبطة.`);
+                            }
+                        }
+                    } catch (_) {}
                 } catch (err) {
                     console.error('❌ خطأ في طلب كود الربط:', err?.message || err);
                     isPairingRequested = false;
@@ -369,8 +394,10 @@ async function startShadowBot() {
 
         if (connection === 'close') {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(`⚠️ انفصل البوت! الكود: ${reason}. جاري إعادة الاتصال التلقائي النظيف...`);
-            if (reason !== DisconnectReason.loggedOut) {
+            const isTerminal = reason === DisconnectReason.loggedOut || reason === 403 || reason === 401;
+
+            if (!isTerminal) {
+                console.log(`⚠️ انفصل البوت الرئيسي! الكود: ${reason}. جاري إعادة الاتصال التلقائي النظيف...`);
                 if (!isReconnecting) {
                     isReconnecting = true;
                     const delayMs = reason === 515 ? 1000 : 3000;
@@ -380,7 +407,18 @@ async function startShadowBot() {
                     }, delayMs);
                 }
             } else {
-                console.log('❌ تم تسجيل الخروج من جلسة البوت الرئيسية من تطبيق واتساب (أو تم حظر الرقم).');
+                console.log(`❌ [Shadow Bot] تم حظر رقم البوت الأساسي أو تسجيل الخروج من واتساب (الكود: ${reason}).`);
+                console.log('🛑 تم إيقاف محاولات الاتصال التلقائي لمنع الحظر والسبام.');
+                console.log('🧹 جاري حذف بيانات الجلسة القديمة المحظورة لتتمكن من ربط رقم جديد بنظافة...');
+                try {
+                    const sessionDir = path.join(process.cwd(), 'session_data');
+                    if (fs.existsSync(sessionDir)) {
+                        fs.rmSync(sessionDir, { recursive: true, force: true });
+                        console.log('✅ تم مسح مجلد session_data القديم بنجاح. يمكنك الآن تشغيل البوت برقم جديد.');
+                    }
+                } catch (cleanErr) {
+                    console.error('❌ خطأ أثناء مسح بيانات الجلسة:', cleanErr?.message || cleanErr);
+                }
                 console.log('🤖 السيرفر والبوتات الفرعية وتليجرام مستمرة في العمل بكامل كفاءتها واستقلاليتها 24/7 دون توقف!');
             }
         }

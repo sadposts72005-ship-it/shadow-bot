@@ -549,16 +549,38 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
 
+                const isTerminal = statusCode === DisconnectReason.loggedOut || statusCode === 403 || statusCode === 401;
+                if (isTerminal) {
+                    const statusReason = statusCode === 403 ? 'banned' : 'loggedOut';
+                    console.log(`❌ [Sub-Bot] تم ${statusCode === 403 ? 'حظر رقم البوت الفرعي من واتساب' : 'تسجيل الخروج من البوت الفرعي'} (+${cleanPhone}) بكود: ${statusCode}. تم إيقافه لمنع السبام والتكرار.`);
+                    try {
+                        const registry = loadSubBotsRegistry() || {};
+                        if (registry[cleanPhone]) {
+                            registry[cleanPhone].status = statusReason;
+                            saveSubBotsRegistry(registry);
+                        }
+                        const cfgPath = path.join(SUB_BOTS_DIR, cleanPhone, 'config.json');
+                        if (fs.existsSync(cfgPath)) {
+                            const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+                            c.status = statusReason;
+                            fs.writeFileSync(cfgPath, JSON.stringify(c, null, 2), 'utf8');
+                        }
+                    } catch (_) {}
+                    return;
+                }
+
                 // لا نقوم بحذف الجلسة مطلقاً، ونعيد الاتصال تلقائياً طالما لم يتم إيقافه يدوياً بأمر (ايقاف تنصيب)
-                const isManuallyStopped = cfg.status === 'stopped';
-                if (!isManuallyStopped && statusCode !== DisconnectReason.loggedOut) {
+                const isManuallyStopped = cfg.status === 'stopped' || cfg.status === 'banned' || cfg.status === 'loggedOut';
+                if (!isManuallyStopped) {
                     const delayMs = statusCode === 515 ? 1500 : 4000;
                     console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي تلقائياً (+${cleanPhone}) بعد ${delayMs / 1000} ثوانٍ...`);
                     setTimeout(() => {
-                        bootSubBot(cleanPhone, cfg, mainConn || global.conn).catch(e => console.error(e));
+                        const reg = loadSubBotsRegistry() || {};
+                        const latestCfg = reg[cleanPhone] || cfg;
+                        if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned' && latestCfg.status !== 'loggedOut') {
+                            bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
+                        }
                     }, delayMs);
-                } else if (statusCode === DisconnectReason.loggedOut) {
-                    console.log(`❌ [Sub-Bot] تم تسجيل الخروج من البوت الفرعي (+${cleanPhone}) من تطبيق واتساب.`);
                 }
             }
         });
@@ -574,7 +596,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 /**
  * طلب ربط بوت فرعي واستخراج كود الاقتران عبر واتساب
  */
-export async function requestSubBotPairing(targetPhone, botName, callName, adminPhone, adminLid, gender = 'male', personality = 'respectful', mainConn, notifyJid, quotedMek) {
+export async function requestSubBotPairing(targetPhone, botName, callName, adminPhone, adminLid, gender = 'male', personality = 'respectful', mainConn, notifyJid, quotedMek, customNotifier = null) {
     // التوافق في حال تم تمرير المعاملات بالترتيب القديم
     if (typeof gender === 'object' && gender !== null && gender.sendMessage) {
         quotedMek = notifyJid;
@@ -592,8 +614,29 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     const finalGender = (gender === 'female' || gender === '2') ? 'female' : 'male';
     const finalPersonality = (personality === 'bad' || personality === 'toxic' || personality === '2') ? 'bad' : 'respectful';
 
+    async function sendNotify(text, quoted = null) {
+        if (typeof customNotifier === 'function') {
+            try { await customNotifier(text); } catch (_) {}
+        }
+        const c = global.conn || mainConn;
+        if (!c || !notifyJid || String(notifyJid).startsWith('tg:')) return true;
+        if (quoted) {
+            try {
+                await c.sendMessage(notifyJid, { text }, { quoted });
+                return true;
+            } catch (_) {}
+        }
+        try {
+            await c.sendMessage(notifyJid, { text });
+            return true;
+        } catch (e) {
+            console.error('❌ [Sub-Bot Notify Error]:', e?.message || e);
+            return false;
+        }
+    }
+
     if (!cleanPhone || cleanPhone.length < 10 || cleanPhone.length > 13) {
-        await mainConn.sendMessage(notifyJid, { text: '❌ رقم هاتف البوت غير صالح (+${cleanPhone})، يبدو أنه معرف مشفر (LID) وليس رقم شريحة هاتف حقيقي!\nبرجاء كتابة رقم الهاتف بالأرقام (مثال: 01012345678 أو 201012345678).' }, { quoted: quotedMek });
+        await sendNotify(`❌ رقم هاتف البوت غير صالح (+${cleanPhone})! برجاء كتابة رقم هاتف واتساب بالأرقام مع كود الدولة (مثال: 01012345678 أو 201012345678).`, quotedMek);
         return false;
     }
 
@@ -622,24 +665,6 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     let isExpired = false;
     let warnTimer = null;
     let expireTimer = null;
-
-    async function sendNotify(text, quoted = null) {
-        const c = global.conn || mainConn;
-        if (!c || !notifyJid) return false;
-        if (quoted) {
-            try {
-                await c.sendMessage(notifyJid, { text }, { quoted });
-                return true;
-            } catch (_) {}
-        }
-        try {
-            await c.sendMessage(notifyJid, { text });
-            return true;
-        } catch (e) {
-            console.error('❌ [Sub-Bot Notify Error]:', e?.message || e);
-            return false;
-        }
-    }
 
     async function startPairingEngine() {
         if (isExpired) return;
@@ -949,6 +974,19 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     console.log(`⚠️ [Sub-Bot Pairing] انقطع اتصال السوكيت للرقم (+${cleanPhone}) بكود: ${statusCode}`);
                     activeSubBots.delete(cleanPhone);
 
+                    const isTerminal = statusCode === DisconnectReason.loggedOut || statusCode === 403 || statusCode === 401;
+                    if (isTerminal) {
+                        const statusReason = statusCode === 403 ? 'banned' : 'loggedOut';
+                        console.log(`❌ [Sub-Bot Pairing] تم ${statusCode === 403 ? 'حظر الرقم من واتساب' : 'تسجيل الخروج'} (+${cleanPhone}) بكود ${statusCode}. تم إيقاف المحاولات.`);
+                        const reg = loadSubBotsRegistry() || {};
+                        if (reg[cleanPhone]) {
+                            reg[cleanPhone].status = statusReason;
+                            saveSubBotsRegistry(reg);
+                        }
+                        await sendNotify(`❌ تعذر إكمال اقتران البوت الفرعي (+${cleanPhone}) لأن الرقم ${statusCode === 403 ? 'محظور من واتساب (403)' : 'تم تسجيل خروجه'}.`);
+                        return;
+                    }
+
                     if (!isConnected) {
                         // ⚡ الأهم: إعادة الاتصال فوراً لاستكمال المصافحة (Handshake) بعد إدخال الكود (خصوصاً خطأ 515 و 428)
                         console.log(`🔄 [Sub-Bot Pairing] إعادة الاتصال التلقائي لاستكمال الاقتران (+${cleanPhone})...`);
@@ -958,10 +996,10 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             }
                         }, 2500);
                     } else {
-                        // إذا كان متصلاً وانقطع لاحقاً (إعادة تشغيله تلقائياً طالما لم يتم إيقافه يدوياً)
+                        // إذا كان متصلاً وانقطع لاحقاً (إعادة تشغيله تلقائياً طالما لم يتم إيقافه يدوياً أو حظره)
                         const registry = loadSubBotsRegistry();
                         const currentCfg = registry[cleanPhone] || cfgData;
-                        if (currentCfg?.status !== 'stopped') {
+                        if (currentCfg?.status !== 'stopped' && currentCfg?.status !== 'banned' && currentCfg?.status !== 'loggedOut') {
                             console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي المتصل (+${cleanPhone}) تلقائياً بعد 4 ثوانٍ...`);
                             setTimeout(() => {
                                 bootSubBot(cleanPhone, currentCfg, mainConn || global.conn).catch(e => console.error(e));
@@ -1083,7 +1121,7 @@ export function startSubBotWatchdog(mainConn) {
             const registry = loadSubBotsRegistry() || {};
             for (const [phone, cfg] of Object.entries(registry)) {
                 const clean = cleanPhoneNumber(phone);
-                if (!clean || cfg?.status === 'stopped') continue;
+                if (!clean || cfg?.status === 'stopped' || cfg?.status === 'banned' || cfg?.status === 'loggedOut') continue;
 
                 const activeItem = activeSubBots.get(clean);
                 const isSocketAlive = activeItem?.sock?.ws?.isOpen;
@@ -1166,7 +1204,7 @@ export async function initAllSubBots(mainConn) {
     let delaySec = 3;
     for (const phone of phones) {
         const cfg = registry[phone];
-        if (cfg && cfg.status !== 'stopped') {
+        if (cfg && cfg.status !== 'stopped' && cfg.status !== 'banned' && cfg.status !== 'loggedOut') {
             setTimeout(async () => {
                 try {
                     await bootSubBot(phone, cfg, mainConn || global.conn);
@@ -1626,7 +1664,7 @@ export function getSubBotsReport() {
             `👑 *الحج الأساسي:* +${item.adminPhone || 'غير محدد'}${item.adminLid ? ` (ID: ${item.adminLid})` : ''}\n` +
             `🎭 *الشخصية:* ${currentPersonality}\n` +
             `🚻 *النوع:* ${currentGender}\n` +
-            `🟢 *الحالة:* ${isRunning ? '⚡ شغال الآن' : (item.status === 'stopped' ? '🛑 متوقف' : '⚠️ غير متصل')}\n` +
+            `🟢 *الحالة:* ${isRunning ? '⚡ شغال الآن' : (item.status === 'banned' ? '🚫 محظور من واتساب (403)' : (item.status === 'loggedOut' ? '🚪 تم تسجيل الخروج' : (item.status === 'stopped' ? '🛑 متوقف' : '⚠️ غير متصل')))}\n` +
             `📅 *تاريخ التنصيب:* ${item.installedAt ? new Date(item.installedAt).toLocaleDateString('ar-EG') : 'غير مسجل'}`
         );
     });

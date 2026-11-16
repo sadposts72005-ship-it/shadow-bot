@@ -1597,9 +1597,11 @@ const datelsHandler = {
             if (isChannelCommand) {
                 await handleCommandTiming('📢');
                 const channelMsg = 
-                    `📢 *قناة المطور الرسمية (الحج شادو)* 📢\n\n` +
-                    `تابع كافة التحديثات، الإعلانات، والمميزات الجديدة والشروحات الحصرية عبر قناة الواتساب الرسمية:\n\n` +
-                    `🔗 *رابط القناة للانضمام:*\nhttps://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
+                    `📢 *قنوات وبوتات المطور الرسمية (الحج شادو)* 📢\n\n` +
+                    `تابع كافة التحديثات، الإعلانات، والمميزات الجديدة والشروحات الحصرية عبر قنواتنا:\n\n` +
+                    `🟢 *قناة الواتساب الرسمية:*\nhttps://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
+                    `🔵 *بوت وقناة تليجرام الرسمية:*\nhttp://t.me/Shadowcom_bot\n\n` +
+                    `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy)\n\n` +
                     `✨ شرفنا بانضمامك يا غالي! ❤️`;
                 await currentConn.sendMessage(from, { text: channelMsg }, { quoted: mek });
                 return true;
