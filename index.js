@@ -12,17 +12,102 @@ import { initAllSubBots } from './core/subbot.js';
 import { startTelegramBot, stopTelegramBot, getTelegramStatus } from './core/telegram.js';
 import { loadLocalDB } from './core/database.js';
 
-// 🌐 خادم ويب مصغر (HTTP Server) لإبقاء البوت نشطاً 24/7 على منصات السحاب (Render / Koyeb / UptimeRobot)
+// 🌐 خادم ويب ولوحة تحكم مصغرة (HTTP Dashboard) لإدارة البوت وفحص حالته 24/7
 const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({
-        status: 'online',
-        bot: 'Shadow Bot',
-        uptime: `${Math.floor(process.uptime())}s`,
-        telegram: getTelegramStatus().isActive ? 'connected' : 'disabled',
-        message: 'البوت متصل وشغال 24 ساعة بنجاح! 🚀'
-    }));
+    if (req.method === 'POST' && req.url === '/set-telegram') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const params = new URLSearchParams(body);
+                const token = params.get('token')?.trim();
+                if (token) {
+                    const startRes = await startTelegramBot(token);
+                    if (startRes.success) {
+                        const { loadLocalDB, saveLocalDB } = await import('./core/database.js');
+                        const db = loadLocalDB();
+                        db.telegramToken = token;
+                        saveLocalDB(db);
+                        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                        res.end(`
+                            <body style="font-family: Arial; text-align: center; padding: 50px; background: #0f172a; color: #fff;">
+                                <h2 style="color: #4ade80;">✅ تم ربط وتشغيل بوت تليجرام بنجاح!</h2>
+                                <p>اسم البوت: <b>${startRes.botInfo?.first_name}</b> (@${startRes.botInfo?.username})</p>
+                                <a href="https://t.me/${startRes.botInfo?.username}" target="_blank" style="display:inline-block; margin-top:15px; padding:10px 20px; background:#38bdf8; color:#000; text-decoration:none; border-radius:8px; font-weight:bold;">فتح البوت في تليجرام 🚀</a>
+                                <br><br><a href="/" style="color: #94a3b8;">العودة للوحة التحكم</a>
+                            </body>
+                        `);
+                        return;
+                    }
+                }
+            } catch (_) {}
+            res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`<body style="font-family: Arial; text-align: center; padding: 50px; background: #0f172a; color: #fff;"><h2 style="color: #ef4444;">❌ فشل التحقق من توكن تليجرام!</h2><p>تأكد من صحة التوكن المأخوذ من @BotFather وحاول ثانية.</p><br><a href="/" style="color: #38bdf8;">العودة</a></body>`);
+        });
+        return;
+    }
+
+    // إذا كان الطلب من تطبيق فحص (UptimeRobot / JSON Request)
+    if (req.headers.accept && req.headers.accept.includes('application/json')) {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+            status: 'online',
+            bot: 'Shadow Bot',
+            uptime: `${Math.floor(process.uptime())}s`,
+            telegram: getTelegramStatus().isActive ? 'connected' : 'disabled',
+            message: 'البوت متصل وشغال 24 ساعة بنجاح! 🚀'
+        }));
+        return;
+    }
+
+    // عرض واجهة ويب خفيفة وسهلة لإدارة البوت وربط تليجرام مباشرة بدون واتساب
+    const tg = getTelegramStatus();
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`
+        <!DOCTYPE html>
+        <html dir="rtl" lang="ar">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>لوحة تحكم شادو بوت | Shadow Bot</title>
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 25px; text-align: center; }
+                .card { max-width: 520px; margin: 30px auto; background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); border: 1px solid #334155; }
+                h1 { color: #38bdf8; margin-top: 0; }
+                .status-badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-weight: bold; margin: 10px 0; font-size: 14px; }
+                .online { background: #065f46; color: #34d399; }
+                .input-box { width: 100%; box-sizing: border-box; padding: 12px; margin: 15px 0; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 14px; text-align: left; direction: ltr; }
+                .btn { background: #2563eb; color: #fff; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; width: 100%; transition: 0.2s; }
+                .btn:hover { background: #1d4ed8; }
+                .hint { color: #94a3b8; font-size: 13px; line-height: 1.6; text-align: right; margin-top: 20px; background: #0f172a; padding: 12px; border-radius: 8px; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>🤖 شادو بوت | Shadow Bot</h1>
+                <div class="status-badge online">🟢 السيرفر يعمل بكفاءة 24/7</div>
+                <p>الحالة على تليجرام: <b>${tg.isActive ? '⚡ متصل (@' + tg.username + ')' : '🛑 غير مربوط حالياً'}</b></p>
+                
+                <hr style="border: 0; border-top: 1px solid #334155; margin: 25px 0;">
+
+                <h3>✈️ ربط البوت بتليجرام مباشرة (بدون واتساب)</h3>
+                <form action="/set-telegram" method="POST">
+                    <input class="input-box" type="text" name="token" placeholder="الصق توكن تليجرام هنا (من @BotFather)" required>
+                    <button class="btn" type="submit">ربط وتشغيل البوت على تليجرام 🚀</button>
+                </form>
+
+                <div class="hint">
+                    <b>💡 خطوات استخراج التوكن في 30 ثانية مجاناً وبدون أي حظر:</b><br>
+                    1. افتح تطبيق تليجرام وابحث عن الحساب الرسمي: <b>@BotFather</b><br>
+                    2. اضغط Start واكتب له أمر: <b>/newbot</b><br>
+                    3. اختر اسماً للبوت، ثم يوزراً ينتهي بكلمة bot.<br>
+                    4. انسخ التوكن (Token) وضعه في المربع بالأعلى واضغط ربط!
+                </div>
+            </div>
+        </body>
+        </html>
+    `);
 });
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 [Web Server] خادم فحص الحالة شغال وجاهز لاستقبال Ping على البورت ${PORT}`);
