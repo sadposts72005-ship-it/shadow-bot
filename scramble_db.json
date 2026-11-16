@@ -1241,5 +1241,12 @@
   },
   "isBotSleeping": false,
   "telegramToken": "9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE",
+  "telegramOwners": [
+    "Shadwwmy",
+    "shadwwmy",
+    "37122247649",
+    "201129249396",
+    "194961618301016"
+  ],
   "lastSavedAt": 1782626600000
 }
