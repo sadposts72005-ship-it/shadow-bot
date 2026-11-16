@@ -1239,5 +1239,7 @@
     "201129249396": "194961618301016",
     "194961618301016": "201129249396"
   },
-  "isBotSleeping": false
+  "isBotSleeping": false,
+  "telegramToken": "9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE",
+  "lastSavedAt": 1782626600000
 }

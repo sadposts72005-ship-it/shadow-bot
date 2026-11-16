@@ -11,9 +11,11 @@ let lastUpdateId = 0;
  * فحص صحة توكن تليجرام واستخراج بيانات البوت
  */
 export async function verifyTelegramToken(token) {
-    if (!token || typeof token !== 'string') return null;
+    if (!token) return null;
+    token = String(token).replace(/\s+/g, '').trim();
+    if (!token || !token.includes(':')) return null;
     try {
-        const res = await axios.get(`https://api.telegram.org/bot${token.trim()}/getMe`, { timeout: 10000 });
+        const res = await axios.get(`https://api.telegram.org/bot${token}/getMe`, { timeout: 10000 });
         if (res.data && res.data.ok) {
             return res.data.result;
         }
@@ -191,7 +193,7 @@ async function handleTelegramMessage(token, msg) {
  */
 export async function startTelegramBot(token) {
     if (!token) return { success: false, message: 'التوكن غير محدد' };
-    token = token.trim();
+    token = String(token).replace(/\s+/g, '').trim();
 
     if (isPolling) {
         stopTelegramBot();

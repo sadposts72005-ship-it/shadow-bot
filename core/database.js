@@ -96,6 +96,9 @@ export function loadLocalDB() {
                     if (!db.lidMap[k]) db.lidMap[k] = v;
                 }
             }
+            if (backupDb.telegramToken && !db.telegramToken) {
+                db.telegramToken = backupDb.telegramToken;
+            }
         }
     }
 
