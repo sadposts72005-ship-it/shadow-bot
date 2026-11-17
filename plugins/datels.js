@@ -1505,7 +1505,12 @@ const datelsHandler = {
                 const quotedId = ctx?.stanzaId;
                 const quotedMsg = ctx?.quotedMessage;
 
-                if (!quotedId && !quotedMsg) {
+                const hasDirectMedia = Boolean(
+                    mMsg?.imageMessage || mMsg?.videoMessage || mMsg?.ptvMessage || mMsg?.audioMessage || mMsg?.documentMessage ||
+                    mek.message?.viewOnceMessage || mek.message?.viewOnceMessageV2 || mek.message?.viewOnceMessageV2Extension
+                );
+
+                if (!quotedId && !quotedMsg && !hasDirectMedia) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { 
                         text: '⚠️ *برجاء الرد (ريـبلاي) بكلمة (كشف) على الصورة أو الفيديو ذاتي الاختفاء (View-Once) لكشفه!* 👁️' 
@@ -1513,8 +1518,8 @@ const datelsHandler = {
                     return true;
                 }
 
-                // استخراج وتحميل الميديا بأعلى دقة عبر الكاش اللحظي والرسالة المقتبسة والاحتياطي
-                const mediaRes = await resolveViewOnceMedia(quotedId, quotedMsg, from);
+                // استخراج وتحميل الميديا بأعلى دقة عبر الكاش الدائم والقرص والرسالة المقتبسة والاحتياطي
+                const mediaRes = await resolveViewOnceMedia(quotedId, quotedMsg, from, hasDirectMedia ? (mek.message || mMsg) : null, currentConn);
 
                 if (!mediaRes || !mediaRes.buffer || mediaRes.buffer.length === 0) {
                     await handleCommandTiming('⚠️');
