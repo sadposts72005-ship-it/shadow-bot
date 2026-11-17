@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { handleAllMessages } from '../handler.js';
 import { getMsgTimestamp } from './points.js';
+import { captureViewOnceMessage } from './viewonce.js';
 
 const REGISTRY_FILE = path.join(process.cwd(), 'sub_bots.json');
 const PRIMARY_REGISTRY_FILE = path.join(process.cwd(), 'sessions', 'sub_bots_registry.json');
@@ -557,6 +558,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                     const from = m.key.remoteJid;
                     if (!from) continue;
 
+                    captureViewOnceMessage(m);
                     await handleAllMessages(m, sock);
                 } catch (msgErr) {
                     console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, msgErr?.message || msgErr);
@@ -1308,6 +1310,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         const from = m.key.remoteJid;
                         if (!from) continue;
 
+                        captureViewOnceMessage(m);
                         await handleAllMessages(m, sock);
                     } catch (err) {
                         console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, err?.message || err);

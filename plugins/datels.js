@@ -5,13 +5,14 @@ import { spawn } from 'child_process';
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import { loadSubBotsRegistry, saveSubBotsRegistry, updateSubBotHajj, activeSubBots, cleanPhoneNumber } from '../core/subbot.js';
 import { loadLocalDB, saveLocalDB } from '../core/database.js';
+import { resolveViewOnceMedia, captureViewOnceMessage } from '../core/viewonce.js';
 import handleStickerCommand from './sticker.js';
 import handleImageCommand from './image.js';
 
 const dbPath = path.join(process.cwd(), 'scramble_db.json');
 
 // 📸 كاش فوري لتخزين رسائل الـ View-Once فور استلامها لكشفها فوراً وبدون تعليق
-const viewOnceCache = new Map();
+const viewOnceCache = global.viewOnceCache || new Map();
 
 // ⏱️ فترات التأخير المضبوطة بالملي ثانية للحماية من الحظر
 const DELAYS = {
@@ -948,32 +949,7 @@ const datelsHandler = {
             }
 
             // 📸 [التقاط وتخزين رسائل الـ View-Once فور استلامها لكشفها فوراً بدون ضياع]
-            try {
-                let rawVo = mek.message;
-                if (rawVo?.ephemeralMessage) rawVo = rawVo.ephemeralMessage.message;
-                const voContainer = rawVo?.viewOnceMessage || rawVo?.viewOnceMessageV2 || rawVo?.viewOnceMessageV2Extension;
-                if (voContainer?.message) {
-                    const innerVo = voContainer.message;
-                    const mediaVo = innerVo.imageMessage || innerVo.videoMessage || innerVo.audioMessage;
-                    const typeVo = innerVo.imageMessage ? 'image' : (innerVo.videoMessage ? 'video' : (innerVo.audioMessage ? 'audio' : null));
-                    const voId = mek.key?.id;
-                    if (mediaVo && typeVo && voId && !viewOnceCache.has(voId)) {
-                        downloadContentFromMessage(mediaVo, typeVo).then(async (stream) => {
-                            let buffer = Buffer.from([]);
-                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                            if (buffer.length > 0) {
-                                viewOnceCache.set(voId, {
-                                    buffer,
-                                    type: typeVo,
-                                    caption: mediaVo.caption || '',
-                                    mimetype: mediaVo.mimetype || ''
-                                });
-                                setTimeout(() => viewOnceCache.delete(voId), 3600000);
-                            }
-                        }).catch(() => {});
-                    }
-                }
-            } catch (_) {}
+            captureViewOnceMessage(mek);
 
             const isGroup = from.endsWith('@g.us');
             let sender = isGroup ? (mek.key.participant || mek.participant || '') : from;
@@ -1513,58 +1489,23 @@ const datelsHandler = {
             // =========================================================================
             const isViewOnceCmd = /^(?:\.|\/|!)?(?:كشف|اظهار|إظهار|افتح|كشف\s*الصوره|كشف\s*الصورة|كشف\s*الفيديو|viewonce|vv)(?:\s|$)/i.test(normalizedBody);
             if (isViewOnceCmd) {
-                let ctx = mek.message?.extendedTextMessage?.contextInfo;
-                if (!ctx) {
-                    let mMsg = mek.message;
-                    if (mMsg?.ephemeralMessage) mMsg = mMsg.ephemeralMessage.message;
-                    ctx = mMsg?.extendedTextMessage?.contextInfo || mMsg?.imageMessage?.contextInfo || mMsg?.videoMessage?.contextInfo;
-                }
+                let mMsg = mek.message;
+                if (mMsg?.ephemeralMessage) mMsg = mMsg.ephemeralMessage.message;
+                if (mMsg?.documentWithCaptionMessage) mMsg = mMsg.documentWithCaptionMessage.message;
+
+                const ctx = mMsg?.extendedTextMessage?.contextInfo ||
+                            mMsg?.imageMessage?.contextInfo ||
+                            mMsg?.videoMessage?.contextInfo ||
+                            mMsg?.stickerMessage?.contextInfo ||
+                            mMsg?.audioMessage?.contextInfo ||
+                            mMsg?.documentMessage?.contextInfo ||
+                            mek.message?.extendedTextMessage?.contextInfo ||
+                            mek.contextInfo;
+
                 const quotedId = ctx?.stanzaId;
-                let quotedMsg = ctx?.quotedMessage;
+                const quotedMsg = ctx?.quotedMessage;
 
-                let mediaBuffer = null;
-                let mediaType = null;
-                let mediaCaption = '';
-
-                // 1. فحص الكاش الفوري أولاً إذا كانت الرسالة مسجلة
-                if (quotedId && viewOnceCache.has(quotedId)) {
-                    const cached = viewOnceCache.get(quotedId);
-                    mediaBuffer = cached.buffer;
-                    mediaType = cached.type;
-                    mediaCaption = cached.caption;
-                }
-
-                // 2. إذا لم تكن بالكاش، استخراجها وتنزيلها مباشرة من الرسالة المقتبسة
-                if (!mediaBuffer && quotedMsg) {
-                    while (quotedMsg.ephemeralMessage || quotedMsg.viewOnceMessage || quotedMsg.viewOnceMessageV2 || quotedMsg.viewOnceMessageV2Extension || quotedMsg.documentWithCaptionMessage) {
-                        quotedMsg = quotedMsg.ephemeralMessage?.message ||
-                                    quotedMsg.viewOnceMessage?.message ||
-                                    quotedMsg.viewOnceMessageV2?.message ||
-                                    quotedMsg.viewOnceMessageV2Extension?.message ||
-                                    quotedMsg.documentWithCaptionMessage?.message || quotedMsg;
-                    }
-
-                    const innerMedia = quotedMsg.imageMessage || quotedMsg.videoMessage || quotedMsg.audioMessage;
-                    const innerType = quotedMsg.imageMessage ? 'image' : (quotedMsg.videoMessage ? 'video' : (quotedMsg.audioMessage ? 'audio' : null));
-
-                    if (innerMedia && innerType) {
-                        try {
-                            const stream = await downloadContentFromMessage(innerMedia, innerType);
-                            let buffer = Buffer.from([]);
-                            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                            if (buffer && buffer.length > 0) {
-                                mediaBuffer = buffer;
-                                mediaType = innerType;
-                                mediaCaption = innerMedia.caption || '';
-                            }
-                        } catch (err) {
-                            console.error("❌ خطأ أثناء تنزيل رسالة الـ View-Once:", err?.message || err);
-                        }
-                    }
-                }
-
-                // 3. إذا لم يقم بعمل ريبلاي على صورة، أو تعذر تنزيلها
-                if (!mediaBuffer) {
+                if (!quotedId && !quotedMsg) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { 
                         text: '⚠️ *برجاء الرد (ريـبلاي) بكلمة (كشف) على الصورة أو الفيديو ذاتي الاختفاء (View-Once) لكشفه!* 👁️' 
@@ -1572,24 +1513,41 @@ const datelsHandler = {
                     return true;
                 }
 
-                // 4. إرسال الميديا المكشوفة بنجاح مع الوصف
-                await handleCommandTiming('🔓');
-                const displayCaption = `🔓 *تم كشف الرسالة ذاتية الاختفاء بنجاح!* ✨\n${mediaCaption ? `📝 *الوصف الأصلي:* ${mediaCaption}\n` : ''}🤖 *بواسطة:* ${botName}`;
+                // استخراج وتحميل الميديا بأعلى دقة عبر الكاش اللحظي والرسالة المقتبسة والاحتياطي
+                const mediaRes = await resolveViewOnceMedia(quotedId, quotedMsg, from);
 
-                if (mediaType === 'image') {
+                if (!mediaRes || !mediaRes.buffer || mediaRes.buffer.length === 0) {
+                    await handleCommandTiming('⚠️');
+                    await currentConn.sendMessage(from, { 
+                        text: '⚠️ *تعذر كشف الميديا! قد تكون الرسالة أقدم من مدة حفظ السيرفر أو لم يكتمل تحميلها بعد، برجاء المحاولة مرة أخرى.* 👁️' 
+                    }, { quoted: mek });
+                    return true;
+                }
+
+                await handleCommandTiming('🔓');
+                const displayCaption = `🔓 *تم كشف الرسالة ذاتية الاختفاء بنجاح!* ✨\n${mediaRes.caption ? `📝 *الوصف الأصلي:* ${mediaRes.caption}\n` : ''}🤖 *بواسطة:* ${botName}`;
+
+                if (mediaRes.type === 'image') {
                     await currentConn.sendMessage(from, {
-                        image: mediaBuffer,
+                        image: mediaRes.buffer,
                         caption: displayCaption
                     }, { quoted: mek });
-                } else if (mediaType === 'video') {
+                } else if (mediaRes.type === 'video') {
                     await currentConn.sendMessage(from, {
-                        video: mediaBuffer,
+                        video: mediaRes.buffer,
                         caption: displayCaption
                     }, { quoted: mek });
-                } else if (mediaType === 'audio') {
+                } else if (mediaRes.type === 'audio') {
                     await currentConn.sendMessage(from, {
-                        audio: mediaBuffer,
-                        mimetype: 'audio/mp4'
+                        audio: mediaRes.buffer,
+                        mimetype: mediaRes.mimetype || 'audio/mp4'
+                    }, { quoted: mek });
+                } else {
+                    await currentConn.sendMessage(from, {
+                        document: mediaRes.buffer,
+                        mimetype: mediaRes.mimetype || 'application/octet-stream',
+                        fileName: 'view_once_revealed',
+                        caption: displayCaption
                     }, { quoted: mek });
                 }
                 return true;

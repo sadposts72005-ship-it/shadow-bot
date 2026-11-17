@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import { handleAllMessages } from './handler.js';
+import { captureViewOnceMessage } from './core/viewonce.js';
 // ⏰ استيراد دالة الأذكار التلقائية والترحيب من ملف الـ plugins
 import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
@@ -462,6 +463,9 @@ export async function startShadowBot() {
 
                 const from = m.key.remoteJid;
                 if (!from) continue;
+
+                // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها
+                captureViewOnceMessage(m);
 
                 // 🚀 تمرير الرسالة فوراً للمفسر (Handler)
                 await handleAllMessages(m, conn);

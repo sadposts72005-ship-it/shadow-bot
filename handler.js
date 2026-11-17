@@ -9,6 +9,7 @@ import gamePuzzle from './plugins/puzzle.js';
 import gameMovies from './plugins/game-movies.js';
 import menuHandler from './plugins/menu.js';
 import datelsHandler, { extractMessageBody, extractTarget } from './plugins/datels.js';
+import { captureViewOnceMessage } from './core/viewonce.js';
 import { 
     requestSubBotPairing, 
     stopSubBot, 
@@ -554,6 +555,9 @@ export async function handleAllMessages(mek, currentConn) {
         if (!sender && mek.key?.fromMe) sender = currentConn.user?.id || '';
         if (!sender) return;
 
+        // 📸 التقاط وتخزين رسائل العرض لمرة واحدة (View-Once) فوراً في الكاش قبل أي فحص للنص
+        captureViewOnceMessage(mek);
+
         // 🔇 فحص كتم المستخدم في هذا الجروب فوراً وبلا انتظار (حذف فوري لأي رسالة حرفياً: كلام، ملصقات، صور، فيديوهات، ريكوردات، ملفات)
         if (isRealGroup) {
             const localDB = loadLocalDB();
@@ -564,6 +568,29 @@ export async function handleAllMessages(mek, currentConn) {
                 if (!isOwner) {
                     currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
                     return;
+                }
+            }
+
+            // 🛡️ درع حماية الجروب: مسح كروت جهات الاتصال (Contacts / vCard) فوراً حتى لو أُرسلت بدون نص
+            if (localDB.groupProtection?.[from]) {
+                const cleanSender = getCleanNumber(sender);
+                const ownerPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
+                const isOwner = ownerPhoneList.includes(cleanSender) || ownerPhoneList.includes(localDB.lidMap?.[cleanSender]) || mek.key.fromMe;
+                if (!isOwner) {
+                    let mObj = mek.message;
+                    if (mObj?.ephemeralMessage) mObj = mObj.ephemeralMessage.message;
+                    if (mObj?.viewOnceMessageV2) mObj = mObj.viewOnceMessageV2.message;
+                    if (mObj?.viewOnceMessage) mObj = mObj.viewOnceMessage.message;
+                    if (mObj?.contactMessage || mObj?.contactsArrayMessage) {
+                        try {
+                            await currentConn.sendMessage(from, { delete: mek.key });
+                            await currentConn.sendMessage(from, {
+                                text: `⚠️ *درع الحماية نشط:* ممنوع مشاركة جهات الاتصال في المجموعة! تم مسح كارت الاتصال من @${cleanSender} بنجاح. 🛡️📵`,
+                                mentions: [sender]
+                            });
+                        } catch (_) {}
+                        return;
+                    }
                 }
             }
         }
