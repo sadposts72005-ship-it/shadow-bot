@@ -732,7 +732,7 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
     const finalCallName = cfg.callName || 'فرعي';
     const cleanLid = cfg.adminLid || '';
 
-    // حفظ حالة التوثيق فوراً
+    // حفظ حالة التوثيق فوراً في الملف والسجل لمنع أي تكرار
     try {
         const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
         if (fs.existsSync(sessionDir)) {
@@ -745,8 +745,8 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
         }
     } catch (_) {}
 
-    // انتظار 3 ثوانٍ لضمان استقرار جلسة واتساب
-    await new Promise(r => setTimeout(r, 3000));
+    // انتظار قصير (1.5 ثانية) لضمان استقرار الاتصال
+    await new Promise(r => setTimeout(r, 1500));
 
     const successMsg = 
         `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName} - نداء: ${finalCallName}) بنجاح!* 🚀\n\n` +
@@ -756,19 +756,23 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
         `📌 جرب اكتب (.اوامر) في أي شات مع البوت لتجربته واستكشاف مميزاته!\n\n` +
         `🗑️ *إلغاء التنصيب:* إذا أردت إلغاء تنصيب هذا البوت وحذفه نهائياً في أي وقت، اكتب للبوت: *(الغاء تنصيب)* وسيتم حذفه فوراً.`;
 
+    // جلب توكن تليجرام بأمان من قاعدة البيانات
+    let tgToken = null;
+    let localDB = null;
+    try {
+        const { loadLocalDB } = await import('./database.js');
+        localDB = loadLocalDB();
+        tgToken = process.env.TELEGRAM_BOT_TOKEN || localDB?.telegramToken || '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
+    } catch (_) {
+        tgToken = process.env.TELEGRAM_BOT_TOKEN || '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
+    }
+
     // 1. إرسال للشخص الذي نصب البوت عبر تليجرام إن كان التنصيب من تليجرام
     const tgChatId = cfg.telegramChatId || (String(cfg.notifyJid).startsWith('tg:') ? String(cfg.notifyJid).replace('tg:', '') : null);
-    if (tgChatId) {
+    if (tgChatId && tgToken) {
         try {
-            const dbPath = path.join(process.cwd(), 'scramble_db.json');
-            if (fs.existsSync(dbPath)) {
-                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-                const token = db.telegramToken;
-                if (token) {
-                    const { sendTelegramMessage } = await import('./telegram.js');
-                    await sendTelegramMessage(token, tgChatId, successMsg).catch(() => {});
-                }
-            }
+            const { sendTelegramMessage } = await import('./telegram.js');
+            await sendTelegramMessage(tgToken, tgChatId, successMsg).catch(() => {});
         } catch (_) {}
     }
     if (typeof customNotifier === 'function') {
@@ -776,23 +780,47 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
     }
 
     // 2. إرسال للشخص المنصّب عبر واتساب:
-    // ⚠️ تنبيه هام: نمنع البوت من إرسال الرسالة لنفسه نهائياً (لو رقم البوت هو نفس رقم المنصّب)!
-    const installerJid = cleanAdmin ? `${cleanAdmin}@s.whatsapp.net` : null;
-    const isBotItself = (cleanAdmin && cleanPhone && cleanAdmin === cleanPhone);
-
+    // ⚠️ تنبيه صارم: نمنع البوت من مراسلة نفسه نهائياً في حال كان رقم البوت هو رقم المنصّب
     const cMain = (mainConn && mainConn.user?.id) ? mainConn : global.conn;
+    const botJid = cleanPhone ? `${cleanPhone}@s.whatsapp.net` : null;
+    const installerJid = (cleanAdmin && cleanAdmin.length >= 10 && cleanAdmin.length <= 13) ? `${cleanAdmin}@s.whatsapp.net` : null;
+    const isBotSameAsAdmin = Boolean(cleanAdmin && cleanPhone && cleanAdmin === cleanPhone);
 
+    const whatsappDestinations = new Set();
+    // أ. الشات الذي تم طلب التنصيب منه واستخراج الكود فيه
+    if (cfg.notifyJid && !String(cfg.notifyJid).startsWith('tg:')) {
+        whatsappDestinations.add(cfg.notifyJid);
+    }
+    // ب. رقم الحج الأساسي المنصب للبوت
     if (installerJid) {
-        if (!isBotItself && sock) {
-            // رقم المنصّب يختلف عن رقم البوت، يرسلها البوت الفرعي للمنصّب مباشرة
-            try {
-                await sock.sendMessage(installerJid, { text: successMsg }).catch(() => {});
-            } catch (_) {}
-        } else if (isBotItself && cMain && cMain !== sock) {
-            // رقم المنصّب هو نفسه رقم البوت، يرسلها البوت الأساسي لكي لا يبعتها البوت لنفسه في شات نفسه
-            try {
-                await cMain.sendMessage(installerJid, { text: successMsg }).catch(() => {});
-            } catch (_) {}
+        whatsappDestinations.add(installerJid);
+    }
+
+    for (const destJid of whatsappDestinations) {
+        const isSelfDest = (botJid && destJid === botJid);
+
+        if (isSelfDest) {
+            // إذا كانت الوجهة هي نفس رقم البوت، يرسلها البوت الأساسي فقط لكي لا يراسل البوت نفسه
+            if (cMain && cMain.user?.id && cMain !== sock) {
+                try {
+                    await cMain.sendMessage(destJid, { text: successMsg }).catch(() => {});
+                } catch (_) {}
+            }
+        } else {
+            // الوجهة شات آخر أو رقم الحج: يرسلها البوت الأساسي أولاً
+            let sent = false;
+            if (cMain && cMain.user?.id) {
+                try {
+                    await cMain.sendMessage(destJid, { text: successMsg }).catch(() => {});
+                    sent = true;
+                } catch (_) {}
+            }
+            // إذا تعذر الإرسال عبر البوت الأساسي، يرسلها البوت الفرعي (ما لم يكن هو نفسه نفس الرقم)
+            if (!sent && sock && !isBotSameAsAdmin) {
+                try {
+                    await sock.sendMessage(destJid, { text: successMsg }).catch(() => {});
+                } catch (_) {}
+            }
         }
     }
 
@@ -810,34 +838,30 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
 
     const masterPhone = '201129249396@s.whatsapp.net';
     try {
-        const c = cMain || sock;
+        const c = (cMain && cMain.user?.id) ? cMain : sock;
         if (c) await c.sendMessage(masterPhone, { text: ownerNotice }).catch(() => {});
     } catch (_) {}
 
     // إرسال عبر تليجرام للحج شادو
-    try {
-        const dbPath = path.join(process.cwd(), 'scramble_db.json');
-        if (fs.existsSync(dbPath)) {
-            const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-            const token = db.telegramToken;
-            if (token) {
-                const tgTargets = new Set();
-                if (db.hajjTelegramChatId) tgTargets.add(db.hajjTelegramChatId);
-                if (db.masterTelegramChatId) tgTargets.add(db.masterTelegramChatId);
-                if (Array.isArray(db.telegramOwners)) {
-                    for (const o of db.telegramOwners) {
-                        if (/^[0-9]+$/.test(String(o))) tgTargets.add(String(o));
-                    }
-                }
-                const { sendTelegramMessage } = await import('./telegram.js');
-                for (const tgChat of tgTargets) {
-                    try {
-                        await sendTelegramMessage(token, tgChat, ownerNotice);
-                    } catch (_) {}
+    if (tgToken) {
+        try {
+            const tgTargets = new Set();
+            if (localDB?.hajjTelegramChatId) tgTargets.add(localDB.hajjTelegramChatId);
+            if (localDB?.masterTelegramChatId) tgTargets.add(localDB.masterTelegramChatId);
+            tgTargets.add('6058342366'); // معرف الحج شادو على تليجرام
+            if (Array.isArray(localDB?.telegramOwners)) {
+                for (const o of localDB.telegramOwners) {
+                    if (/^[0-9]+$/.test(String(o))) tgTargets.add(String(o));
                 }
             }
-        }
-    } catch (_) {}
+            const { sendTelegramMessage } = await import('./telegram.js');
+            for (const tgChat of tgTargets) {
+                try {
+                    await sendTelegramMessage(tgToken, tgChat, ownerNotice);
+                } catch (_) {}
+            }
+        } catch (_) {}
+    }
 }
 
 /**
@@ -1271,6 +1295,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         try {
                             fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(currentCfg, null, 2), 'utf8');
                         } catch (_) {}
+
+                        // 🚀 إرسال إشعار التفعيل والتهنئة للمنصّب وللحج شادو فوراً وبشكل مضمون بمجرد قبول الكود واكتمال الربط
+                        sendSubBotActivationAlerts(sock, currentCfg, mainConn || global.conn, customNotifier).catch(() => {});
 
                         setTimeout(() => {
                             bootSubBot(cleanPhone, currentCfg, mainConn || global.conn).catch(e => console.error(e));
