@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path'; // 🛑 استيراد ملفات الألعاب والـ Plugins المساعدة
+import { fileURLToPath } from 'url';
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import gameTicTacToe from './plugins/game-ttt.js';
 import gameGuess from './plugins/game-guess.js';
@@ -43,7 +44,9 @@ import {
 const botSleepMap = new Map();
 
 // 📸 كاش حفظ وسائط الـ View-Once فور استلامها سراً لكشفها لاحقاً بأمر (كشف)
-const VIEW_ONCE_DIR = path.join(process.cwd(), 'temp', 'view_once');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const VIEW_ONCE_DIR = path.join(__dirname, 'temp', 'view_once');
 try {
     if (!fs.existsSync(VIEW_ONCE_DIR)) {
         fs.mkdirSync(VIEW_ONCE_DIR, { recursive: true });
@@ -53,7 +56,7 @@ try {
 const viewOnceBufferStore = global.viewOnceBufferStore || new Map();
 global.viewOnceBufferStore = viewOnceBufferStore;
 
-function saveViewOnceItem(id, item) {
+export function saveViewOnceItem(id, item) {
     if (!id || !item || !item.buffer) return;
     viewOnceBufferStore.set(id, item);
     if (viewOnceBufferStore.size > 500) {
@@ -66,16 +69,17 @@ function saveViewOnceItem(id, item) {
         fs.writeFileSync(binPath, item.buffer);
         fs.writeFileSync(metaPath, JSON.stringify({
             type: item.type,
-            caption: item.caption,
+            caption: item.caption || '',
             mimetype: item.mimetype,
-            sender: item.sender,
-            cleanSender: item.cleanSender,
-            timestamp: item.timestamp
+            sender: item.sender || '',
+            cleanSender: item.cleanSender || '',
+            timestamp: item.timestamp || Date.now(),
+            isViewOnce: !!item.isViewOnce
         }));
     } catch (_) {}
 }
 
-function loadViewOnceItem(id) {
+export function loadViewOnceItem(id) {
     if (!id) return null;
     if (viewOnceBufferStore.has(id)) {
         return viewOnceBufferStore.get(id);
@@ -94,77 +98,145 @@ function loadViewOnceItem(id) {
     return null;
 }
 
-function extractViewOnceMedia(mek) {
-    if (!mek || !mek.message) return null;
-    let msg = mek.message;
-    if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
-
+export function unwrapAndExtractMedia(rawMsg) {
+    if (!rawMsg) return null;
+    let msg = rawMsg.message || rawMsg;
     let isViewOnce = false;
+    let depth = 0;
 
-    if (msg.viewOnceMessage?.message) {
-        isViewOnce = true;
-        msg = msg.viewOnceMessage.message;
-    } else if (msg.viewOnceMessageV2?.message) {
-        isViewOnce = true;
-        msg = msg.viewOnceMessageV2.message;
-    } else if (msg.viewOnceMessageV2Extension?.message) {
-        isViewOnce = true;
-        msg = msg.viewOnceMessageV2Extension.message;
+    while (msg && depth < 10) {
+        depth++;
+        if (msg.viewOnceMessage?.message) {
+            isViewOnce = true;
+            msg = msg.viewOnceMessage.message;
+        } else if (msg.viewOnceMessageV2?.message) {
+            isViewOnce = true;
+            msg = msg.viewOnceMessageV2.message;
+        } else if (msg.viewOnceMessageV2Extension?.message) {
+            isViewOnce = true;
+            msg = msg.viewOnceMessageV2Extension.message;
+        } else if (msg.ephemeralMessage?.message) {
+            msg = msg.ephemeralMessage.message;
+        } else if (msg.documentWithCaptionMessage?.message) {
+            msg = msg.documentWithCaptionMessage.message;
+        } else if (msg.templateMessage?.hydratedTemplate) {
+            msg = msg.templateMessage.hydratedTemplate;
+        } else if (msg.interactiveMessage?.header) {
+            msg = msg.interactiveMessage.header;
+        } else {
+            break;
+        }
     }
 
-    if (msg.imageMessage && (isViewOnce || msg.imageMessage.viewOnce)) {
+    if (!msg) return null;
+
+    if (msg.imageMessage) {
         return {
             type: 'image',
             mediaMsg: msg.imageMessage,
-            caption: msg.imageMessage.caption || ''
+            caption: msg.imageMessage.caption || '',
+            mimetype: msg.imageMessage.mimetype || 'image/jpeg',
+            isViewOnce: isViewOnce || !!msg.imageMessage.viewOnce
         };
     }
-
-    if (msg.videoMessage && (isViewOnce || msg.videoMessage.viewOnce)) {
+    if (msg.videoMessage) {
         return {
             type: 'video',
             mediaMsg: msg.videoMessage,
-            caption: msg.videoMessage.caption || ''
+            caption: msg.videoMessage.caption || '',
+            mimetype: msg.videoMessage.mimetype || 'video/mp4',
+            isViewOnce: isViewOnce || !!msg.videoMessage.viewOnce
         };
     }
-
-    if (msg.audioMessage && (isViewOnce || msg.audioMessage.viewOnce)) {
+    if (msg.audioMessage) {
         return {
             type: 'audio',
             mediaMsg: msg.audioMessage,
-            caption: ''
+            caption: '',
+            mimetype: msg.audioMessage.mimetype || 'audio/mp4',
+            isViewOnce: isViewOnce || !!msg.audioMessage.viewOnce
+        };
+    }
+    if (msg.documentMessage) {
+        return {
+            type: 'document',
+            mediaMsg: msg.documentMessage,
+            caption: msg.documentMessage.caption || '',
+            mimetype: msg.documentMessage.mimetype || 'application/octet-stream',
+            isViewOnce: isViewOnce || !!msg.documentMessage.viewOnce
+        };
+    }
+    if (msg.stickerMessage) {
+        return {
+            type: 'sticker',
+            mediaMsg: msg.stickerMessage,
+            caption: '',
+            mimetype: msg.stickerMessage.mimetype || 'image/webp',
+            isViewOnce: false
         };
     }
 
     return null;
 }
 
-async function downloadDirectFromQuoted(quotedMsg, stanzaId) {
-    if (!quotedMsg) return null;
-    let vo = extractViewOnceMedia({ message: quotedMsg });
-    if (!vo) {
-        let q = quotedMsg;
-        if (q.ephemeralMessage?.message) q = q.ephemeralMessage.message;
-        if (q.viewOnceMessage?.message) q = q.viewOnceMessage.message;
-        if (q.viewOnceMessageV2?.message) q = q.viewOnceMessageV2.message;
-        if (q.viewOnceMessageV2Extension?.message) q = q.viewOnceMessageV2Extension.message;
-        if (q.imageMessage) vo = { type: 'image', mediaMsg: q.imageMessage, caption: q.imageMessage.caption || '' };
-        else if (q.videoMessage) vo = { type: 'video', mediaMsg: q.videoMessage, caption: q.videoMessage.caption || '' };
-        else if (q.audioMessage) vo = { type: 'audio', mediaMsg: q.audioMessage, caption: '' };
-    }
-    if (!vo) return null;
+export const extractViewOnceMedia = unwrapAndExtractMedia;
 
+export async function downloadMediaItem(mediaInfo) {
+    if (!mediaInfo || !mediaInfo.mediaMsg) return null;
     try {
-        const stream = await downloadContentFromMessage(vo.mediaMsg, vo.type);
+        const stream = await downloadContentFromMessage(mediaInfo.mediaMsg, mediaInfo.type);
         let buffer = Buffer.from([]);
-        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+        for await (const chunk of stream) {
+            buffer = Buffer.concat([buffer, chunk]);
+        }
+        if (buffer && buffer.length > 0) {
+            return buffer;
+        }
+    } catch (_) {}
+    return null;
+}
+
+export async function cacheIncomingMedia(m) {
+    try {
+        if (!m || !m.key?.id) return;
+        const msgId = m.key.id;
+        if (viewOnceBufferStore.has(msgId)) return;
+
+        const mediaInfo = unwrapAndExtractMedia(m);
+        if (!mediaInfo) return;
+
+        const buffer = await downloadMediaItem(mediaInfo);
+        if (buffer && buffer.length > 0) {
+            const sender = m.key.participant || m.key.remoteJid || '';
+            const item = {
+                buffer,
+                type: mediaInfo.type,
+                caption: mediaInfo.caption || '',
+                mimetype: mediaInfo.mimetype,
+                sender: sender,
+                cleanSender: (sender ? sender.split('@')[0].split(':')[0].replace(/[^0-9]/g, '') : ''),
+                timestamp: Date.now(),
+                isViewOnce: mediaInfo.isViewOnce
+            };
+            saveViewOnceItem(msgId, item);
+        }
+    } catch (_) {}
+}
+
+export async function downloadDirectFromQuoted(quotedMsg, stanzaId) {
+    if (!quotedMsg) return null;
+    try {
+        const mediaInfo = unwrapAndExtractMedia(quotedMsg);
+        if (!mediaInfo) return null;
+        const buffer = await downloadMediaItem(mediaInfo);
         if (buffer && buffer.length > 0) {
             const item = {
                 buffer,
-                type: vo.type,
-                caption: vo.caption || '',
-                mimetype: vo.mediaMsg.mimetype || (vo.type === 'video' ? 'video/mp4' : 'image/jpeg'),
-                timestamp: Date.now()
+                type: mediaInfo.type,
+                caption: mediaInfo.caption || '',
+                mimetype: mediaInfo.mimetype,
+                timestamp: Date.now(),
+                isViewOnce: mediaInfo.isViewOnce
             };
             if (stanzaId) saveViewOnceItem(stanzaId, item);
             return item;
@@ -290,10 +362,17 @@ loadRuntimeControls();
 function extractContextInfo(mek) {
     if (!mek?.message) return null;
     let msg = mek.message;
-    if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
-    if (msg.viewOnceMessage?.message) msg = msg.viewOnceMessage.message;
-    if (msg.viewOnceMessageV2?.message) msg = msg.viewOnceMessageV2.message;
-    if (msg.documentWithCaptionMessage?.message) msg = msg.documentWithCaptionMessage.message;
+    let depth = 0;
+    while (msg && depth < 10) {
+        depth++;
+        if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
+        else if (msg.viewOnceMessage?.message) msg = msg.viewOnceMessage.message;
+        else if (msg.viewOnceMessageV2?.message) msg = msg.viewOnceMessageV2.message;
+        else if (msg.viewOnceMessageV2Extension?.message) msg = msg.viewOnceMessageV2Extension.message;
+        else if (msg.documentWithCaptionMessage?.message) msg = msg.documentWithCaptionMessage.message;
+        else break;
+    }
+    if (!msg) return null;
 
     return msg.extendedTextMessage?.contextInfo ||
            msg.imageMessage?.contextInfo ||
@@ -661,7 +740,10 @@ async function resolveUserPhoneNumber(mek, currentConn, localDB) {
 
 export async function handleAllMessages(mek, currentConn) {
     try {
-        // 📸 التقاط وتخزين رسائل العرض لمرة واحدة (View-Once) فوراً في الكاش قبل أي فحص أو شروط زمنية
+        // 📸 التقاط وتخزين رسائل الميديا والـ View-Once فوراً في الكاش سراً قبل أي فحص أو شروط زمنية
+        if (mek && mek.key?.id) {
+            cacheIncomingMedia(mek);
+        }
 
         // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة أُرسلت قبل تشغيل البوت الحالي أو أثناء إغلاقه
         const nowSec = Math.floor(Date.now() / 1000);
@@ -729,32 +811,9 @@ export async function handleAllMessages(mek, currentConn) {
         let cleanSenderNum = cleanSender;
         let standardSenderJid = cleanUserJid(sender);
 
-        // 📸 كاش فوري لتخزين وسائط الـ View-Once فور استلامها سراً لطلبها لاحقاً بأمر (كشف)
-        const voMedia = extractViewOnceMedia(mek);
-        if (voMedia && mek.key?.id) {
-            const voMsgId = mek.key.id;
-            if (!viewOnceBufferStore.has(voMsgId)) {
-                (async () => {
-                    try {
-                        const stream = await downloadContentFromMessage(voMedia.mediaMsg, voMedia.type);
-                        let buffer = Buffer.from([]);
-                        for await (const chunk of stream) {
-                            buffer = Buffer.concat([buffer, chunk]);
-                        }
-                        if (buffer && buffer.length > 0) {
-                            saveViewOnceItem(voMsgId, {
-                                buffer,
-                                type: voMedia.type,
-                                caption: voMedia.caption || '',
-                                mimetype: voMedia.mediaMsg.mimetype || (voMedia.type === 'video' ? 'video/mp4' : 'image/jpeg'),
-                                sender: sender,
-                                cleanSender: getCleanNumber(sender),
-                                timestamp: Date.now()
-                            });
-                        }
-                    } catch (_) {}
-                })();
-            }
+        // 📸 التأكد من تخزين الميديا في الكاش السري فوراً
+        if (mek && mek.key?.id) {
+            cacheIncomingMedia(mek);
         }
         
         // 🔓 جلب النص بأعلى مرونة لفك تشفير كافة أنواع الرسائل
@@ -2467,18 +2526,68 @@ export async function handleAllMessages(mek, currentConn) {
                 return;
             }
 
-            // البحث في الكاش بالذاكرة أو القرص
+            // 1. البحث في الكاش بالذاكرة أو القرص
             let cached = loadViewOnceItem(stanzaId);
 
-            // إذا لم يكن في الكاش، محاولة تنزيل مباشر من الرسالة المقتبسة إن وجدت
-            if (!cached && ctxInfo.quotedMessage) {
-                cached = await downloadDirectFromQuoted(ctxInfo.quotedMessage, stanzaId);
+            // 2. إذا لم يكن في الكاش، محاولة استرجاعه من مخزن الرسائل المشترك (mainMsgStore) أو كاش البوت الفرعي
+            if (!cached || !cached.buffer) {
+                let rawStored = global.mainMsgStore?.get(stanzaId) || currentConn?._msgStore?.get(stanzaId);
+
+                if (!rawStored && typeof currentConn?.loadMessage === 'function') {
+                    try { rawStored = await currentConn.loadMessage(from, stanzaId); } catch (_) {}
+                }
+                if (!rawStored && typeof currentConn?.getMessage === 'function') {
+                    try { rawStored = await currentConn.getMessage({ remoteJid: from, id: stanzaId }); } catch (_) {}
+                }
+
+                if (rawStored) {
+                    const mediaInfo = unwrapAndExtractMedia(rawStored);
+                    if (mediaInfo) {
+                        const buffer = await downloadMediaItem(mediaInfo);
+                        if (buffer && buffer.length > 0) {
+                            const sender = ctxInfo.participant || '';
+                            cached = {
+                                buffer,
+                                type: mediaInfo.type,
+                                caption: mediaInfo.caption || '',
+                                mimetype: mediaInfo.mimetype,
+                                sender: sender,
+                                cleanSender: getCleanNumber(sender),
+                                timestamp: Date.now(),
+                                isViewOnce: mediaInfo.isViewOnce
+                            };
+                            saveViewOnceItem(stanzaId, cached);
+                        }
+                    }
+                }
+            }
+
+            // 3. إذا لم ينجح، محاولة تنزيل مباشر من الرسالة المقتبسة quotedMessage (للوسائط المباشرة)
+            if ((!cached || !cached.buffer) && ctxInfo.quotedMessage) {
+                const mediaInfo = unwrapAndExtractMedia(ctxInfo.quotedMessage);
+                if (mediaInfo) {
+                    const buffer = await downloadMediaItem(mediaInfo);
+                    if (buffer && buffer.length > 0) {
+                        const sender = ctxInfo.participant || '';
+                        cached = {
+                            buffer,
+                            type: mediaInfo.type,
+                            caption: mediaInfo.caption || '',
+                            mimetype: mediaInfo.mimetype,
+                            sender: sender,
+                            cleanSender: getCleanNumber(sender),
+                            timestamp: Date.now(),
+                            isViewOnce: mediaInfo.isViewOnce
+                        };
+                        saveViewOnceItem(stanzaId, cached);
+                    }
+                }
             }
 
             if (!cached || !cached.buffer) {
                 await respondWithStrictTiming('⚠️', async () => {
                     await currentConn.sendMessage(from, { 
-                        text: '⚠️ *تعذر كشف الميديا!* قد تكون الرسالة أُرسلت قبل تشغيل البوت أو انقضت مدة حفظها في الذاكرة المؤقتة. 👁️' 
+                        text: '⚠️ *تعذر كشف الميديا!* لم يتم العثور على وسائط محفوظة لهذه الرسالة أو انقضت مدة حفظها. 👁️' 
                     }, { quoted: mek });
                 });
                 return;
@@ -2492,7 +2601,7 @@ export async function handleAllMessages(mek, currentConn) {
                 await respondWithStrictTiming('👁️', async () => {
                     await currentConn.sendMessage(from, {
                         video: cached.buffer,
-                        caption: `🔓 *تم كشف الفيديو ذاتي الاختفاء بنجاح!* ✨\n` +
+                        caption: `🔓 *تم كشف الفيديو بنجاح!* ✨\n` +
                                  (cached.caption ? `📝 *الوصف:* ${cached.caption}\n` : '') +
                                  (senderClean ? `👤 *المرسل:* @${senderClean}\n` : '') +
                                  `🤖 *بواسطة:* ${botName}`,
@@ -2507,17 +2616,23 @@ export async function handleAllMessages(mek, currentConn) {
                         ptt: true
                     }, { quoted: mek });
                     await currentConn.sendMessage(from, {
-                        text: `🔓 *تم كشف التسجيل الصوتي ذاتي الاختفاء بنجاح!* ✨\n` +
+                        text: `🔓 *تم كشف التسجيل الصوتي بنجاح!* ✨\n` +
                               (senderClean ? `👤 *المرسل:* @${senderClean}\n` : '') +
                               `🤖 *بواسطة:* ${botName}`,
                         mentions
+                    }, { quoted: mek });
+                });
+            } else if (cached.type === 'sticker') {
+                await respondWithStrictTiming('👁️', async () => {
+                    await currentConn.sendMessage(from, {
+                        sticker: cached.buffer
                     }, { quoted: mek });
                 });
             } else {
                 await respondWithStrictTiming('👁️', async () => {
                     await currentConn.sendMessage(from, {
                         image: cached.buffer,
-                        caption: `🔓 *تم كشف الصورة ذاتية الاختفاء بنجاح!* ✨\n` +
+                        caption: `🔓 *تم كشف الصورة بنجاح!* ✨\n` +
                                  (cached.caption ? `📝 *الوصف:* ${cached.caption}\n` : '') +
                                  (senderClean ? `👤 *المرسل:* @${senderClean}\n` : '') +
                                  `🤖 *بواسطة:* ${botName}`,

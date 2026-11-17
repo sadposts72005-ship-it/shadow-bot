@@ -2,7 +2,7 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaile
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
-import { handleAllMessages } from '../handler.js';
+import { handleAllMessages, cacheIncomingMedia } from '../handler.js';
 import { getMsgTimestamp } from './points.js';
 
 const REGISTRY_FILE = path.join(process.cwd(), 'sub_bots.json');
@@ -551,16 +551,17 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
             // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
             for (const m of messages) {
-                if (m && m.message) {
-                    
-                    if (m.key?.id) {
-                        if (!sock._msgStore) sock._msgStore = new Map();
-                        sock._msgStore.set(m.key.id, m.message);
-                        if (sock._msgStore.size > 1000) {
-                            const fk = sock._msgStore.keys().next().value;
-                            sock._msgStore.delete(fk);
-                        }
+                if (m && m.message && m.key?.id) {
+                    if (!sock._msgStore) sock._msgStore = new Map();
+                    sock._msgStore.set(m.key.id, m.message);
+                    if (sock._msgStore.size > 1000) {
+                        const fk = sock._msgStore.keys().next().value;
+                        sock._msgStore.delete(fk);
                     }
+                    if (global.mainMsgStore) {
+                        global.mainMsgStore.set(m.key.id, m.message);
+                    }
+                    cacheIncomingMedia(m);
                 }
             }
 
@@ -1396,16 +1397,17 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                 // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
                 for (const m of messages) {
-                    if (m && m.message) {
-                        
-                        if (m.key?.id) {
-                            if (!sock._msgStore) sock._msgStore = new Map();
-                            sock._msgStore.set(m.key.id, m.message);
-                            if (sock._msgStore.size > 1000) {
-                                const fk = sock._msgStore.keys().next().value;
-                                sock._msgStore.delete(fk);
-                            }
+                    if (m && m.message && m.key?.id) {
+                        if (!sock._msgStore) sock._msgStore = new Map();
+                        sock._msgStore.set(m.key.id, m.message);
+                        if (sock._msgStore.size > 1000) {
+                            const fk = sock._msgStore.keys().next().value;
+                            sock._msgStore.delete(fk);
                         }
+                        if (global.mainMsgStore) {
+                            global.mainMsgStore.set(m.key.id, m.message);
+                        }
+                        cacheIncomingMedia(m);
                     }
                 }
 

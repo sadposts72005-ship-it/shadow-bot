@@ -3,7 +3,7 @@ import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
-import { handleAllMessages } from './handler.js';
+import { handleAllMessages, cacheIncomingMedia } from './handler.js';
 // ⏰ استيراد دالة الأذكار التلقائية والترحيب من ملف الـ plugins
 import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
@@ -475,6 +475,7 @@ export async function startShadowBot() {
                         const firstKey = mainMsgStore.keys().next().value;
                         mainMsgStore.delete(firstKey);
                     }
+                    cacheIncomingMedia(m);
                 }
             }
 

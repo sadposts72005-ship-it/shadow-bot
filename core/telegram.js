@@ -8,7 +8,8 @@ import {
     cleanPhoneNumber,
     requestSubBotPairing,
     updateSubBotName,
-    updateSubBotCallName
+    updateSubBotCallName,
+    broadcastUpdateToSubBots
 } from './subbot.js';
 import { getMenuSection } from '../plugins/menu.js';
 
@@ -635,6 +636,11 @@ async function handleTelegramMessage(token, msg) {
     );
 
     if (isHowManySubBotsCmdTg) {
+        if (!isHajjShado && !isAbsoluteOwner) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
+            return;
+        }
+
         const rep = getSubBotsReport();
         const headerText = 
             `╭━━━〔 🤖 *لوحة إحصائيات البوتات الفرعية على تليجرام* 〕━━━╮\n` +
@@ -644,29 +650,21 @@ async function handleTelegramMessage(token, msg) {
             `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
             `${rep.listText}`;
 
-        if (isHajjShado || isMainHajj || isAbsoluteOwner || isHajj) {
-            const dashText = 
-                headerText + `\n\n` +
-                `⚙️ *أوامر التحكم السريع عن بُعد:* \n` +
-                `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
-                `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
-                `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*`;
+        const dashText = 
+            headerText + `\n\n` +
+            `⚙️ *أوامر التحكم السريع عن بُعد:* \n` +
+            `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
+            `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
+            `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*\n` +
+            `• إذاعة للبوتات: *(اذاعة للبوتات <الرسالة>)*`;
 
-            await sendTelegramMessage(token, chatId, dashText, { replyTo: msg.message_id });
-        } else {
-            const publicText = 
-                headerText + `\n\n` +
-                `💡 *هل تريد تنصيب بوتك الخاص مجاناً؟*\n` +
-                `اكتب *(تنصيب)* في أي وقت وابدأ في إنشاء بوتك الفرعي فوراً! 🚀`;
-
-            await sendTelegramMessage(token, chatId, publicText, { replyTo: msg.message_id });
-        }
+        await sendTelegramMessage(token, chatId, dashText, { replyTo: msg.message_id });
         return;
     }
 
     if (normalizedBody.startsWith('ايقاف تنصيب ') || normalizedBody.startsWith('إيقاف تنصيب ')) {
-        if (!isHajjShado && !isMainHajj && !isAbsoluteOwner) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
+        if (!isHajjShado && !isAbsoluteOwner) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         const targetPhone = text.replace(/^(ايقاف تنصيب|إيقاف تنصيب)\s*/i, '').replace(/[^0-9]/g, '');
@@ -680,8 +678,8 @@ async function handleTelegramMessage(token, msg) {
     }
 
     if (normalizedBody.startsWith('تشغيل تنصيب ')) {
-        if (!isHajjShado && !isMainHajj && !isAbsoluteOwner) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
+        if (!isHajjShado && !isAbsoluteOwner) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         const targetPhone = text.replace(/^تشغيل تنصيب\s*/i, '').replace(/[^0-9]/g, '');
@@ -695,8 +693,8 @@ async function handleTelegramMessage(token, msg) {
     }
 
     if (normalizedBody.startsWith('حذف تنصيب ') || normalizedBody.startsWith('الغاء تنصيب ') || normalizedBody.startsWith('إلغاء تنصيب ')) {
-        if (!isHajjShado && !isMainHajj && !isAbsoluteOwner) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
+        if (!isHajjShado && !isAbsoluteOwner) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         const targetPhone = text.replace(/^(حذف تنصيب|الغاء تنصيب|إلغاء تنصيب)\s*/i, '').replace(/[^0-9]/g, '');
@@ -706,6 +704,55 @@ async function handleTelegramMessage(token, msg) {
         }
         const res = await deleteSubBotRemote(targetPhone, null, false);
         await sendTelegramMessage(token, chatId, res.message, { replyTo: msg.message_id });
+        return;
+    }
+
+    // إذاعة للبوتات الفرعية عبر تليجرام - للحج شادو فقط
+    const isBroadcastCmdTg = (
+        normalizedBody.startsWith('اذاعه للبوتات') ||
+        normalizedBody.startsWith('اذاعة للبوتات') ||
+        normalizedBody.startsWith('إذاعة للبوتات') ||
+        normalizedBody.startsWith('نشر للبوتات') ||
+        normalizedBody.startsWith('اعلان للبوتات') ||
+        normalizedBody.startsWith('إعلان للبوتات') ||
+        normalizedBody.startsWith('تحديث للبوتات')
+    );
+
+    if (isBroadcastCmdTg) {
+        if (!isHajjShado && !isAbsoluteOwner) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
+            return;
+        }
+        const broadcastText = text
+            .replace(/^(اذاعة للبوتات|اذاعه للبوتات|إذاعة للبوتات|نشر للبوتات|اعلان للبوتات|إعلان للبوتات|تحديث للبوتات)\s*/i, '')
+            .trim();
+
+        if (!broadcastText) {
+            const helpText = 
+                `📢 *طريقة الإذاعة لجميع أصحاب البوتات الفرعية:* 👑\n\n` +
+                `• اكتب: *اذاعة للبوتات [الرسالة أو الإعلان أو التحديث الجديد]*\n` +
+                `• مثال: *اذاعة للبوتات تم إضافة أوامر جديدة وتحديث شامل!*\n\n` +
+                `⚡ سيقوم البوت بإرسال الإشعار فوراً في الخاص لجميع الحجاج أصحاب البوتات الفرعية المسجلة.`;
+            await sendTelegramMessage(token, chatId, helpText, { replyTo: msg.message_id });
+            return;
+        }
+
+        const formattedMsg = 
+            `📢 *〔 إشعار وتحديث هام من الحج شادو إلى جميع أصحاب البوتات الفرعية 〕* 👑\n\n` +
+            `${broadcastText}\n\n` +
+            `⚡ *تاريخ الإرسال:* ${new Date().toLocaleDateString('ar-EG')}\n` +
+            `👑 *مع تحيات الحج شادو وإدارة البوت.*`;
+
+        const result = await broadcastUpdateToSubBots(global.conn, formattedMsg);
+        const reportMsg = 
+            `╭━━━〔 📢 *تقرير إذاعة البوتات الفرعية* 〕━━━╮\n` +
+            `┃ 🤖 *إجمالي البوتات الفرعية:* ${result.total}\n` +
+            `┃ ✅ *تم الإرسال بنجاح إلى:* ${result.sentCount}\n` +
+            `┃ ❌ *فشل الإرسال إلى:* ${result.failedCount}\n` +
+            `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+            `🎉 ${result.message}`;
+
+        await sendTelegramMessage(token, chatId, reportMsg, { replyTo: msg.message_id });
         return;
     }
 
