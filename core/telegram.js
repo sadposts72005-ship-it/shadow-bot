@@ -1519,7 +1519,7 @@ async function handleTelegramMessage(token, msg) {
     // أوامر قفل وفتح الشات في الجروبات
     if (['قفل', 'قفل الروم', 'قفل الشات', '/lock'].includes(normalizedBody)) {
         if (!isActualRoomAdminOrOwner) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
         const locked = await telegramAction(token, 'setChatPermissions', {
@@ -1536,7 +1536,7 @@ async function handleTelegramMessage(token, msg) {
 
     if (['فتح', 'فتح الروم', 'فتح الشات', '/unlock'].includes(normalizedBody)) {
         if (!isActualRoomAdminOrOwner) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
         const unlocked = await telegramAction(token, 'setChatPermissions', {
@@ -1678,7 +1678,7 @@ async function handleTelegramMessage(token, msg) {
 
         // فحص صلاحية الأدمن أو الحج
         if (!isActualRoomAdminOrOwner) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
 
@@ -1704,7 +1704,7 @@ async function handleTelegramMessage(token, msg) {
         }
 
         if (!isActualRoomAdminOrOwner) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
 
@@ -1731,7 +1731,7 @@ async function handleTelegramMessage(token, msg) {
         }
 
         if (!isActualRoomAdminOrOwner) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج شادو أو أدمن الجروب فقط! 🚫`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
 
@@ -1757,7 +1757,7 @@ async function handleTelegramMessage(token, msg) {
     // حظر مستخدم من البوت بالكامل
     if (normalizedBody.startsWith('حظر مستخدم') || normalizedBody.startsWith('حظر عضو')) {
         if (!isHajjShado) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑🚫`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         const replyUser = msg.reply_to_message?.from;
@@ -1782,7 +1782,7 @@ async function handleTelegramMessage(token, msg) {
     // فك حظر مستخدم
     if (normalizedBody.startsWith('فك حظر مستخدم') || normalizedBody.startsWith('فك حظر')) {
         if (!isHajjShado) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑🚫`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         const replyUser = msg.reply_to_message?.from;
@@ -1802,7 +1802,7 @@ async function handleTelegramMessage(token, msg) {
     // نوم البوت في الشات (نام)
     if (normalizedBody === 'نام' || normalizedBody === '/sleep') {
         if (!isHajj) {
-            await sendTelegramMessage(token, chatId, `❌ أمر النوم مخصص للحج فقط! 👑`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         chatSleepMap.set(chatId, true);
@@ -1813,7 +1813,7 @@ async function handleTelegramMessage(token, msg) {
     // صمت البوت التام (اسكت)
     if (normalizedBody === 'اسكت' || normalizedBody === 'اخرس') {
         if (!isHajj) {
-            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج فقط! 👑`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص للحج الأساسي فقط! 👑`, { replyTo: msg.message_id });
             return;
         }
         chatMuteMap.set(chatId, true);

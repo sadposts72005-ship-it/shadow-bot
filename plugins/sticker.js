@@ -236,8 +236,8 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
         const body = rawBody || '';
         const normalized = normalizeArabic(body.trim().toLowerCase());
 
-        // فحص هل النص يمثل أمر استيكر
-        const isStickerCmd = /^(استيكر|ستيكر|ملصق|sticker|s)(\s|$)/i.test(normalized);
+        // فحص هل النص يمثل أمر استيكر أو سرقة وتعديل حقوق
+        const isStickerCmd = /^(استيكر|ستيكر|ملصق|sticker|s|سرق[هة]|تعديل\s*حقوق(?:\s*استيكر)?|استيكر\s*حقوق|ستيكر\s*حقوق)(\s|$)/i.test(normalized);
         if (!isStickerCmd) return false;
 
         const from = mek.key?.remoteJid || mek.chat;
@@ -245,7 +245,7 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
 
         // استخراج حقوق مخصصة إن وُجدت
         let customAuthor = null;
-        const matchRights = body.match(/^(?:استيكر|ستيكر|ملصق|sticker|s)\s+(?:حقوق|حقوقه|حقوقي|حقوقها)?\s*[:\-]?\s*(.+)$/i);
+        const matchRights = body.match(/^(?:استيكر|ستيكر|ملصق|sticker|s|سرق[هة]|تعديل\s*حقوق(?:\s*استيكر)?)\s*(?:حقوق|حقوقه|حقوقي|حقوقها)?\s*[:\-]?\s*(.+)$/i);
         if (matchRights && matchRights[1]) {
             const parsed = matchRights[1].trim();
             if (parsed && !/^(حقوق|حقوقه|حقوقي)$/i.test(parsed)) {

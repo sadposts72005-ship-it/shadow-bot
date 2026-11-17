@@ -1290,13 +1290,14 @@ const datelsHandler = {
                                   normalizedBody.startsWith('انضم');
 
             if (isJoinCommand) {
+                if (!isBotOwner) {
+                    await handleCommandTiming('❌');
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                    return true;
+                }
+
                 let codeMatch = body.match(waGroupRegex);
                 if (codeMatch && codeMatch[1]) {
-                    if (!isBotOwner) {
-                        await handleCommandTiming('❌');
-                        await currentConn.sendMessage(from, { text: `❌ هذا الأمر مخصص لمالك البوت (${botName || 'الرئيسي'}) فقط! 👑🚫` }, { quoted: mek });
-                        return true;
-                    }
 
                     let inviteCode = codeMatch[1];
                     await handleCommandTiming('🚀');
@@ -1597,7 +1598,7 @@ const datelsHandler = {
             // =========================================================================
             // 👤 [أمر بروف / صورة البروفايل لأي شخص بجودة عالية]
             // =========================================================================
-            const isPfpCommand = /^(?:\.|\/|!)?(?:بروف|البروف|بروفايل|البروفايل|صوره بروفايل|صورة بروفايل|صوره البروفايل|صورة البروفايل|صورة الشخص|صوره الشخص)(?:\s|$)/i.test(normalizedBody);
+            const isPfpCommand = /^(?:\.|\/|!)?(?:بروف|البروف|صوره بروفايل|صورة بروفايل|صوره البروفايل|صورة البروفايل|صورة الشخص|صوره الشخص)(?:\s|$)/i.test(normalizedBody);
             if (isPfpCommand) {
                 await handleCommandTiming('👤');
                 let target = extractTarget(mek, body);
@@ -1783,8 +1784,10 @@ const datelsHandler = {
             }
 
             if (isLeaveMatch) {
-                // إذا كتب الأمر شخص ليس مالك هذا البوت وليس الحج شادو: صمت تام لتفادي السبام
+                // إذا كتب الأمر شخص ليس مالك هذا البوت وليس الحج شادو
                 if (!isBotOwner) {
+                    await handleCommandTiming('❌');
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
                 }
 
@@ -1930,7 +1933,7 @@ const datelsHandler = {
                 if (isEnableWelcome) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
-                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
                     if (!localDB.disabledWelcomes?.includes(from)) {
@@ -1950,7 +1953,7 @@ const datelsHandler = {
                 if (isDisableWelcome) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
-                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
                     if (localDB.disabledWelcomes?.includes(from)) {
@@ -1971,7 +1974,7 @@ const datelsHandler = {
                 if (isEnableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
-                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
                     if (!localDB.disabledMuslim) localDB.disabledMuslim = [];
@@ -1992,7 +1995,7 @@ const datelsHandler = {
                 if (isDisableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
-                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
                     if (!localDB.disabledMuslim) localDB.disabledMuslim = [];
@@ -2009,7 +2012,12 @@ const datelsHandler = {
                 }
 
                 // قفل وقتي وفتح وقتي
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('قفل وقتي') || normalizedBody.startsWith('فتح وقتي'))) {
+                if (normalizedBody.startsWith('قفل وقتي') || normalizedBody.startsWith('فتح وقتي')) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     let cleanBody = convertArabicNumbers(body);
                     const timeMatch = cleanBody.match(/([0-2]?[0-9]):[0-5][0-9]/);
                     if (!timeMatch) {
@@ -2056,7 +2064,12 @@ const datelsHandler = {
                 }
 
                 // إلغاء المواعيد الوقتية
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'الغاء المواعيد الوقتية' || normalizedBody === 'الغاء المواعيد الوقتيه')) {
+                if (normalizedBody === 'الغاء المواعيد الوقتية' || normalizedBody === 'الغاء المواعيد الوقتيه') {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     await handleCommandTiming('🗑️');
                     if (localDB.timedGroupControls && localDB.timedGroupControls[from]) {
                         delete localDB.timedGroupControls[from];
@@ -2207,11 +2220,11 @@ const datelsHandler = {
                 }
 
                 // كتم عضو (حذف كل رسائله بالجروب فوراً وتلقائياً)
-                const isMuteCmd = /^(?:\.|\/|!)?(?:كتم|اكتم|اسكت)(?:\s|$)/i.test(normalizedBody);
+                const isMuteCmd = /^(?:\.|\/|!)?(?:كتم|اكتم)(?:\s|$)/i.test(normalizedBody);
                 if (isMuteCmd) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
-                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. أمر الكتم مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
 
@@ -2307,11 +2320,11 @@ const datelsHandler = {
                 }
 
                 // فك كتم عضو
-                const isUnmuteCmd = /^(?:\.|\/|!)?(?:فك\s*كتم|فك\s*الكتم|الغاء\s*كتم|إلغاء\s*كتم|تكلم)(?:\s|$)/i.test(normalizedBody);
+                const isUnmuteCmd = /^(?:\.|\/|!)?(?:فك\s*كتم|فك\s*الكتم|الغاء\s*كتم|إلغاء\s*كتم)(?:\s|$)/i.test(normalizedBody);
                 if (isUnmuteCmd) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
-                        await currentConn.sendMessage(from, { text: '❌ عذراً يا غالي.. هذا الأمر مخصص لمشرفين الجروب والحج شادو فقط! 🛡️' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
 
@@ -2383,7 +2396,12 @@ const datelsHandler = {
                 }
 
                 // عرض قائمة المكتومين بدون تكرار
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'المكتومين' || normalizedBody === 'قائمة المكتومين')) {
+                if (normalizedBody === 'المكتومين' || normalizedBody === 'قائمة المكتومين') {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     await handleCommandTiming('📋');
                     const rawList = localDB.mutedUsers?.[from] || [];
                     const uniquePeople = new Set();
@@ -2424,7 +2442,12 @@ const datelsHandler = {
                 }
 
                 // حماية الجروب ضد التبنيد والتخريب
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('حماية الجروب') || normalizedBody.startsWith('حمايه الجروب') || normalizedBody.startsWith('ضد التبنيد') || normalizedBody.startsWith('حماية الروم') || normalizedBody.startsWith('حمايه الروم'))) {
+                if (normalizedBody.startsWith('حماية الجروب') || normalizedBody.startsWith('حمايه الجروب') || normalizedBody.startsWith('ضد التبنيد') || normalizedBody.startsWith('حماية الروم') || normalizedBody.startsWith('حمايه الروم')) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     if (!localDB.groupProtection) localDB.groupProtection = {};
 
                     if (normalizedBody.includes('تشغيل') || normalizedBody.includes('تفعيل') || normalizedBody.includes('فتح')) {
@@ -2471,7 +2494,7 @@ const datelsHandler = {
                     await currentConn.sendMessage(from, { text: statusMsg }, { quoted: mek });
                     return true;
                 }
-                if (isActualRoomAdminOrOwner && /^(لينك|اللينك|رابط|الرابط|لينك الجروب|اللينك الجروب|رابط الجروب|الرابط الجروب|لينك الروم|رابط الروم)$/i.test(normalizedBody)) {
+                if (/^(لينك|اللينك|رابط|الرابط|لينك الجروب|اللينك الجروب|رابط الجروب|الرابط الجروب|لينك الروم|رابط الروم)$/i.test(normalizedBody)) {
                     await handleCommandTiming('🔗');
                     try {
                         let code = await currentConn.groupInviteCode(from);
@@ -2515,7 +2538,7 @@ const datelsHandler = {
                 }
 
                 // منشن مخفي (تنبيه جميع الأعضاء دون إظهار أرقامهم في الرسالة)
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('منشن مخفي') || normalizedBody.startsWith('تاغ مخفي') || normalizedBody.startsWith('تاج مخفي') || normalizedBody.startsWith('مخفي') || normalizedBody.startsWith('تنبيه مخفي'))) {
+                if (normalizedBody.startsWith('منشن مخفي') || normalizedBody.startsWith('تاغ مخفي') || normalizedBody.startsWith('تاج مخفي') || normalizedBody.startsWith('مخفي') || normalizedBody.startsWith('تنبيه مخفي')) {
                     await handleCommandTiming('👻');
                     let customMsg = body.replace(/^(منشن\s*مخفي|تاغ\s*مخفي|تاج\s*مخفي|مخفي|تنبيه\s*مخفي)\s*/i, '').trim();
                     let mentionsList = participants.map(p => p.id).filter(Boolean);
@@ -2528,7 +2551,7 @@ const datelsHandler = {
                 }
 
                 // منشن جماعي ظاهر
-                if (isActualRoomAdminOrOwner && (normalizedBody.startsWith('منشن') || normalizedBody.startsWith('تاغ') || normalizedBody.startsWith('تاج'))) {
+                if (normalizedBody.startsWith('منشن') || normalizedBody.startsWith('تاغ') || normalizedBody.startsWith('تاج')) {
                     await handleCommandTiming('📢');
                     let customMsg = body.replace(/^(منشن|تاغ|تاج)\s*/i, '').trim();
                     let mentionsList = participants.map(p => p.id).filter(Boolean);
@@ -2543,7 +2566,12 @@ const datelsHandler = {
                 // قبول طلبات الانضمام لأرقام مصرية فقط (+20)
                 const isEgyptianJoinCmd = /^(?:\.|\/)?(اقبل|قبول)\s*(?:الطلبات|طلبات)\s*(?:مصري[هةين]*|مصر)(?:\s|$|\d)/i.test(normalizedBody);
 
-                if (isActualRoomAdminOrOwner && isEgyptianJoinCmd) {
+                if (isEgyptianJoinCmd) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     let countMatch = normalizedBody.match(/\d+/);
                     let countArg = countMatch ? parseInt(countMatch[0], 10) : 50;
                     stopRequestsControl[from] = false;
@@ -2609,7 +2637,12 @@ const datelsHandler = {
                 }
 
                 // قبول طلبات الانضمام العامة
-                if (isActualRoomAdminOrOwner && !isEgyptianJoinCmd && normalizedBody.startsWith('اقبل طلبات')) {
+                if (!isEgyptianJoinCmd && normalizedBody.startsWith('اقبل طلبات')) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     let countArg = parseInt(normalizedBody.replace(/[^0-9]/g, '')) || 50;
                     stopRequestsControl[from] = false;
                     await handleCommandTiming('⏳');
@@ -2651,7 +2684,12 @@ const datelsHandler = {
                 }
 
                 // إيقاف قبول الطلبات
-                if (isActualRoomAdminOrOwner && (normalizedBody === 'وقف طلبات' || normalizedBody === 'وقف الطلبات')) {
+                if (normalizedBody === 'وقف طلبات' || normalizedBody === 'وقف الطلبات') {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     stopRequestsControl[from] = true;
                     await handleCommandTiming('🛑');
                     await currentConn.sendMessage(from, { text: '🛑 تم إيقاف عملية قبول الطلبات الجارية بنجاح!' }, { quoted: mek });
@@ -2726,7 +2764,13 @@ const datelsHandler = {
                 }
 
                 // تصفير وإلغاء التنبيهات
-                if (isWarnAdmin && (normalizedBody.startsWith('الغي التنبيهات') || normalizedBody.startsWith('الغاء التنبيهات') || normalizedBody.startsWith('صفر التنبيهات') || normalizedBody.startsWith('تصفير التنبيهات') || normalizedBody.startsWith('حذف التنبيهات') || normalizedBody.startsWith('مسح التنبيهات') || normalizedBody.startsWith('الغي الانذارات') || normalizedBody.startsWith('صفر الانذارات') || normalizedBody.startsWith('حذف الانذارات'))) {
+                if (normalizedBody.startsWith('الغي التنبيهات') || normalizedBody.startsWith('الغاء التنبيهات') || normalizedBody.startsWith('صفر التنبيهات') || normalizedBody.startsWith('تصفير التنبيهات') || normalizedBody.startsWith('حذف التنبيهات') || normalizedBody.startsWith('مسح التنبيهات') || normalizedBody.startsWith('الغي الانذارات') || normalizedBody.startsWith('صفر الانذارات') || normalizedBody.startsWith('حذف الانذارات')) {
+                    const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot ? isSubBotOwner : isMainHajj);
+                    if (!canManageWarn) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                        return true;
+                    }
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
@@ -2755,7 +2799,7 @@ const datelsHandler = {
                 const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot ? isSubBotOwner : isMainHajj);
                 if (!canManageWarn) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج الأساسي أو مالك هذا البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2785,7 +2829,7 @@ const datelsHandler = {
                 const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot ? isSubBotOwner : isMainHajj);
                 if (!canManageWarn) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج الأساسي أو مالك هذا البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2809,9 +2853,10 @@ const datelsHandler = {
 
             // رفع حج مساعد
             if (normalizedBody.startsWith('رفع حج') && !normalizedBody.includes('اساسي')) {
-                if (!isAbsoluteOwner) {
+                const canManageHajj = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
+                if (!canManageHajj) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي صاحب البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2847,7 +2892,7 @@ const datelsHandler = {
                 const isSubBotOwner = currentConn.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin);
                 if (!isAbsoluteOwner && !isSubBotOwner) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي أو مالك البوت الفرعي! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2902,12 +2947,12 @@ const datelsHandler = {
                 return true;
             }
 
-            // تنزيل حج
-            if (normalizedBody.startsWith('نزل حج') || normalizedBody.startsWith('تنزيل حج')) {
+            // تنزيل حج أو حج أساسي
+            if (normalizedBody.startsWith('نزل حج') || normalizedBody.startsWith('تنزيل حج') || normalizedBody.startsWith('نزل حج اساسي') || normalizedBody.startsWith('تنزيل حج اساسي') || normalizedBody.startsWith('نزل حج أساسي') || normalizedBody.startsWith('تنزيل حج أساسي')) {
                 const isSubBotOwner = currentConn.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin);
                 if (!isAbsoluteOwner && !isSubBotOwner) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي أو مالك البوت الفرعي! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -2968,7 +3013,7 @@ const datelsHandler = {
                 const canBan = isAbsoluteOwner || (currentConn?.isSubBot ? isSubBotAdminUser : isMainHajj);
                 if (!canBan) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج الأساسي أو مالك هذا البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);
@@ -3051,12 +3096,12 @@ const datelsHandler = {
             }
 
             // فك حظر مستخدم
-            if (normalizedBody.startsWith('فك حظر مستخدم') || normalizedBody.startsWith('فك حظر عضو')) {
+            if (normalizedBody.startsWith('فك حظر مستخدم') || normalizedBody.startsWith('فك حظر عضو') || normalizedBody.startsWith('فك حظر')) {
                 const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
                 const canBan = isAbsoluteOwner || (currentConn?.isSubBot ? isSubBotAdminUser : isMainHajj);
                 if (!canBan) {
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج الأساسي أو مالك هذا البوت! 👑🚫' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
                 }
                 let target = extractTarget(mek, body);

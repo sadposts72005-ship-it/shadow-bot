@@ -950,7 +950,7 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         // 🤫 2. أمر كتم الصوت التام في هذا الجروب (اسكت / اخرس / صمت)
-        if (isSleepOwner && (normalizedBody.startsWith('اسكت') || normalizedBody.startsWith('اخرس') || normalizedBody.startsWith('صمت'))) {
+        if (normalizedBody.startsWith('اسكت') || normalizedBody.startsWith('اخرس') || normalizedBody.startsWith('صمت')) {
             const isMuteAll = isAbsoluteOwner && (normalizedBody === 'اسكت الكل' || normalizedBody === 'اسكتو' || normalizedBody === 'اخرسو');
             const isNamedMute = normalizedBody === 'اسكت' || normalizedBody === 'اخرس' || normalizedBody === 'صمت' ||
                                 normalizedBody === `اسكت ${normalizedBotName}` || 
@@ -958,6 +958,12 @@ export async function handleAllMessages(mek, currentConn) {
                                 (normalizedCallName && (normalizedBody === `اسكت ${normalizedCallName}` || normalizedBody === `اسكت يا ${normalizedCallName}`));
 
             if (isMuteAll || isNamedMute) {
+                if (!isSleepOwner) {
+                    await respondWithStrictTiming('❌', async () => {
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                    });
+                    return;
+                }
                 if (isMuteAll) {
                     setRoomMute(roomKey);
                     setRoomMute(`main_bot_${from}`);
@@ -994,7 +1000,14 @@ export async function handleAllMessages(mek, currentConn) {
             (isAbsoluteOwner && (normalizedBody === 'نام الكل' || normalizedBody === 'نامو'))
         );
 
-        if (isSleepOwner && (isGeneralSleepCmd || isNamedSleepCmd)) {
+        if (isGeneralSleepCmd || isNamedSleepCmd) {
+            if (!isSleepOwner) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+
             // لو الأمر موجه لبوت آخر بالتحديد، يتجاهله
             if (!isNamedSleepCmd && normalizedBody.startsWith('نام ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
                 return;
@@ -1046,7 +1059,13 @@ export async function handleAllMessages(mek, currentConn) {
             (isAbsoluteOwner && (normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو' || normalizedBody === 'اتكلم الكل' || normalizedBody === 'اتكلمو'))
         );
 
-        if (isSleepOwner && (isGeneralWakeCmd || isNamedWakeCmd)) {
+        if (isGeneralWakeCmd || isNamedWakeCmd) {
+            if (!isSleepOwner) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                });
+                return;
+            }
             if (!isNamedWakeCmd && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
                 return;
             }
@@ -2770,7 +2789,7 @@ export async function handleAllMessages(mek, currentConn) {
             const canGivePoints = isAbsoluteOwner || isMainHajj || (currentConn.isSubBot && (isSubBotAdmin || isSubBotMainOwner));
             if (!canGivePoints) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ عفوًا! أمر إعطاء النقاط مخصص حصرياً للحج الأصلي ومساعديه المعتمدين! 👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
                 return;
             }
@@ -2871,7 +2890,7 @@ export async function handleAllMessages(mek, currentConn) {
             const canWithdrawPoints = isAbsoluteOwner || isMainHajj || (currentConn.isSubBot && (isSubBotAdmin || isSubBotMainOwner));
             if (!canWithdrawPoints) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: `❌ عفوًا! أمر السحب مخصص حصرياً للحج الأصلي ومساعديه المعتمدين! 👑` }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
                 return;
             }
@@ -3433,6 +3452,7 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('بروفيل') || 
             normalizedBody.startsWith('بروفايل') ||
             normalizedBody.startsWith('بروفايلي') ||
+            normalizedBody.startsWith('بروف') ||
             normalizedBody.startsWith('كارتي') ||
             normalizedBody.startsWith('كرتي') ||
             normalizedBody.startsWith('حسابي')
