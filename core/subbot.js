@@ -14,6 +14,8 @@ const SUB_BOTS_DIR = path.join(process.cwd(), 'sessions', 'sub_bots');
 
 // حفظ السوكيتات النشطة في الذاكرة
 export const activeSubBots = new Map();
+// تتبع إشعارات التفعيل المرسلة لمنع تكرار رسالة النجاح نهائياً
+const sentSubBotActivationPhones = new Set();
 // تتبع الرسائل المرسلة من البوتات الفرعية لتجنب اللوب
 export const subBotSentMsgIds = new Set();
 global.subBotSentMsgIds = subBotSentMsgIds;
@@ -723,10 +725,26 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 }
 
 export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, customNotifier = null) {
-    if (!cfg || cfg.notifiedSuccess) return;
+    if (!cfg) return;
+    const cleanPhone = cleanPhoneNumber(cfg.phone);
+    if (!cleanPhone) return;
+
+    // فحص قاطع متزامن في الذاكرة لمنع أي إرسال مكرر نهائياً
+    if (sentSubBotActivationPhones.has(cleanPhone) || cfg.notifiedSuccess) {
+        return;
+    }
+
+    // فحص في سجل البوتات المحفوظ على القرص
+    const reg = loadSubBotsRegistry() || {};
+    if (reg[cleanPhone]?.notifiedSuccess) {
+        sentSubBotActivationPhones.add(cleanPhone);
+        return;
+    }
+
+    // حجز فوري للقفل المتزامن لمنع أي تداخل أو استدعاء مكرر
+    sentSubBotActivationPhones.add(cleanPhone);
     cfg.notifiedSuccess = true;
 
-    const cleanPhone = cleanPhoneNumber(cfg.phone);
     const cleanAdmin = cleanPhoneNumber(cfg.adminPhone);
     const botName = cfg.botName || 'شادو بوت';
     const finalCallName = cfg.callName || 'فرعي';
@@ -734,14 +752,13 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
 
     // حفظ حالة التوثيق فوراً في الملف والسجل لمنع أي تكرار
     try {
+        reg[cleanPhone] = reg[cleanPhone] || {};
+        reg[cleanPhone].notifiedSuccess = true;
+        saveSubBotsRegistry(reg);
+
         const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
         if (fs.existsSync(sessionDir)) {
-            fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8');
-        }
-        const reg = loadSubBotsRegistry() || {};
-        if (reg[cleanPhone]) {
-            reg[cleanPhone].notifiedSuccess = true;
-            saveSubBotsRegistry(reg);
+            fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify({ ...cfg, notifiedSuccess: true }, null, 2), 'utf8');
         }
     } catch (_) {}
 
@@ -767,15 +784,17 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
         tgToken = process.env.TELEGRAM_BOT_TOKEN || '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
     }
 
-    // 1. إرسال للشخص الذي نصب البوت عبر تليجرام إن كان التنصيب من تليجرام
+    // 1. إرسال للشخص الذي نصب البوت عبر تليجرام إن كان التنصيب من تليجرام (مرة واحدة فقط)
+    let tgSent = false;
     const tgChatId = cfg.telegramChatId || (String(cfg.notifyJid).startsWith('tg:') ? String(cfg.notifyJid).replace('tg:', '') : null);
     if (tgChatId && tgToken) {
         try {
             const { sendTelegramMessage } = await import('./telegram.js');
             await sendTelegramMessage(tgToken, tgChatId, successMsg).catch(() => {});
+            tgSent = true;
         } catch (_) {}
     }
-    if (typeof customNotifier === 'function') {
+    if (!tgSent && typeof customNotifier === 'function') {
         try { await customNotifier(successMsg); } catch (_) {}
     }
 
@@ -880,6 +899,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     const cleanPhone = cleanPhoneNumber(targetPhone);
     if (cleanPhone) {
         unmarkDeletedSubBot(cleanPhone);
+        sentSubBotActivationPhones.delete(cleanPhone);
     }
     const cleanAdmin = cleanPhoneNumber(adminPhone) || String(adminPhone).replace(/[^0-9]/g, '');
     let cleanLid = adminLid ? String(adminLid).replace(/[^0-9]/g, '') : '';
@@ -1284,8 +1304,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         const reg = loadSubBotsRegistry() || {};
                         const existing = reg[cleanPhone] || {};
                         const currentCfg = {
-                            ...cfgData,
                             ...existing,
+                            ...cfgData,
+                            notifiedSuccess: Boolean(cfgData.notifiedSuccess || existing.notifiedSuccess || sentSubBotActivationPhones.has(cleanPhone)),
                             botName: cfgData.botName || existing.botName || 'بوت فرعي',
                             callName: cfgData.callName || existing.callName || 'فرعي',
                             status: 'active'
