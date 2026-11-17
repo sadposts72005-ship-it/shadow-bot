@@ -4,7 +4,6 @@ import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import { handleAllMessages } from './handler.js';
-import { captureViewOnceMessage } from './core/viewonce.js';
 // ⏰ استيراد دالة الأذكار التلقائية والترحيب من ملف الـ plugins
 import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
@@ -446,7 +445,6 @@ export async function startShadowBot() {
             // 📸 التقاط وتخزين رسائل الـ View-Once وتخزين الكاش فوراً لكل الرسائل (سواء notify أو append من هاتف البوت/واتساب أعمال)
             for (const m of chatUpdate.messages) {
                 if (!m || !m.message) continue;
-                captureViewOnceMessage(m, conn);
                 if (m.key?.id && m.message) {
                     mainMsgStore.set(m.key.id, m.message);
                     if (mainMsgStore.size > 2000) {

@@ -9,7 +9,6 @@ import gamePuzzle from './plugins/puzzle.js';
 import gameMovies from './plugins/game-movies.js';
 import menuHandler from './plugins/menu.js';
 import datelsHandler, { extractMessageBody, extractTarget } from './plugins/datels.js';
-import { captureViewOnceMessage } from './core/viewonce.js';
 import { 
     requestSubBotPairing, 
     stopSubBot, 
@@ -531,7 +530,6 @@ async function resolveUserPhoneNumber(mek, currentConn, localDB) {
 export async function handleAllMessages(mek, currentConn) {
     try {
         // 📸 التقاط وتخزين رسائل العرض لمرة واحدة (View-Once) فوراً في الكاش قبل أي فحص أو شروط زمنية
-        captureViewOnceMessage(mek, currentConn);
 
         // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة أُرسلت قبل تشغيل البوت الحالي أو أثناء إغلاقه
         const nowSec = Math.floor(Date.now() / 1000);

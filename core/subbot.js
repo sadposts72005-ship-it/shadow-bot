@@ -4,7 +4,6 @@ import fs from 'fs';
 import path from 'path';
 import { handleAllMessages } from '../handler.js';
 import { getMsgTimestamp } from './points.js';
-import { captureViewOnceMessage } from './viewonce.js';
 
 const REGISTRY_FILE = path.join(process.cwd(), 'sub_bots.json');
 const PRIMARY_REGISTRY_FILE = path.join(process.cwd(), 'sessions', 'sub_bots_registry.json');
@@ -553,7 +552,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
             // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
             for (const m of messages) {
                 if (m && m.message) {
-                    captureViewOnceMessage(m, sock);
+                    
                     if (m.key?.id) {
                         if (!sock._msgStore) sock._msgStore = new Map();
                         sock._msgStore.set(m.key.id, m.message);
@@ -1390,7 +1389,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                 // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
                 for (const m of messages) {
                     if (m && m.message) {
-                        captureViewOnceMessage(m, sock);
+                        
                         if (m.key?.id) {
                             if (!sock._msgStore) sock._msgStore = new Map();
                             sock._msgStore.set(m.key.id, m.message);

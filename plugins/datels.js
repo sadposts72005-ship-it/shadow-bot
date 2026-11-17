@@ -5,7 +5,6 @@ import { spawn } from 'child_process';
 import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import { loadSubBotsRegistry, saveSubBotsRegistry, updateSubBotHajj, activeSubBots, cleanPhoneNumber } from '../core/subbot.js';
 import { loadLocalDB, saveLocalDB } from '../core/database.js';
-import { resolveViewOnceMedia, captureViewOnceMessage } from '../core/viewonce.js';
 import handleStickerCommand from './sticker.js';
 import handleImageCommand from './image.js';
 
@@ -957,8 +956,6 @@ const datelsHandler = {
                 } catch (_) {}
             }
 
-            // 📸 [التقاط وتخزين رسائل الـ View-Once فور استلامها لكشفها فوراً بدون ضياع]
-            captureViewOnceMessage(mek, currentConn);
 
             const isGroup = from.endsWith('@g.us');
             let sender = isGroup ? (mek.key.participant || mek.participant || '') : from;
@@ -1511,88 +1508,6 @@ const datelsHandler = {
             // =========================================================================
             const isImageHandled = await handleImageCommand(mek, currentConn, body);
             if (isImageHandled) return true;
-
-            // =========================================================================
-            // 🔓 [أمر كشف الصور والفيديوهات ذاتية الاختفاء (View-Once)]
-            // =========================================================================
-            const isViewOnceCmd = /^(?:\.|\/|!)?(?:كشف|اظهار|إظهار|افتح|كشف\s*الصوره|كشف\s*الصورة|كشف\s*الفيديو|viewonce|vv)(?:\s|$)/i.test(normalizedBody);
-            if (isViewOnceCmd) {
-                // فك تغليف سياق الرسالة (ContextInfo) والرسالة المقتبسة بدقة متناهية عبر كافة الطبقات
-                let ctx = null;
-                let currentLayer = mek.message;
-                for (let i = 0; i < 8; i++) {
-                    if (!currentLayer || typeof currentLayer !== 'object') break;
-                    if (currentLayer.contextInfo) { ctx = currentLayer.contextInfo; break; }
-                    if (currentLayer.extendedTextMessage?.contextInfo) { ctx = currentLayer.extendedTextMessage.contextInfo; break; }
-                    if (currentLayer.imageMessage?.contextInfo) { ctx = currentLayer.imageMessage.contextInfo; break; }
-                    if (currentLayer.videoMessage?.contextInfo) { ctx = currentLayer.videoMessage.contextInfo; break; }
-                    if (currentLayer.audioMessage?.contextInfo) { ctx = currentLayer.audioMessage.contextInfo; break; }
-                    if (currentLayer.stickerMessage?.contextInfo) { ctx = currentLayer.stickerMessage.contextInfo; break; }
-                    if (currentLayer.documentMessage?.contextInfo) { ctx = currentLayer.documentMessage.contextInfo; break; }
-                    if (currentLayer.ephemeralMessage) { currentLayer = currentLayer.ephemeralMessage.message || currentLayer.ephemeralMessage; continue; }
-                    if (currentLayer.viewOnceMessage) { currentLayer = currentLayer.viewOnceMessage.message || currentLayer.viewOnceMessage; continue; }
-                    if (currentLayer.viewOnceMessageV2) { currentLayer = currentLayer.viewOnceMessageV2.message || currentLayer.viewOnceMessageV2; continue; }
-                    if (currentLayer.documentWithCaptionMessage) { currentLayer = currentLayer.documentWithCaptionMessage.message || currentLayer.documentWithCaptionMessage; continue; }
-                    if (currentLayer.message) { currentLayer = currentLayer.message; continue; }
-                    break;
-                }
-                if (!ctx) ctx = mek.contextInfo || null;
-
-                const quotedId = ctx?.stanzaId || null;
-                const quotedMsg = ctx?.quotedMessage || null;
-                const quotedParticipant = ctx?.participant || ctx?.remoteJid || null;
-
-                const hasDirectMedia = Boolean(
-                    mek.message?.imageMessage || mek.message?.videoMessage || mek.message?.ptvMessage || mek.message?.audioMessage || mek.message?.documentMessage ||
-                    mek.message?.viewOnceMessage || mek.message?.viewOnceMessageV2 || mek.message?.viewOnceMessageV2Extension ||
-                    currentLayer?.imageMessage || currentLayer?.videoMessage
-                );
-
-                // استخراج وتحميل الميديا بأعلى دقة عبر الكاش الدائم والقرص والرسالة المقتبسة والاحتياطي
-                const mediaRes = await resolveViewOnceMedia(quotedId, quotedMsg, from, hasDirectMedia ? (mek.message || currentLayer) : null, currentConn, quotedParticipant);
-
-                if (!mediaRes || !mediaRes.buffer || mediaRes.buffer.length === 0) {
-                    await handleCommandTiming('⚠️');
-                    if (!quotedId && !quotedMsg && !hasDirectMedia) {
-                        await currentConn.sendMessage(from, { 
-                            text: '⚠️ *برجاء الرد (ريـبلاي) بكلمة (كشف) على الصورة أو الفيديو ذاتي الاختفاء (View-Once) لكشفه!* 👁️' 
-                        }, { quoted: mek });
-                    } else {
-                        await currentConn.sendMessage(from, { 
-                            text: '⚠️ *تعذر كشف الميديا! قد تكون الرسالة أقدم من مدة حفظ السيرفر أو لم يكتمل تحميلها بعد، برجاء المحاولة مرة أخرى.* 👁️' 
-                        }, { quoted: mek });
-                    }
-                    return true;
-                }
-
-                await handleCommandTiming('🔓');
-                const displayCaption = `🔓 *تم كشف الرسالة ذاتية الاختفاء بنجاح!* ✨\n${mediaRes.caption ? `📝 *الوصف الأصلي:* ${mediaRes.caption}\n` : ''}🤖 *بواسطة:* ${botName}`;
-
-                if (mediaRes.type === 'image') {
-                    await currentConn.sendMessage(from, {
-                        image: mediaRes.buffer,
-                        caption: displayCaption
-                    }, { quoted: mek });
-                } else if (mediaRes.type === 'video') {
-                    await currentConn.sendMessage(from, {
-                        video: mediaRes.buffer,
-                        caption: displayCaption
-                    }, { quoted: mek });
-                } else if (mediaRes.type === 'audio') {
-                    await currentConn.sendMessage(from, {
-                        audio: mediaRes.buffer,
-                        mimetype: mediaRes.mimetype || 'audio/mp4'
-                    }, { quoted: mek });
-                } else {
-                    await currentConn.sendMessage(from, {
-                        document: mediaRes.buffer,
-                        mimetype: mediaRes.mimetype || 'application/octet-stream',
-                        fileName: 'view_once_revealed',
-                        caption: displayCaption
-                    }, { quoted: mek });
-                }
-                return true;
-            }
 
             // =========================================================================
             // 👤 [أمر بروف / صورة البروفايل لأي شخص بجودة عالية]
