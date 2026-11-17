@@ -42,9 +42,56 @@ import {
 // 💤 خريطة حفظ حالة وتوقيت النوم المعزولة لكل بوت (سواء الأساسي أو الفرعي)
 const botSleepMap = new Map();
 
-// 📸 كاش لمنع تكرار كشف رسائل الـ View-Once نفسها
-if (!global.revealedViewOnceIds) {
-    global.revealedViewOnceIds = new Set();
+// 📸 كاش حفظ وسائط الـ View-Once فور استلامها سراً لكشفها لاحقاً بأمر (كشف)
+const VIEW_ONCE_DIR = path.join(process.cwd(), 'temp', 'view_once');
+try {
+    if (!fs.existsSync(VIEW_ONCE_DIR)) {
+        fs.mkdirSync(VIEW_ONCE_DIR, { recursive: true });
+    }
+} catch (_) {}
+
+const viewOnceBufferStore = global.viewOnceBufferStore || new Map();
+global.viewOnceBufferStore = viewOnceBufferStore;
+
+function saveViewOnceItem(id, item) {
+    if (!id || !item || !item.buffer) return;
+    viewOnceBufferStore.set(id, item);
+    if (viewOnceBufferStore.size > 500) {
+        const oldest = viewOnceBufferStore.keys().next().value;
+        viewOnceBufferStore.delete(oldest);
+    }
+    try {
+        const binPath = path.join(VIEW_ONCE_DIR, `${id}.bin`);
+        const metaPath = path.join(VIEW_ONCE_DIR, `${id}.json`);
+        fs.writeFileSync(binPath, item.buffer);
+        fs.writeFileSync(metaPath, JSON.stringify({
+            type: item.type,
+            caption: item.caption,
+            mimetype: item.mimetype,
+            sender: item.sender,
+            cleanSender: item.cleanSender,
+            timestamp: item.timestamp
+        }));
+    } catch (_) {}
+}
+
+function loadViewOnceItem(id) {
+    if (!id) return null;
+    if (viewOnceBufferStore.has(id)) {
+        return viewOnceBufferStore.get(id);
+    }
+    try {
+        const binPath = path.join(VIEW_ONCE_DIR, `${id}.bin`);
+        const metaPath = path.join(VIEW_ONCE_DIR, `${id}.json`);
+        if (fs.existsSync(binPath) && fs.existsSync(metaPath)) {
+            const buffer = fs.readFileSync(binPath);
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+            const item = { ...meta, buffer };
+            viewOnceBufferStore.set(id, item);
+            return item;
+        }
+    } catch (_) {}
+    return null;
 }
 
 function extractViewOnceMedia(mek) {
@@ -89,6 +136,40 @@ function extractViewOnceMedia(mek) {
         };
     }
 
+    return null;
+}
+
+async function downloadDirectFromQuoted(quotedMsg, stanzaId) {
+    if (!quotedMsg) return null;
+    let vo = extractViewOnceMedia({ message: quotedMsg });
+    if (!vo) {
+        let q = quotedMsg;
+        if (q.ephemeralMessage?.message) q = q.ephemeralMessage.message;
+        if (q.viewOnceMessage?.message) q = q.viewOnceMessage.message;
+        if (q.viewOnceMessageV2?.message) q = q.viewOnceMessageV2.message;
+        if (q.viewOnceMessageV2Extension?.message) q = q.viewOnceMessageV2Extension.message;
+        if (q.imageMessage) vo = { type: 'image', mediaMsg: q.imageMessage, caption: q.imageMessage.caption || '' };
+        else if (q.videoMessage) vo = { type: 'video', mediaMsg: q.videoMessage, caption: q.videoMessage.caption || '' };
+        else if (q.audioMessage) vo = { type: 'audio', mediaMsg: q.audioMessage, caption: '' };
+    }
+    if (!vo) return null;
+
+    try {
+        const stream = await downloadContentFromMessage(vo.mediaMsg, vo.type);
+        let buffer = Buffer.from([]);
+        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+        if (buffer && buffer.length > 0) {
+            const item = {
+                buffer,
+                type: vo.type,
+                caption: vo.caption || '',
+                mimetype: vo.mediaMsg.mimetype || (vo.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+                timestamp: Date.now()
+            };
+            if (stanzaId) saveViewOnceItem(stanzaId, item);
+            return item;
+        }
+    } catch (_) {}
     return null;
 }
 
@@ -648,75 +729,31 @@ export async function handleAllMessages(mek, currentConn) {
         let cleanSenderNum = cleanSender;
         let standardSenderJid = cleanUserJid(sender);
 
-        // 🔓 [كشف الميديا ذاتية الاختفاء تلقائياً]: كشف فوري لأي صورة أو فيديو View-Once يرسل في المجموعات أو الخاص
-        if (!mek.key?.fromMe) {
-            const voMedia = extractViewOnceMedia(mek);
-            if (voMedia) {
-                const voMsgId = mek.key?.id;
-                if (!voMsgId || !global.revealedViewOnceIds.has(voMsgId)) {
-                    if (voMsgId) {
-                        global.revealedViewOnceIds.add(voMsgId);
-                        if (global.revealedViewOnceIds.size > 2000) {
-                            const firstItem = global.revealedViewOnceIds.values().next().value;
-                            global.revealedViewOnceIds.delete(firstItem);
+        // 📸 كاش فوري لتخزين وسائط الـ View-Once فور استلامها سراً لطلبها لاحقاً بأمر (كشف)
+        const voMedia = extractViewOnceMedia(mek);
+        if (voMedia && mek.key?.id) {
+            const voMsgId = mek.key.id;
+            if (!viewOnceBufferStore.has(voMsgId)) {
+                (async () => {
+                    try {
+                        const stream = await downloadContentFromMessage(voMedia.mediaMsg, voMedia.type);
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) {
+                            buffer = Buffer.concat([buffer, chunk]);
                         }
-                    }
-
-                    const roomKey = `${currentConn.isSubBot ? currentConn.subBotPhone : 'main_bot'}_${from}`;
-                    const isMuted = botMuteMap.get(roomKey) || false;
-                    const isAsleep = botSleepMap.get(roomKey) || false;
-
-                    if (!isMuted && !isAsleep) {
-                        try {
-                            const stream = await downloadContentFromMessage(voMedia.mediaMsg, voMedia.type);
-                            let buffer = Buffer.from([]);
-                            for await (const chunk of stream) {
-                                buffer = Buffer.concat([buffer, chunk]);
-                            }
-
-                            if (buffer && buffer.length > 0) {
-                                let resolvedBotName = currentConn.botName || currentConn.subBotConfig?.botName;
-                                if (!resolvedBotName && currentConn.isSubBot) {
-                                    const reg = loadSubBotsRegistry();
-                                    const myNum = currentConn.subBotPhone || currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '');
-                                    resolvedBotName = reg[myNum]?.botName;
-                                }
-                                if (!resolvedBotName) resolvedBotName = 'شادو';
-
-                                if (voMedia.type === 'image') {
-                                    await currentConn.sendMessage(from, {
-                                        image: buffer,
-                                        caption: `🔓 *تم كشف صورة ذاتية الاختفاء تلقائياً!* ✨\n` +
-                                                 (voMedia.caption ? `📝 *الوصف:* ${voMedia.caption}\n` : '') +
-                                                 `👤 *المرسل:* @${cleanSender}\n` +
-                                                 `🤖 *بواسطة:* ${resolvedBotName}`,
-                                        mentions: [sender]
-                                    }, { quoted: mek });
-                                } else if (voMedia.type === 'video') {
-                                    await currentConn.sendMessage(from, {
-                                        video: buffer,
-                                        caption: `🔓 *تم كشف فيديو ذاتي الاختفاء تلقائياً!* ✨\n` +
-                                                 (voMedia.caption ? `📝 *الوصف:* ${voMedia.caption}\n` : '') +
-                                                 `👤 *المرسل:* @${cleanSender}\n` +
-                                                 `🤖 *بواسطة:* ${resolvedBotName}`,
-                                        mentions: [sender]
-                                    }, { quoted: mek });
-                                } else if (voMedia.type === 'audio') {
-                                    await currentConn.sendMessage(from, {
-                                        audio: buffer,
-                                        mimetype: voMedia.mediaMsg.mimetype || 'audio/mp4',
-                                        ptt: true
-                                    }, { quoted: mek });
-                                    await currentConn.sendMessage(from, {
-                                        text: `🔓 *تم كشف تسجيل صوتي ذاتي الاختفاء تلقائياً!* ✨\n👤 *المرسل:* @${cleanSender}\n🤖 *بواسطة:* ${resolvedBotName}`,
-                                        mentions: [sender]
-                                    }, { quoted: mek });
-                                }
-                            }
-                        } catch (_) {}
-                    }
-                }
-                return;
+                        if (buffer && buffer.length > 0) {
+                            saveViewOnceItem(voMsgId, {
+                                buffer,
+                                type: voMedia.type,
+                                caption: voMedia.caption || '',
+                                mimetype: voMedia.mediaMsg.mimetype || (voMedia.type === 'video' ? 'video/mp4' : 'image/jpeg'),
+                                sender: sender,
+                                cleanSender: getCleanNumber(sender),
+                                timestamp: Date.now()
+                            });
+                        }
+                    } catch (_) {}
+                })();
             }
         }
         
@@ -2401,6 +2438,93 @@ export async function handleAllMessages(mek, currentConn) {
             await respondWithStrictTiming('🛡️', async () => {
                 await currentConn.sendMessage(from, { text: shieldText }, { quoted: mek });
             });
+            return;
+        }
+
+        // =========================================================================
+        // 👁️ [أمر كشف الميديا ذاتية الاختفاء - View-Once Revealer]
+        // =========================================================================
+        const isKashfCmd = (
+            normalizedBody === 'كشف' ||
+            normalizedBody === '.كشف' ||
+            normalizedBody === '/كشف' ||
+            normalizedBody === 'كشف الميديا' ||
+            normalizedBody === 'اكشف' ||
+            normalizedBody === 'افتح' ||
+            normalizedBody === 'اظهر'
+        );
+
+        if (isKashfCmd) {
+            const ctxInfo = extractContextInfo(mek);
+            const stanzaId = ctxInfo?.stanzaId;
+
+            if (!ctxInfo || !stanzaId) {
+                await respondWithStrictTiming('⚠️', async () => {
+                    await currentConn.sendMessage(from, { 
+                        text: '⚠️ *طريقة الاستخدام:* قم بالرد (ريبلاي) على الصورة أو الفيديو ذاتي الاختفاء واكتب: *(كشف)* 👁️' 
+                    }, { quoted: mek });
+                });
+                return;
+            }
+
+            // البحث في الكاش بالذاكرة أو القرص
+            let cached = loadViewOnceItem(stanzaId);
+
+            // إذا لم يكن في الكاش، محاولة تنزيل مباشر من الرسالة المقتبسة إن وجدت
+            if (!cached && ctxInfo.quotedMessage) {
+                cached = await downloadDirectFromQuoted(ctxInfo.quotedMessage, stanzaId);
+            }
+
+            if (!cached || !cached.buffer) {
+                await respondWithStrictTiming('⚠️', async () => {
+                    await currentConn.sendMessage(from, { 
+                        text: '⚠️ *تعذر كشف الميديا!* قد تكون الرسالة أُرسلت قبل تشغيل البوت أو انقضت مدة حفظها في الذاكرة المؤقتة. 👁️' 
+                    }, { quoted: mek });
+                });
+                return;
+            }
+
+            const senderJid = cached.sender || ctxInfo.participant || '';
+            const senderClean = cached.cleanSender || getCleanNumber(senderJid);
+            const mentions = senderJid ? [senderJid] : [];
+
+            if (cached.type === 'video') {
+                await respondWithStrictTiming('👁️', async () => {
+                    await currentConn.sendMessage(from, {
+                        video: cached.buffer,
+                        caption: `🔓 *تم كشف الفيديو ذاتي الاختفاء بنجاح!* ✨\n` +
+                                 (cached.caption ? `📝 *الوصف:* ${cached.caption}\n` : '') +
+                                 (senderClean ? `👤 *المرسل:* @${senderClean}\n` : '') +
+                                 `🤖 *بواسطة:* ${botName}`,
+                        mentions
+                    }, { quoted: mek });
+                });
+            } else if (cached.type === 'audio') {
+                await respondWithStrictTiming('👁️', async () => {
+                    await currentConn.sendMessage(from, {
+                        audio: cached.buffer,
+                        mimetype: cached.mimetype || 'audio/mp4',
+                        ptt: true
+                    }, { quoted: mek });
+                    await currentConn.sendMessage(from, {
+                        text: `🔓 *تم كشف التسجيل الصوتي ذاتي الاختفاء بنجاح!* ✨\n` +
+                              (senderClean ? `👤 *المرسل:* @${senderClean}\n` : '') +
+                              `🤖 *بواسطة:* ${botName}`,
+                        mentions
+                    }, { quoted: mek });
+                });
+            } else {
+                await respondWithStrictTiming('👁️', async () => {
+                    await currentConn.sendMessage(from, {
+                        image: cached.buffer,
+                        caption: `🔓 *تم كشف الصورة ذاتية الاختفاء بنجاح!* ✨\n` +
+                                 (cached.caption ? `📝 *الوصف:* ${cached.caption}\n` : '') +
+                                 (senderClean ? `👤 *المرسل:* @${senderClean}\n` : '') +
+                                 `🤖 *بواسطة:* ${botName}`,
+                        mentions
+                    }, { quoted: mek });
+                });
+            }
             return;
         }
 
