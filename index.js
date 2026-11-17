@@ -162,6 +162,11 @@ global.setting = {
 const botSentMsgIds = new Set();
 global.botSentMsgIds = botSentMsgIds;
 
+// 🗃️ كاش رسائل لـ Baileys لدعم media retry وتشفير الوسائط المشفرة (مهم لواتساب أعمال)
+// يخزن آخر 2000 رسالة فقط ليقدر Baileys يعمل reupload عند الحاجة
+const mainMsgStore = new Map();
+global.mainMsgStore = mainMsgStore;
+
 // ⏰ وقت تشغيل البوت الحالي لتجاهل أي رسائل قديمة وصلت أثناء إيقاف البوت
 global.botStartTime = Math.floor(Date.now() / 1000);
 
@@ -237,6 +242,9 @@ export async function startShadowBot() {
         shouldIgnoreJid: () => false,
         // 🛑 إرجاع undefined عند عدم توفر الرسالة لمنع بايلز من إرسال رسائل فارغة أو نقط (. / conversation: '') عند طلب retry
         getMessage: async (key) => {
+            if (key?.id && mainMsgStore.has(key.id)) {
+                return mainMsgStore.get(key.id);
+            }
             return undefined;
         }
     });
@@ -445,6 +453,15 @@ export async function startShadowBot() {
 
                 // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
                 captureViewOnceMessage(m, conn);
+
+                // 🗃️ تخزين الرسالة في الكاش لدعم Baileys في عمل retry لوسائط واتساب أعمال
+                if (m.key?.id && m.message) {
+                    mainMsgStore.set(m.key.id, m.message);
+                    if (mainMsgStore.size > 2000) {
+                        const firstKey = mainMsgStore.keys().next().value;
+                        mainMsgStore.delete(firstKey);
+                    }
+                }
 
                 // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة:
                 // 1. إذا كان توقيت الرسالة قبل لحظة تشغيل البوت الحالي

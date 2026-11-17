@@ -397,7 +397,14 @@ async function createSubBotSocket(phone, sessionDir) {
         keepAliveIntervalMs: 25000,
         retryRequestDelayMs: 2000,
         // 🛑 إرجاع undefined عند عدم توفر الرسالة لمنع بايلز من إرسال رسائل فارغة أو نقط (. / conversation: '') عند طلب retry
-        getMessage: async () => undefined
+        getMessage: async (key) => {
+            // الرجوع لكاش الرسائل المشترك أولاً، ثم للكاش الخاص بالبوت الفرعي
+            if (key?.id) {
+                if (global.mainMsgStore && global.mainMsgStore.has(key.id)) return global.mainMsgStore.get(key.id);
+                if (sock._msgStore && sock._msgStore.has(key.id)) return sock._msgStore.get(key.id);
+            }
+            return undefined;
+        }
     });
 
     // تتبع وتفادي تكرار ردود البوت على رسائله
@@ -477,6 +484,7 @@ async function createSubBotSocket(phone, sessionDir) {
     sock.bakasa = {};
     sock.sarahaGames = {};
     sock.pmUsers = new Set();
+    sock._msgStore = new Map(); // كاش رسائل البوت الفرعي لدعم media retry
 
     return { sock, state, saveCreds };
 }
@@ -550,6 +558,16 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
                     // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
                     captureViewOnceMessage(m, sock);
+
+                    // 🗃️ تخزين الرسالة في كاش البوت الفرعي لدعم Baileys في عمل retry لوسائط واتساب أعمال
+                    if (m.key?.id && m.message) {
+                        if (!sock._msgStore) sock._msgStore = new Map();
+                        sock._msgStore.set(m.key.id, m.message);
+                        if (sock._msgStore.size > 1000) {
+                            const fk = sock._msgStore.keys().next().value;
+                            sock._msgStore.delete(fk);
+                        }
+                    }
 
                     // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 3 دقائق) لمنع مشاكل فرق توقيت السيرفر
                     const msgTime = getMsgTimestamp(m);

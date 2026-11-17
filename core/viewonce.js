@@ -234,7 +234,7 @@ export async function captureViewOnceMessage(mek, conn = null) {
             }
         } catch (_) {}
 
-        // 2. إذا فشلت الطريقة الأولى (مثلاً في بعض نسخ واتساب أعمال عند انتهاء صلاحية الرابط المباشر)، نحاول التنزيل عبر downloadMediaMessage وسوكيت الاتصال
+        // 2. إذا فشلت الطريقة الأولى (مثلاً في بعض نسخ واتساب أعمال)، نحاول downloadMediaMessage مع reuploadRequest
         if (!downloadedBuffer && conn) {
             try {
                 const targetMsg = extracted.unwrappedMsg || mek.message;
@@ -247,7 +247,31 @@ export async function captureViewOnceMessage(mek, conn = null) {
                 if (buffer && buffer.length > 0) {
                     downloadedBuffer = buffer;
                 }
-            } catch (_) {}
+            } catch (err2) {
+                console.warn(`⚠️ [ViewOnce] فشل التنزيل بالطريقة 2 للرسالة ${voId}: ${err2?.message || err2}`);
+            }
+        }
+
+        // 3. محاولة reupload المباشر: نطلب من واتساب إعادة رفع الوسائط المشفرة (مهم جداً لواتساب أعمال)
+        if (!downloadedBuffer && conn && conn.updateMediaMessage) {
+            try {
+                const reuploaded = await conn.updateMediaMessage({ key: mek.key, message: mek.message });
+                if (reuploaded?.message) {
+                    const rExt = extractMediaFromMessage(reuploaded.message, mek);
+                    if (rExt?.mediaObj && rExt?.type) {
+                        const stream = await downloadContentFromMessage(rExt.mediaObj, rExt.type);
+                        let buffer = Buffer.from([]);
+                        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                        if (buffer && buffer.length > 0) {
+                            downloadedBuffer = buffer;
+                            cacheItem.mediaObj = rExt.mediaObj;
+                            console.log(`✅ [ViewOnce] نجح reupload للرسالة ${voId} عبر updateMediaMessage`);
+                        }
+                    }
+                }
+            } catch (err3) {
+                console.warn(`⚠️ [ViewOnce] فشل reupload للرسالة ${voId}: ${err3?.message || err3}`);
+            }
         }
 
         if (downloadedBuffer && downloadedBuffer.length > 0) {
@@ -278,7 +302,9 @@ export async function captureViewOnceMessage(mek, conn = null) {
         }
 
         cleanOldCacheFiles();
-    } catch (_) {}
+    } catch (err) {
+        console.error(`❌ [ViewOnce] خطأ في captureViewOnceMessage: ${err?.message || err}`);
+    }
 }
 
 /**
@@ -335,7 +361,7 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
                     if (conn && item.unwrappedMsg) {
                         try {
                             const buffer = await downloadMediaMessage(
-                                { message: item.unwrappedMsg },
+                                { key: { id: item.id, remoteJid: item.from || from }, message: item.unwrappedMsg },
                                 'buffer',
                                 {},
                                 { reuploadRequest: conn.updateMediaMessage }
@@ -344,7 +370,9 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
                                 item.buffer = buffer;
                                 return { buffer, type: item.type, caption: item.caption, mimetype: item.mimetype };
                             }
-                        } catch (_) {}
+                        } catch (rErr) {
+                            console.warn(`⚠️ [ViewOnce-Resolve] فشل downloadMediaMessage في resolveViewOnceMedia: ${rErr?.message || rErr}`);
+                        }
                     }
                 }
             }
@@ -406,7 +434,37 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
             } catch (_) {}
         }
 
+        // 🔍 fallback إضافي: البحث بـ quotedParticipant كـ latest في هذا الشات (مفيد لواتساب أعمال والـ LID)
+        if (quotedParticipant) {
+            const cleanQP = String(quotedParticipant).replace(/[^0-9]/g, '');
+            // ابحث في الكاش عن آخر رسالة من هذا المشارك في هذا الشات
+            const allEntries = [...(global.viewOnceCache?.entries() || [])];
+            let bestEntry = null;
+            let bestTime = 0;
+            for (const [k, v] of allEntries) {
+                if (!v || !v.buffer || v.buffer.length === 0) continue;
+                if (Date.now() - (v.timestamp || 0) > 60 * 60 * 1000) continue; // ساعة فقط
+                const vFrom = String(v.from || '').replace(/[^0-9]/g, '');
+                const vSender = String(v.sender || '').replace(/[^0-9]/g, '');
+                const fromClean = String(from || '').replace(/[^0-9]/g, '');
+                if (
+                    (vFrom === fromClean || v.from === from) &&
+                    (vSender === cleanQP || vSender.endsWith(cleanQP) || cleanQP.endsWith(vSender))
+                ) {
+                    if ((v.timestamp || 0) > bestTime) {
+                        bestTime = v.timestamp || 0;
+                        bestEntry = v;
+                    }
+                }
+            }
+            if (bestEntry && bestEntry.buffer && bestEntry.buffer.length > 0) {
+                console.log(`✅ [ViewOnce] fallback بـ quotedParticipant نجح للرسالة ${quotedId}`);
+                return { buffer: bestEntry.buffer, type: bestEntry.type, caption: bestEntry.caption, mimetype: bestEntry.mimetype };
+            }
+        }
+
         // 🛑 إذا تم تحديد رسالة معينة بريبلاي ولم نجدها، نرجع null لمنع جلب أي صورة قديمة أخرى
+        console.warn(`⚠️ [ViewOnce] resolveViewOnceMedia: لم يُعثر على الرسالة ${quotedId} في الكاش أو القرص`);
         return null;
     }
 
