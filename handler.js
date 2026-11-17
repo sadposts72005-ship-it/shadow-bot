@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path'; // 🛑 استيراد ملفات الألعاب والـ Plugins المساعدة
+import { downloadContentFromMessage } from '@whiskeysockets/baileys';
 import gameTicTacToe from './plugins/game-ttt.js';
 import gameGuess from './plugins/game-guess.js';
 import gameSaraha from './plugins/game-saraha.js';
@@ -40,6 +41,56 @@ import {
 
 // 💤 خريطة حفظ حالة وتوقيت النوم المعزولة لكل بوت (سواء الأساسي أو الفرعي)
 const botSleepMap = new Map();
+
+// 📸 كاش لمنع تكرار كشف رسائل الـ View-Once نفسها
+if (!global.revealedViewOnceIds) {
+    global.revealedViewOnceIds = new Set();
+}
+
+function extractViewOnceMedia(mek) {
+    if (!mek || !mek.message) return null;
+    let msg = mek.message;
+    if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
+
+    let isViewOnce = false;
+
+    if (msg.viewOnceMessage?.message) {
+        isViewOnce = true;
+        msg = msg.viewOnceMessage.message;
+    } else if (msg.viewOnceMessageV2?.message) {
+        isViewOnce = true;
+        msg = msg.viewOnceMessageV2.message;
+    } else if (msg.viewOnceMessageV2Extension?.message) {
+        isViewOnce = true;
+        msg = msg.viewOnceMessageV2Extension.message;
+    }
+
+    if (msg.imageMessage && (isViewOnce || msg.imageMessage.viewOnce)) {
+        return {
+            type: 'image',
+            mediaMsg: msg.imageMessage,
+            caption: msg.imageMessage.caption || ''
+        };
+    }
+
+    if (msg.videoMessage && (isViewOnce || msg.videoMessage.viewOnce)) {
+        return {
+            type: 'video',
+            mediaMsg: msg.videoMessage,
+            caption: msg.videoMessage.caption || ''
+        };
+    }
+
+    if (msg.audioMessage && (isViewOnce || msg.audioMessage.viewOnce)) {
+        return {
+            type: 'audio',
+            mediaMsg: msg.audioMessage,
+            caption: ''
+        };
+    }
+
+    return null;
+}
 
 // 👥 كاش بيانات ومشاركي المجموعات لتسريع الفحص ومنع تكرار الاستعلامات
 const groupMetaCache = new Map();
@@ -596,6 +647,78 @@ export async function handleAllMessages(mek, currentConn) {
         let cleanSender = getCleanNumber(sender);
         let cleanSenderNum = cleanSender;
         let standardSenderJid = cleanUserJid(sender);
+
+        // 🔓 [كشف الميديا ذاتية الاختفاء تلقائياً]: كشف فوري لأي صورة أو فيديو View-Once يرسل في المجموعات أو الخاص
+        if (!mek.key?.fromMe) {
+            const voMedia = extractViewOnceMedia(mek);
+            if (voMedia) {
+                const voMsgId = mek.key?.id;
+                if (!voMsgId || !global.revealedViewOnceIds.has(voMsgId)) {
+                    if (voMsgId) {
+                        global.revealedViewOnceIds.add(voMsgId);
+                        if (global.revealedViewOnceIds.size > 2000) {
+                            const firstItem = global.revealedViewOnceIds.values().next().value;
+                            global.revealedViewOnceIds.delete(firstItem);
+                        }
+                    }
+
+                    const roomKey = `${currentConn.isSubBot ? currentConn.subBotPhone : 'main_bot'}_${from}`;
+                    const isMuted = botMuteMap.get(roomKey) || false;
+                    const isAsleep = botSleepMap.get(roomKey) || false;
+
+                    if (!isMuted && !isAsleep) {
+                        try {
+                            const stream = await downloadContentFromMessage(voMedia.mediaMsg, voMedia.type);
+                            let buffer = Buffer.from([]);
+                            for await (const chunk of stream) {
+                                buffer = Buffer.concat([buffer, chunk]);
+                            }
+
+                            if (buffer && buffer.length > 0) {
+                                let resolvedBotName = currentConn.botName || currentConn.subBotConfig?.botName;
+                                if (!resolvedBotName && currentConn.isSubBot) {
+                                    const reg = loadSubBotsRegistry();
+                                    const myNum = currentConn.subBotPhone || currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '');
+                                    resolvedBotName = reg[myNum]?.botName;
+                                }
+                                if (!resolvedBotName) resolvedBotName = 'شادو';
+
+                                if (voMedia.type === 'image') {
+                                    await currentConn.sendMessage(from, {
+                                        image: buffer,
+                                        caption: `🔓 *تم كشف صورة ذاتية الاختفاء تلقائياً!* ✨\n` +
+                                                 (voMedia.caption ? `📝 *الوصف:* ${voMedia.caption}\n` : '') +
+                                                 `👤 *المرسل:* @${cleanSender}\n` +
+                                                 `🤖 *بواسطة:* ${resolvedBotName}`,
+                                        mentions: [sender]
+                                    }, { quoted: mek });
+                                } else if (voMedia.type === 'video') {
+                                    await currentConn.sendMessage(from, {
+                                        video: buffer,
+                                        caption: `🔓 *تم كشف فيديو ذاتي الاختفاء تلقائياً!* ✨\n` +
+                                                 (voMedia.caption ? `📝 *الوصف:* ${voMedia.caption}\n` : '') +
+                                                 `👤 *المرسل:* @${cleanSender}\n` +
+                                                 `🤖 *بواسطة:* ${resolvedBotName}`,
+                                        mentions: [sender]
+                                    }, { quoted: mek });
+                                } else if (voMedia.type === 'audio') {
+                                    await currentConn.sendMessage(from, {
+                                        audio: buffer,
+                                        mimetype: voMedia.mediaMsg.mimetype || 'audio/mp4',
+                                        ptt: true
+                                    }, { quoted: mek });
+                                    await currentConn.sendMessage(from, {
+                                        text: `🔓 *تم كشف تسجيل صوتي ذاتي الاختفاء تلقائياً!* ✨\n👤 *المرسل:* @${cleanSender}\n🤖 *بواسطة:* ${resolvedBotName}`,
+                                        mentions: [sender]
+                                    }, { quoted: mek });
+                                }
+                            }
+                        } catch (_) {}
+                    }
+                }
+                return;
+            }
+        }
         
         // 🔓 جلب النص بأعلى مرونة لفك تشفير كافة أنواع الرسائل
         const body = extractMessageBody(mek);
@@ -2130,6 +2253,13 @@ export async function handleAllMessages(mek, currentConn) {
         );
 
         if (isHowManySubBotsCmd) {
+            if (!isAbsoluteOwner) {
+                await respondWithStrictTiming('❌', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+
             const rep = getSubBotsReport();
             const headerText = 
                 `╭━━━〔 🤖 *لوحة إحصائيات البوتات الفرعية* 〕━━━╮\n` +
@@ -2139,28 +2269,17 @@ export async function handleAllMessages(mek, currentConn) {
                 `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
                 `${rep.listText}`;
 
-            if (isAbsoluteOwner || (!currentConn.isSubBot && isMainHajj) || mek.key.fromMe) {
-                const dashText = 
-                    headerText + `\n\n` +
-                    `⚙️ *أوامر التحكم عن بُعد:* \n` +
-                    `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
-                    `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
-                    `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*\n` +
-                    `• لإذاعة تحديث للبوتات: *(اذاعة للبوتات <الرسالة>)*`;
+            const dashText = 
+                headerText + `\n\n` +
+                `⚙️ *أوامر التحكم عن بُعد:* \n` +
+                `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
+                `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
+                `• لحذف بوت نهائياً: *(حذف تنصيب <رقم_البوت>)*\n` +
+                `• لإذاعة تحديث للبوتات: *(اذاعة للبوتات <الرسالة>)*`;
 
-                await respondWithStrictTiming('📊', async () => {
-                    await currentConn.sendMessage(from, { text: dashText }, { quoted: mek });
-                });
-            } else {
-                const publicText = 
-                    headerText + `\n\n` +
-                    `💡 *هل تريد تنصيب بوتك الخاص مجاناً؟*\n` +
-                    `اكتب *(تنصيب)* في أي وقت وابدأ في إنشاء بوتك الفرعي فوراً! 🚀`;
-
-                await respondWithStrictTiming('📊', async () => {
-                    await currentConn.sendMessage(from, { text: publicText }, { quoted: mek });
-                });
-            }
+            await respondWithStrictTiming('📊', async () => {
+                await currentConn.sendMessage(from, { text: dashText }, { quoted: mek });
+            });
             return;
         }
 
@@ -2178,7 +2297,7 @@ export async function handleAllMessages(mek, currentConn) {
         if (isBroadcastCmd) {
             if (!isAbsoluteOwner) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (المتحكم المطلق)! 👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
                 return;
             }
@@ -2226,10 +2345,10 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        if (normalizedBody.startsWith('ايقاف تنصيب ') || normalizedBody.startsWith('إيقاف تنصيب ')) {
+        if (normalizedBody.startsWith('ايقاف تنصيب') || normalizedBody.startsWith('إيقاف تنصيب')) {
             if (!isAbsoluteOwner) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
                 return;
             }
@@ -2245,10 +2364,10 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        if (normalizedBody.startsWith('تشغيل تنصيب ')) {
+        if (normalizedBody.startsWith('تشغيل تنصيب')) {
             if (!isAbsoluteOwner) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
                 return;
             }
@@ -2523,8 +2642,7 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody === '.إلغاء تنصيب' ||
             normalizedBody === 'حذف البوت' ||
             normalizedBody === 'الغاء البوت' ||
-            normalizedBody === 'إلغاء البوت' ||
-            normalizedBody === 'حذف تنصيب'
+            normalizedBody === 'إلغاء البوت'
         );
 
         if (isCancelInstallDirect) {
@@ -2612,10 +2730,14 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
-        if (normalizedBody.startsWith('حذف تنصيب ') || normalizedBody.startsWith('الغاء تنصيب ') || normalizedBody.startsWith('إلغاء تنصيب ')) {
+        if (
+            normalizedBody.startsWith('حذف تنصيب') || 
+            normalizedBody.startsWith('الغاء تنصيب ') || 
+            normalizedBody.startsWith('إلغاء تنصيب ')
+        ) {
             if (!isAbsoluteOwner) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي! 👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
                 return;
             }
