@@ -270,8 +270,14 @@ async function handleTelegramMessage(token, msg) {
     );
     const isHajj = isHajjShado || isRaisedHajj;
 
-    const isGroupAdmin = isGroup ? await isTelegramChatAdmin(token, chatId, fromId) : false;
-    const isActualRoomAdminOrOwner = isHajj || isGroupAdmin;
+    let cachedGroupAdmin = null;
+    const checkIsActualRoomAdminOrOwner = async () => {
+        if (isHajj) return true;
+        if (!isGroup) return false;
+        if (cachedGroupAdmin !== null) return cachedGroupAdmin;
+        cachedGroupAdmin = await isTelegramChatAdmin(token, chatId, fromId);
+        return cachedGroupAdmin;
+    };
 
     const isAbsoluteOwner = isHajjShado;
     const isMainHajj = isHajjShado;
@@ -624,20 +630,23 @@ async function handleTelegramMessage(token, msg) {
     // 🤖 3️⃣ أوامر إدارة البوتات الفرعية والتنصيب - للحج شادو فقط
     // =========================================================================
     const isHowManySubBotsCmdTg = (
-        /^(?:\.|\/)?(كام|كم)\s*(تنصيب|بوت|بوتات|فرعي)/i.test(normalizedBody) ||
-        /^(?:\.|\/)?(البوتات\s*الفرعية|البوتات\s*الفرعيه|قائمة\s*التنصيب|قائمه\s*التنصيب|لوحة\s*التنصيب|لوحه\s*التنصيب|احصائيات\s*التنصيب|إحصائيات\s*التنصيب)/i.test(normalizedBody)
+        /^(?:\.|\/)?(كام|كم|عدد)\s*(?:عدد\s*)?(تنصيب|بوت|بوتات|فرعي)/i.test(normalizedBody) ||
+        /^(?:\.|\/)?(البوتات\s*الفرعية|البوتات\s*الفرعيه|بوتات\s*فرعية|بوتات\s*فرعيه|قائمة\s*التنصيب|قائمه\s*التنصيب|لوحة\s*التنصيب|لوحه\s*التنصيب|احصائيات\s*التنصيب|إحصائيات\s*التنصيب|subbots|bots)/i.test(normalizedBody)
     );
 
     if (isHowManySubBotsCmdTg) {
         const rep = getSubBotsReport();
+        const headerText = 
+            `╭━━━〔 🤖 *لوحة إحصائيات البوتات الفرعية على تليجرام* 〕━━━╮\n` +
+            `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
+            `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
+            `┃ 🛑 *البوتات المتوقفة والمحظورة:* ${rep.stoppedCount}\n` +
+            `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+            `${rep.listText}`;
+
         if (isHajjShado || isMainHajj || isAbsoluteOwner || isHajj) {
             const dashText = 
-                `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية على تليجرام* 〕━━━╮\n` +
-                `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
-                `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
-                `┃ 🛑 *البوتات المتوقفة والمحظورة:* ${rep.stoppedCount}\n` +
-                `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
-                `${rep.listText}\n\n` +
+                headerText + `\n\n` +
                 `⚙️ *أوامر التحكم السريع عن بُعد:* \n` +
                 `• لإيقاف بوت: *(ايقاف تنصيب <رقم_البوت>)*\n` +
                 `• لتشغيل بوت: *(تشغيل تنصيب <رقم_البوت>)*\n` +
@@ -646,11 +655,7 @@ async function handleTelegramMessage(token, msg) {
             await sendTelegramMessage(token, chatId, dashText, { replyTo: msg.message_id });
         } else {
             const publicText = 
-                `╭━━━〔 🤖 *إحصائيات البوتات الفرعية* 〕━━━╮\n` +
-                `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
-                `┃ 🟢 *البوتات النشطة الآن:* ${rep.activeCount}\n` +
-                `┃ 🛑 *البوتات المتوقفة:* ${rep.stoppedCount}\n` +
-                `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
+                headerText + `\n\n` +
                 `💡 *هل تريد تنصيب بوتك الخاص مجاناً؟*\n` +
                 `اكتب *(تنصيب)* في أي وقت وابدأ في إنشاء بوتك الفرعي فوراً! 🚀`;
 
@@ -1519,7 +1524,7 @@ async function handleTelegramMessage(token, msg) {
 
     // أوامر قفل وفتح الشات في الجروبات
     if (['قفل', 'قفل الروم', 'قفل الشات', '/lock'].includes(normalizedBody)) {
-        if (!isActualRoomAdminOrOwner) {
+        if (!(await checkIsActualRoomAdminOrOwner())) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
@@ -1536,7 +1541,7 @@ async function handleTelegramMessage(token, msg) {
     }
 
     if (['فتح', 'فتح الروم', 'فتح الشات', '/unlock'].includes(normalizedBody)) {
-        if (!isActualRoomAdminOrOwner) {
+        if (!(await checkIsActualRoomAdminOrOwner())) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
@@ -1678,7 +1683,7 @@ async function handleTelegramMessage(token, msg) {
         }
 
         // فحص صلاحية الأدمن أو الحج
-        if (!isActualRoomAdminOrOwner) {
+        if (!(await checkIsActualRoomAdminOrOwner())) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
@@ -1704,7 +1709,7 @@ async function handleTelegramMessage(token, msg) {
             return;
         }
 
-        if (!isActualRoomAdminOrOwner) {
+        if (!(await checkIsActualRoomAdminOrOwner())) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }
@@ -1731,7 +1736,7 @@ async function handleTelegramMessage(token, msg) {
             return;
         }
 
-        if (!isActualRoomAdminOrOwner) {
+        if (!(await checkIsActualRoomAdminOrOwner())) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️`, { replyTo: msg.message_id });
             return;
         }

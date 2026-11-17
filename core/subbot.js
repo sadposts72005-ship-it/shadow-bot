@@ -1979,23 +1979,30 @@ export function getSubBotsReport() {
     const list = [];
 
     phones.forEach((phone, idx) => {
-        const item = registry[phone];
-        const isRunning = activeSubBots.has(phone);
+        const item = registry[phone] || {};
+        const cleanP = cleanPhoneNumber(phone);
+        const itemPhoneClean = item.phone ? cleanPhoneNumber(item.phone) : null;
+        const isRunning = activeSubBots.has(phone) || 
+                          (cleanP && activeSubBots.has(cleanP)) || 
+                          (itemPhoneClean && activeSubBots.has(itemPhoneClean));
         if (isRunning) activeCount++;
         else stoppedCount++;
 
-        const currentName = item.botName || 'بوت فرعي';
-        const currentCall = item.callName || currentName;
+        const currentName = String(item.botName || 'بوت فرعي').replace(/[_*`]/g, ' ').trim();
+        const currentCall = String(item.callName || currentName).replace(/[_*`]/g, ' ').trim();
         const currentPersonality = (item.personality === 'bad' || item.personality === 'toxic')
             ? 'قليل الأدب 🤬🔥'
             : 'محترم ومؤدب 😇🤍';
         const currentGender = item.gender === 'female' ? 'أنثى 👧' : 'ذكر 👦';
+        const displayPhone = item.phone || phone;
+        const displayAdmin = item.adminPhone || 'غير محدد';
+        const displayLid = item.adminLid ? ` (ID: ${String(item.adminLid).replace(/[_*`]/g, '')})` : '';
 
         list.push(
             `━━━━━━━━━━━━━━━━━━━━\n` +
             `*${idx + 1}️⃣ ${currentName}* (نداء: ${currentCall})\n` +
-            `📱 *رقم البوت:* +${item.phone || phone}\n` +
-            `👑 *الحج الأساسي:* +${item.adminPhone || 'غير محدد'}${item.adminLid ? ` (ID: ${item.adminLid})` : ''}\n` +
+            `📱 *رقم البوت:* +${displayPhone}\n` +
+            `👑 *الحج الأساسي:* +${displayAdmin}${displayLid}\n` +
             `🎭 *الشخصية:* ${currentPersonality}\n` +
             `🚻 *النوع:* ${currentGender}\n` +
             `🟢 *الحالة:* ${isRunning ? '⚡ شغال الآن' : (item.status === 'banned' ? '🚫 محظور من واتساب (403)' : (item.status === 'loggedOut' ? '🚪 تم تسجيل الخروج' : (item.status === 'stopped' ? '🛑 متوقف' : '⚠️ غير متصل')))}\n` +
