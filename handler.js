@@ -530,6 +530,9 @@ async function resolveUserPhoneNumber(mek, currentConn, localDB) {
 
 export async function handleAllMessages(mek, currentConn) {
     try {
+        // 📸 التقاط وتخزين رسائل العرض لمرة واحدة (View-Once) فوراً في الكاش قبل أي فحص أو شروط زمنية
+        captureViewOnceMessage(mek);
+
         // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة أُرسلت قبل تشغيل البوت الحالي أو أثناء إغلاقه
         const nowSec = Math.floor(Date.now() / 1000);
         const currentStartTime = currentConn.subBotStartTime || global.botStartTime || nowSec;
@@ -554,9 +557,6 @@ export async function handleAllMessages(mek, currentConn) {
         let sender = isRealGroup ? (mek.key.participant || '') : from;
         if (!sender && mek.key?.fromMe) sender = currentConn.user?.id || '';
         if (!sender) return;
-
-        // 📸 التقاط وتخزين رسائل العرض لمرة واحدة (View-Once) فوراً في الكاش قبل أي فحص للنص
-        captureViewOnceMessage(mek);
 
         // 🔇 فحص كتم المستخدم في هذا الجروب فوراً وبلا انتظار (حذف فوري لأي رسالة حرفياً: كلام، ملصقات، صور، فيديوهات، ريكوردات، ملفات)
         if (isRealGroup) {

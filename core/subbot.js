@@ -548,6 +548,9 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 try {
                     if (!m.message) continue;
 
+                    // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
+                    captureViewOnceMessage(m);
+
                     // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 3 دقائق) لمنع مشاكل فرق توقيت السيرفر
                     const msgTime = getMsgTimestamp(m);
                     if (msgTime > 0) {
@@ -560,7 +563,6 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                     const from = m.key.remoteJid;
                     if (!from) continue;
 
-                    captureViewOnceMessage(m);
                     await handleAllMessages(m, sock);
                 } catch (msgErr) {
                     console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, msgErr?.message || msgErr);
@@ -1346,6 +1348,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     try {
                         if (!m.message) continue;
 
+                        // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
+                        captureViewOnceMessage(m);
+
                         // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة جداً فقط (أكثر من 3 دقائق)
                         const msgTime = getMsgTimestamp(m);
                         if (msgTime > 0) {
@@ -1358,7 +1363,6 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         const from = m.key.remoteJid;
                         if (!from) continue;
 
-                        captureViewOnceMessage(m);
                         await handleAllMessages(m, sock);
                     } catch (err) {
                         console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, err?.message || err);

@@ -1489,43 +1489,51 @@ const datelsHandler = {
             // =========================================================================
             const isViewOnceCmd = /^(?:\.|\/|!)?(?:كشف|اظهار|إظهار|افتح|كشف\s*الصوره|كشف\s*الصورة|كشف\s*الفيديو|viewonce|vv)(?:\s|$)/i.test(normalizedBody);
             if (isViewOnceCmd) {
-                let mMsg = mek.message;
-                if (mMsg?.ephemeralMessage) mMsg = mMsg.ephemeralMessage.message;
-                if (mMsg?.documentWithCaptionMessage) mMsg = mMsg.documentWithCaptionMessage.message;
+                // فك تغليف سياق الرسالة (ContextInfo) والرسالة المقتبسة بدقة متناهية عبر كافة الطبقات
+                let ctx = null;
+                let currentLayer = mek.message;
+                for (let i = 0; i < 8; i++) {
+                    if (!currentLayer || typeof currentLayer !== 'object') break;
+                    if (currentLayer.contextInfo) { ctx = currentLayer.contextInfo; break; }
+                    if (currentLayer.extendedTextMessage?.contextInfo) { ctx = currentLayer.extendedTextMessage.contextInfo; break; }
+                    if (currentLayer.imageMessage?.contextInfo) { ctx = currentLayer.imageMessage.contextInfo; break; }
+                    if (currentLayer.videoMessage?.contextInfo) { ctx = currentLayer.videoMessage.contextInfo; break; }
+                    if (currentLayer.audioMessage?.contextInfo) { ctx = currentLayer.audioMessage.contextInfo; break; }
+                    if (currentLayer.stickerMessage?.contextInfo) { ctx = currentLayer.stickerMessage.contextInfo; break; }
+                    if (currentLayer.documentMessage?.contextInfo) { ctx = currentLayer.documentMessage.contextInfo; break; }
+                    if (currentLayer.ephemeralMessage) { currentLayer = currentLayer.ephemeralMessage.message || currentLayer.ephemeralMessage; continue; }
+                    if (currentLayer.viewOnceMessage) { currentLayer = currentLayer.viewOnceMessage.message || currentLayer.viewOnceMessage; continue; }
+                    if (currentLayer.viewOnceMessageV2) { currentLayer = currentLayer.viewOnceMessageV2.message || currentLayer.viewOnceMessageV2; continue; }
+                    if (currentLayer.documentWithCaptionMessage) { currentLayer = currentLayer.documentWithCaptionMessage.message || currentLayer.documentWithCaptionMessage; continue; }
+                    if (currentLayer.message) { currentLayer = currentLayer.message; continue; }
+                    break;
+                }
+                if (!ctx) ctx = mek.contextInfo || null;
 
-                const ctx = mMsg?.extendedTextMessage?.contextInfo ||
-                            mMsg?.imageMessage?.contextInfo ||
-                            mMsg?.videoMessage?.contextInfo ||
-                            mMsg?.stickerMessage?.contextInfo ||
-                            mMsg?.audioMessage?.contextInfo ||
-                            mMsg?.documentMessage?.contextInfo ||
-                            mek.message?.extendedTextMessage?.contextInfo ||
-                            mek.contextInfo;
-
-                const quotedId = ctx?.stanzaId;
-                const quotedMsg = ctx?.quotedMessage;
+                const quotedId = ctx?.stanzaId || null;
+                const quotedMsg = ctx?.quotedMessage || null;
+                const quotedParticipant = ctx?.participant || ctx?.remoteJid || null;
 
                 const hasDirectMedia = Boolean(
-                    mMsg?.imageMessage || mMsg?.videoMessage || mMsg?.ptvMessage || mMsg?.audioMessage || mMsg?.documentMessage ||
-                    mek.message?.viewOnceMessage || mek.message?.viewOnceMessageV2 || mek.message?.viewOnceMessageV2Extension
+                    mek.message?.imageMessage || mek.message?.videoMessage || mek.message?.ptvMessage || mek.message?.audioMessage || mek.message?.documentMessage ||
+                    mek.message?.viewOnceMessage || mek.message?.viewOnceMessageV2 || mek.message?.viewOnceMessageV2Extension ||
+                    currentLayer?.imageMessage || currentLayer?.videoMessage
                 );
 
-                if (!quotedId && !quotedMsg && !hasDirectMedia) {
-                    await handleCommandTiming('⚠️');
-                    await currentConn.sendMessage(from, { 
-                        text: '⚠️ *برجاء الرد (ريـبلاي) بكلمة (كشف) على الصورة أو الفيديو ذاتي الاختفاء (View-Once) لكشفه!* 👁️' 
-                    }, { quoted: mek });
-                    return true;
-                }
-
                 // استخراج وتحميل الميديا بأعلى دقة عبر الكاش الدائم والقرص والرسالة المقتبسة والاحتياطي
-                const mediaRes = await resolveViewOnceMedia(quotedId, quotedMsg, from, hasDirectMedia ? (mek.message || mMsg) : null, currentConn);
+                const mediaRes = await resolveViewOnceMedia(quotedId, quotedMsg, from, hasDirectMedia ? (mek.message || currentLayer) : null, currentConn, quotedParticipant);
 
                 if (!mediaRes || !mediaRes.buffer || mediaRes.buffer.length === 0) {
                     await handleCommandTiming('⚠️');
-                    await currentConn.sendMessage(from, { 
-                        text: '⚠️ *تعذر كشف الميديا! قد تكون الرسالة أقدم من مدة حفظ السيرفر أو لم يكتمل تحميلها بعد، برجاء المحاولة مرة أخرى.* 👁️' 
-                    }, { quoted: mek });
+                    if (!quotedId && !quotedMsg && !hasDirectMedia) {
+                        await currentConn.sendMessage(from, { 
+                            text: '⚠️ *برجاء الرد (ريـبلاي) بكلمة (كشف) على الصورة أو الفيديو ذاتي الاختفاء (View-Once) لكشفه!* 👁️' 
+                        }, { quoted: mek });
+                    } else {
+                        await currentConn.sendMessage(from, { 
+                            text: '⚠️ *تعذر كشف الميديا! قد تكون الرسالة أقدم من مدة حفظ السيرفر أو لم يكتمل تحميلها بعد، برجاء المحاولة مرة أخرى.* 👁️' 
+                        }, { quoted: mek });
+                    }
                     return true;
                 }
 

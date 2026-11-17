@@ -443,6 +443,9 @@ export async function startShadowBot() {
             for (const m of chatUpdate.messages) {
                 if (!m || !m.message) continue;
 
+                // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
+                captureViewOnceMessage(m);
+
                 // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة:
                 // 1. إذا كان توقيت الرسالة قبل لحظة تشغيل البوت الحالي
                 // 2. أو إذا كان عمر الرسالة أقدم من 30 ثانية من الآن
@@ -463,9 +466,6 @@ export async function startShadowBot() {
 
                 const from = m.key.remoteJid;
                 if (!from) continue;
-
-                // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها
-                captureViewOnceMessage(m);
 
                 // 🚀 تمرير الرسالة فوراً للمفسر (Handler)
                 await handleAllMessages(m, conn);
