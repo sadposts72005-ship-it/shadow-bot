@@ -26,9 +26,9 @@ function cleanNumber(str) {
 /**
  * فك تغليف الرسالة بدقة متناهية عبر كل الطبقات الممكنة
  * (viewOnce, ephemeral, documentWithCaption, deviceSent, edited, etc.)
- * للتعرف بدقة على رسائل العرض لمرة واحدة (View-Once)
+ * للتعرف بدقة على رسائل العرض لمرة واحدة في واتساب العادي وواتساب أعمال (WhatsApp Business)
  */
-export function extractMediaFromMessage(rawMessage) {
+export function extractMediaFromMessage(rawMessage, parentMek = null) {
     if (!rawMessage) return null;
     let msg = rawMessage.message || rawMessage;
 
@@ -47,6 +47,9 @@ export function extractMediaFromMessage(rawMessage) {
         rawMessage.message?.viewOnceMessage ||
         rawMessage.message?.viewOnceMessageV2 ||
         rawMessage.message?.viewOnceMessageV2Extension ||
+        rawMessage.key?.isViewOnce ||
+        parentMek?.key?.isViewOnce ||
+        parentMek?.isViewOnce ||
         msg?.viewOnceMessage ||
         msg?.viewOnceMessageV2 ||
         msg?.viewOnceMessageV2Extension
@@ -167,19 +170,20 @@ function cleanOldCacheFiles() {
 
 /**
  * فحص الرسالة واستخراج ميديا الـ View-Once فور استلامها وتنزيلها وتخزينها في الكاش وعلى القرص فوراً
- * ⚠️ تنبيه: نلتقط حصرياً رسائل الـ View-Once الحقيقية فقط لمنع تلوث الكاش بصور البروفايل أو صور الدردشة العادية!
+ * متوافقة 100% مع: واتساب العادي، واتساب أعمال (WhatsApp Business)، والأجهزة المرتبطة، والتجربة من هاتف البوت
  */
 export async function captureViewOnceMessage(mek, conn = null) {
     if (!mek?.message) return;
-    // 🛑 تجاهل قاطع لرسائل البوت نفسه (fromMe) لكي لا يحفظ البوت صوره الخاصة في كاش العرض لمرة واحدة
-    if (mek.key?.fromMe) return;
+
+    // 🛑 نتجاهل فقط الرسائل الصادرة برمجياً من كود البوت لتفادي تكرار إرسال المنيو والردود كصور
+    // لكن نسمح بحفظ أي رسالة يرسلها المستخدم يدوياً حتى لو كانت من هاتف البوت نفسه (fromMe)
+    if (mek.key?.id && (global.botSentMsgIds?.has(mek.key.id) || global.subBotSentMsgIds?.has(mek.key.id))) {
+        return;
+    }
 
     try {
-        const extracted = extractMediaFromMessage(mek.message);
+        const extracted = extractMediaFromMessage(mek.message, mek);
         if (!extracted || !extracted.mediaObj || !extracted.type) return;
-
-        // 🔒 حظر حفظ أي ميديا عادية غير مخصصة للعرض لمرة واحدة لمنع إرسال صورة خاطئة للمستخدم
-        if (!extracted.isViewOnce) return;
 
         const voId = mek.key?.id;
         const from = mek.key?.remoteJid || mek.chat || '';
@@ -200,7 +204,7 @@ export async function captureViewOnceMessage(mek, conn = null) {
             type: extracted.type,
             caption: extracted.caption || '',
             mimetype: extracted.mimetype || '',
-            isViewOnce: true,
+            isViewOnce: Boolean(extracted.isViewOnce),
             from,
             sender,
             timestamp: Date.now()
@@ -212,14 +216,13 @@ export async function captureViewOnceMessage(mek, conn = null) {
         if (from) {
             global.viewOnceCache.set(`${from}_${voId}`, cacheItem);
             global.viewOnceCache.set(`${from}_${voId.toLowerCase()}`, cacheItem);
-            // حفظ كآخر ميديا View-Once حقيقية فقط في هذا الشات
             global.viewOnceRecentByChat.set(from, cacheItem);
         }
 
         // محاولة تنزيل الميديا فوراً في الخلفية وحفظها في الذاكرة وعلى القرص
         let downloadedBuffer = null;
 
-        // 1. التنزيل عبر downloadContentFromMessage
+        // 1. التنزيل المباشر عبر downloadContentFromMessage
         try {
             const stream = await downloadContentFromMessage(extracted.mediaObj, extracted.type);
             let buffer = Buffer.from([]);
@@ -231,7 +234,7 @@ export async function captureViewOnceMessage(mek, conn = null) {
             }
         } catch (_) {}
 
-        // 2. إذا فشلت الطريقة الأولى، نحاول التنزيل عبر downloadMediaMessage مع إمكانية تجديد المفاتيح (reuploadRequest)
+        // 2. إذا فشلت الطريقة الأولى (مثلاً في بعض نسخ واتساب أعمال عند انتهاء صلاحية الرابط المباشر)، نحاول التنزيل عبر downloadMediaMessage وسوكيت الاتصال
         if (!downloadedBuffer && conn) {
             try {
                 const targetMsg = extracted.unwrappedMsg || mek.message;
@@ -266,7 +269,7 @@ export async function captureViewOnceMessage(mek, conn = null) {
                     type: extracted.type,
                     caption: extracted.caption || '',
                     mimetype: extracted.mimetype || '',
-                    isViewOnce: true,
+                    isViewOnce: cacheItem.isViewOnce,
                     from,
                     sender,
                     timestamp: cacheItem.timestamp
@@ -280,7 +283,9 @@ export async function captureViewOnceMessage(mek, conn = null) {
 
 /**
  * استخراج وتحميل ميديا الـ View-Once عند طلب أمر كشف
- * 🎯 قاعدة ذهبية: إذا حدد المستخدم رسالة معينة بريبلاي (quotedId)، نكشف حصرياً تلك الرسالة المحددة فقط ولا نعود بأي صورة قديمة أخرى!
+ * 🎯 قاعدة ذهبية:
+ * - إذا حدد المستخدم رسالة معينة بريبلاي (quotedId)، نكشف حصرياً تلك الرسالة المحددة فقط.
+ * - إذا كتب (كشف) بدون ريبلاي، نجلب أحدث ميديا تم إرسالها في هذا الشات.
  */
 export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', directMsg = null, conn = null, quotedParticipant = null) {
     // 0. فحص ما إذا كانت الرسالة الحالية نفسها تحتوي على ميديا مباشرة (إرسال صورة مع كلمة كشف)
@@ -300,7 +305,6 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
 
     // =========================================================================
     // 🔍 المسار أ: المستخدم قام بعمل ريبلاي على رسالة محددة (quotedId أو quotedMsg)
-    // في هذا المسار نلتزم 100% بالرسالة المقتبسة المحددة ولا نجلب أي صورة عشوائية أخرى!
     // =========================================================================
     if (quotedId) {
         // 1. البحث في كاش الذاكرة اللحظي بمعرف الرسالة المقتبسة بالضبط
@@ -402,17 +406,16 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
             } catch (_) {}
         }
 
-        // 🛑 إذا تم عمل ريبلاي على رسالة محددة ولم نجدها، نرجع null ولا نجلب صورة عشوائية أخرى من الشات!
+        // 🛑 إذا تم تحديد رسالة معينة بريبلاي ولم نجدها، نرجع null لمنع جلب أي صورة قديمة أخرى
         return null;
     }
 
     // =========================================================================
     // 🔍 المسار ب: المستخدم كتب كلمة (كشف) بدون ريبلاي
-    // هنا نبحث عن آخر رسالة View-Once حقيقية فقط تم إرسالها في هذا الشات
     // =========================================================================
     if (from && global.viewOnceRecentByChat?.has(from)) {
         const recent = global.viewOnceRecentByChat.get(from);
-        if (recent && recent.isViewOnce && (Date.now() - (recent.timestamp || 0) < 2 * 60 * 60 * 1000)) {
+        if (recent && (Date.now() - (recent.timestamp || 0) < 2 * 60 * 60 * 1000)) {
             if (recent.buffer && recent.buffer.length > 0) {
                 return { buffer: recent.buffer, type: recent.type, caption: recent.caption, mimetype: recent.mimetype };
             }
@@ -430,7 +433,7 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
         }
     }
 
-    // فحص القرص لأحدث ملف View-Once حقيقي في هذا الشات
+    // فحص القرص لأحدث ملف في هذا الشات
     if (from) {
         try {
             const files = fs.readdirSync(CACHE_DIR).filter(f => f.endsWith('.json'));
@@ -440,7 +443,7 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
                 try {
                     const fullP = path.join(CACHE_DIR, f);
                     const meta = JSON.parse(fs.readFileSync(fullP, 'utf8'));
-                    if (meta.from === from && meta.isViewOnce && meta.timestamp > bestTime && (Date.now() - meta.timestamp < 2 * 60 * 60 * 1000)) {
+                    if (meta.from === from && meta.timestamp > bestTime && (Date.now() - meta.timestamp < 2 * 60 * 60 * 1000)) {
                         bestTime = meta.timestamp;
                         bestFile = f.replace('.json', '');
                     }
