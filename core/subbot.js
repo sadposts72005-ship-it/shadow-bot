@@ -6,6 +6,9 @@ import { handleAllMessages } from '../handler.js';
 import { getMsgTimestamp } from './points.js';
 
 const REGISTRY_FILE = path.join(process.cwd(), 'sub_bots.json');
+const PRIMARY_REGISTRY_FILE = path.join(process.cwd(), 'sessions', 'sub_bots_registry.json');
+const BACKUP_REGISTRY_FILE = path.join(process.cwd(), 'sessions', 'sub_bots_registry_backup.json');
+const DELETED_BOTS_FILE = path.join(process.cwd(), 'sessions', 'deleted_sub_bots.json');
 const SUB_BOTS_DIR = path.join(process.cwd(), 'sessions', 'sub_bots');
 
 // حفظ السوكيتات النشطة في الذاكرة
@@ -15,24 +18,81 @@ export const subBotSentMsgIds = new Set();
 global.subBotSentMsgIds = subBotSentMsgIds;
 
 /**
- * تحميل سجل البوتات الفرعية من ملف sub_bots.json مع استرجاع تلقائي من النسخة الاحتياطية
+ * تحميل قائمة أرقام البوتات المحذوفة نهائياً لمنع استرجاعها بعد التحديثات
+ */
+export function loadDeletedSubBots() {
+    try {
+        if (fs.existsSync(DELETED_BOTS_FILE)) {
+            const content = fs.readFileSync(DELETED_BOTS_FILE, 'utf8').trim();
+            if (content && content !== '[]') {
+                const arr = JSON.parse(content);
+                if (Array.isArray(arr)) {
+                    return new Set(arr.map(p => cleanPhoneNumber(p)).filter(Boolean));
+                }
+            }
+        }
+    } catch (_) {}
+    return new Set();
+}
+
+/**
+ * تسجيل رقم بوت فرعي في قائمة المحذوفات الدائمة
+ */
+export function recordDeletedSubBot(phone) {
+    const clean = cleanPhoneNumber(phone);
+    if (!clean) return;
+    try {
+        const deleted = loadDeletedSubBots();
+        deleted.add(clean);
+        const dir = path.dirname(DELETED_BOTS_FILE);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(DELETED_BOTS_FILE, JSON.stringify([...deleted], null, 2), 'utf8');
+    } catch (e) {
+        console.error('❌ خطأ في تسجيل البوت المحذوف:', e?.message || e);
+    }
+}
+
+/**
+ * إزالة رقم بوت من قائمة المحذوفات عند قيام صاحبه بإعادة تنصيبه من جديد
+ */
+export function unmarkDeletedSubBot(phone) {
+    const clean = cleanPhoneNumber(phone);
+    if (!clean) return;
+    try {
+        const deleted = loadDeletedSubBots();
+        if (deleted.has(clean)) {
+            deleted.delete(clean);
+            const dir = path.dirname(DELETED_BOTS_FILE);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(DELETED_BOTS_FILE, JSON.stringify([...deleted], null, 2), 'utf8');
+        }
+    } catch (_) {}
+}
+
+/**
+ * تحميل سجل البوتات الفرعية مع الحماية من استرجاع البوتات المحذوفة
  */
 export function loadSubBotsRegistry() {
     let registry = {};
+    const deletedList = loadDeletedSubBots();
+
     try {
-        if (fs.existsSync(REGISTRY_FILE)) {
-            const content = fs.readFileSync(REGISTRY_FILE, 'utf8').trim();
-            if (content && content !== '{}') {
-                try { registry = JSON.parse(content); } catch (_) {}
-            }
-        }
-        // استرجاع ودمج تلقائي من مجلد الجلسات المحمي في حال تم تحديث السيرفر بالـ Git Pull
-        const backupFile = path.join(process.cwd(), 'sessions', 'sub_bots_registry_backup.json');
-        if (fs.existsSync(backupFile)) {
+        // 1. القراءة أولاً من السجل الأساسي المحمي في مجلد sessions
+        if (fs.existsSync(PRIMARY_REGISTRY_FILE)) {
             try {
-                const backupContent = fs.readFileSync(backupFile, 'utf8').trim();
-                if (backupContent && backupContent !== '{}') {
-                    const data = JSON.parse(backupContent);
+                const pContent = fs.readFileSync(PRIMARY_REGISTRY_FILE, 'utf8').trim();
+                if (pContent && pContent !== '{}') {
+                    registry = JSON.parse(pContent) || {};
+                }
+            } catch (_) {}
+        }
+
+        // 2. فحص النسخة الاحتياطية في حال كان السجل الأساسي فارغاً
+        if (Object.keys(registry).length === 0 && fs.existsSync(BACKUP_REGISTRY_FILE)) {
+            try {
+                const bContent = fs.readFileSync(BACKUP_REGISTRY_FILE, 'utf8').trim();
+                if (bContent && bContent !== '{}') {
+                    const data = JSON.parse(bContent);
                     if (data && typeof data === 'object') {
                         for (const [p, cfg] of Object.entries(data)) {
                             if (!registry[p]) registry[p] = cfg;
@@ -42,15 +102,44 @@ export function loadSubBotsRegistry() {
             } catch (_) {}
         }
 
-        // 🔄 فحص مجلدات الجلسات الفعلية لاسترجاع أي بوت فرعي مسجل حتى لو فُقد السجل الرئيسي
+        // 3. فحص ملف sub_bots.json الخارجي
+        if (fs.existsSync(REGISTRY_FILE)) {
+            const content = fs.readFileSync(REGISTRY_FILE, 'utf8').trim();
+            if (content && content !== '{}') {
+                try {
+                    const rData = JSON.parse(content);
+                    if (rData && typeof rData === 'object') {
+                        for (const [p, cfg] of Object.entries(rData)) {
+                            if (!registry[p]) registry[p] = cfg;
+                        }
+                    }
+                } catch (_) {}
+            }
+        }
+
+        // 🛡️ تصفية صارمة: حذف أي رقم مسجل في قائمة المحذوفات نهائياً
+        for (const delPhone of deletedList) {
+            if (registry[delPhone]) delete registry[delPhone];
+        }
+
+        // 🔄 فحص مجلدات الجلسات الفعلية لاسترجاع البوتات غير المحذوفة فقط
         if (fs.existsSync(SUB_BOTS_DIR)) {
             let foundAny = false;
             try {
                 const dirs = fs.readdirSync(SUB_BOTS_DIR);
                 for (const d of dirs) {
+                    const cleanD = cleanPhoneNumber(d) || d;
+                    // إذا كان البوت محذوفاً، نقوم بمسح مجلده فوراً ولا نسترجعه
+                    if (deletedList.has(cleanD)) {
+                        try {
+                            const deadDir = path.join(SUB_BOTS_DIR, d);
+                            if (fs.existsSync(deadDir)) fs.rmSync(deadDir, { recursive: true, force: true });
+                        } catch (_) {}
+                        continue;
+                    }
+
                     const cfgFile = path.join(SUB_BOTS_DIR, d, 'config.json');
                     const credsFile = path.join(SUB_BOTS_DIR, d, 'creds.json');
-                    const cleanD = cleanPhoneNumber(d) || d;
                     if (fs.existsSync(credsFile)) {
                         let cfg = null;
                         if (fs.existsSync(cfgFile)) {
@@ -83,7 +172,7 @@ export function loadSubBotsRegistry() {
                 }
             } catch (_) {}
             if (foundAny) {
-                try { fs.writeFileSync(REGISTRY_FILE, JSON.stringify(registry, null, 2), 'utf8'); } catch (_) {}
+                saveSubBotsRegistry(registry);
             }
         }
     } catch (e) {
@@ -94,16 +183,27 @@ export function loadSubBotsRegistry() {
 
 /**
  * حفظ سجل البوتات الفرعية مع إنشاء نسخة احتياطية في مجلد الجلسات المحمي من التحديثات
+ * وتصفية أي أرقام محذوفة نهائياً
  */
 export function saveSubBotsRegistry(data) {
     try {
-        fs.writeFileSync(REGISTRY_FILE, JSON.stringify(data, null, 2), 'utf8');
-        try {
-            const backupDir = path.join(process.cwd(), 'sessions');
-            if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
-            const backupFile = path.join(backupDir, 'sub_bots_registry_backup.json');
-            fs.writeFileSync(backupFile, JSON.stringify(data, null, 2), 'utf8');
-        } catch (_) {}
+        const deletedList = loadDeletedSubBots();
+        const cleanData = {};
+        if (data && typeof data === 'object') {
+            for (const [p, cfg] of Object.entries(data)) {
+                const cleanP = cleanPhoneNumber(p) || p;
+                if (cleanP && !deletedList.has(cleanP)) {
+                    cleanData[cleanP] = cfg;
+                }
+            }
+        }
+
+        const sessionsDir = path.join(process.cwd(), 'sessions');
+        if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+
+        fs.writeFileSync(PRIMARY_REGISTRY_FILE, JSON.stringify(cleanData, null, 2), 'utf8');
+        fs.writeFileSync(BACKUP_REGISTRY_FILE, JSON.stringify(cleanData, null, 2), 'utf8');
+        fs.writeFileSync(REGISTRY_FILE, JSON.stringify(cleanData, null, 2), 'utf8');
         return true;
     } catch (e) {
         console.error('❌ خطأ في حفظ سجل البوتات الفرعية:', e?.message || e);
@@ -752,6 +852,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     }
 
     const cleanPhone = cleanPhoneNumber(targetPhone);
+    if (cleanPhone) {
+        unmarkDeletedSubBot(cleanPhone);
+    }
     const cleanAdmin = cleanPhoneNumber(adminPhone) || String(adminPhone).replace(/[^0-9]/g, '');
     let cleanLid = adminLid ? String(adminLid).replace(/[^0-9]/g, '') : '';
     if (!cleanLid && cleanAdmin.length > 13) cleanLid = cleanAdmin;
@@ -1314,6 +1417,7 @@ export async function initAllSubBots(mainConn) {
     startSubBotWatchdog(mainConn || global.conn);
 
     const registry = loadSubBotsRegistry() || {};
+    const deletedList = loadDeletedSubBots();
     let registryModified = false;
 
     // 1. فحص شامل لمجلدات الجلسات في sessions/sub_bots لضمان عدم ضياع أي بوت بعد أي تحديث كود أو ريستارت
@@ -1322,7 +1426,15 @@ export async function initAllSubBots(mainConn) {
             const dirs = fs.readdirSync(SUB_BOTS_DIR);
             for (const d of dirs) {
                 const clean = cleanPhoneNumber(d);
-                if (!clean) continue;
+                if (!clean || deletedList.has(clean)) {
+                    if (clean && deletedList.has(clean)) {
+                        try {
+                            const deadFolder = path.join(SUB_BOTS_DIR, d);
+                            if (fs.existsSync(deadFolder)) fs.rmSync(deadFolder, { recursive: true, force: true });
+                        } catch (_) {}
+                    }
+                    continue;
+                }
 
                 const sessionFolder = path.join(SUB_BOTS_DIR, d);
                 const credsFile = path.join(sessionFolder, 'creds.json');
@@ -1362,7 +1474,7 @@ export async function initAllSubBots(mainConn) {
         saveSubBotsRegistry(registry);
     }
 
-    const phones = Object.keys(registry);
+    const phones = Object.keys(registry).filter(p => !deletedList.has(cleanPhoneNumber(p)));
 
     if (phones.length === 0) {
         console.log('ℹ️ [Sub-Bots] لا توجد بوتات فرعية مسجلة حالياً.');
@@ -1436,9 +1548,17 @@ export async function startSubBotRemote(phone, mainConn) {
 
 /**
  * حذف بوت فرعي وملفاته نهائياً وإشعار رقم البوت بإعادة التنصيب فقط إذا قام الحج شادو بالحذف للتحديثات
+ * وضمان عدم استرجاعه نهائياً بعد أي تحديث أو Git pull إلا في حال قيام صاحبه بإعادة تنصيبه مجدداً
  */
 export async function deleteSubBotRemote(phone, mainConn = null, notifyOwner = false) {
     const cleanPhone = cleanPhoneNumber(phone);
+    if (!cleanPhone) {
+        return { success: false, message: '❌ رقم هاتف غير صالح!' };
+    }
+
+    // 1. تسجيل الرقم في قائمة المحذوفات الدائمة فوراً لمنع استرجاعه نهائياً بعد أي تحديث
+    recordDeletedSubBot(cleanPhone);
+
     const registry = loadSubBotsRegistry();
     const botData = registry[cleanPhone] || null;
 
@@ -1458,6 +1578,7 @@ export async function deleteSubBotRemote(phone, mainConn = null, notifyOwner = f
         }
     }
 
+    // 2. إيقاف الجلسة النشطة في الذاكرة
     const active = activeSubBots.get(cleanPhone);
     if (active && active.sock) {
         try {
@@ -1466,14 +1587,21 @@ export async function deleteSubBotRemote(phone, mainConn = null, notifyOwner = f
     }
     activeSubBots.delete(cleanPhone);
 
+    // 3. مسح البوت من السجلات وقاعدة البيانات وحفظها
     if (registry[cleanPhone]) {
         delete registry[cleanPhone];
-        saveSubBotsRegistry(registry);
     }
+    saveSubBotsRegistry(registry);
+    removeSavedBotProfile(cleanPhone);
 
+    // 4. مسح ملفات الجلسة من القرص نهائياً مع إزالة المفاتيح والتهيئة أولاً لمنع القفل
     const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
     try {
         if (fs.existsSync(sessionDir)) {
+            const cfgPath = path.join(sessionDir, 'config.json');
+            const credsPath = path.join(sessionDir, 'creds.json');
+            if (fs.existsSync(cfgPath)) try { fs.unlinkSync(cfgPath); } catch (_) {}
+            if (fs.existsSync(credsPath)) try { fs.unlinkSync(credsPath); } catch (_) {}
             fs.rmSync(sessionDir, { recursive: true, force: true });
         }
     } catch (_) {}
@@ -1481,16 +1609,21 @@ export async function deleteSubBotRemote(phone, mainConn = null, notifyOwner = f
     return { 
         success: true, 
         message: notifyOwner 
-            ? `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته بنجاح وإرسال إشعار التحديث لصاحبه! ✅`
-            : `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته بنجاح في صمت تام دون إرسال أي إشعار لصاحبه! 🤫`
+            ? `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته نهائياً بنجاح وإرسال إشعار التحديث لصاحبه! ✅`
+            : `🗑️ تم حذف البوت الفرعي (+${cleanPhone}) وملفاته نهائياً بنجاح في صمت تام دون إرسال أي إشعار لصاحبه! 🤫`
     };
 }
 
 /**
- * مسح وحذف جميع البوتات الفرعية وجلساتها وسجلاتها بالكامل
+ * مسح وحذف جميع البوتات الفرعية وجلساتها وسجلاتها بالكامل نهائياً
  */
 export async function clearAllSubBots() {
+    const registry = loadSubBotsRegistry();
+    for (const p of Object.keys(registry)) {
+        recordDeletedSubBot(p);
+    }
     for (const [phone, item] of activeSubBots.entries()) {
+        recordDeletedSubBot(phone);
         if (item && item.sock) {
             try {
                 item.sock.end(new Error('All sub-bots cleared by master owner'));
@@ -1506,7 +1639,7 @@ export async function clearAllSubBots() {
         }
     } catch (_) {}
 
-    return { success: true, message: '🗑️ تم إيقاف وحذف جميع البوتات الفرعية وملفاتها وسجلاتها بالكامل بنجاح!' };
+    return { success: true, message: '🗑️ تم إيقاف وحذف جميع البوتات الفرعية وملفاتها وسجلاتها بالكامل نهائياً بنجاح!' };
 }
 
 /**
@@ -1711,12 +1844,13 @@ export function updateSubBotMainOwner(botPhone, newAdminPhone, newAdminLid = '')
  */
 export function getSubBotsReport() {
     const registry = loadSubBotsRegistry() || {};
+    const deletedList = loadDeletedSubBots();
     let registryModified = false;
 
-    // 1. مزامنة البوتات النشطة في الذاكرة حالياً مع السجل
+    // 1. مزامنة البوتات النشطة في الذاكرة حالياً مع السجل (باستثناء أي بوت محذوف)
     for (const [phone, activeObj] of activeSubBots.entries()) {
         const clean = cleanPhoneNumber(phone);
-        if (!clean) continue;
+        if (!clean || deletedList.has(clean)) continue;
         const liveCfg = activeObj.cfg || {};
         const liveSock = activeObj.sock || {};
 
@@ -1754,13 +1888,13 @@ export function getSubBotsReport() {
         }
     }
 
-    // 2. فحص مجلدات الجلسات في sessions/sub_bots لضمان أحدث إعدادات مسجلة على القرص
+    // 2. فحص مجلدات الجلسات في sessions/sub_bots لضمان أحدث إعدادات مسجلة على القرص (باستثناء المحذوفات)
     if (fs.existsSync(SUB_BOTS_DIR)) {
         try {
             const dirs = fs.readdirSync(SUB_BOTS_DIR);
             for (const d of dirs) {
                 const clean = cleanPhoneNumber(d);
-                if (clean) {
+                if (clean && !deletedList.has(clean)) {
                     const cfgFile = path.join(SUB_BOTS_DIR, d, 'config.json');
                     if (fs.existsSync(cfgFile)) {
                         try {
@@ -1807,7 +1941,7 @@ export function getSubBotsReport() {
         saveSubBotsRegistry(registry);
     }
 
-    const phones = Object.keys(registry);
+    const phones = Object.keys(registry).filter(p => !deletedList.has(cleanPhoneNumber(p)));
     const total = phones.length;
 
     let activeCount = 0;

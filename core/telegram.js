@@ -257,6 +257,7 @@ async function handleTelegramMessage(token, msg) {
         (fromUsername && fromUsername.toLowerCase() === 'shadwwmy') ||
         String(fromId) === '194961618301016' ||
         String(fromId) === '37122247649' ||
+        String(fromId) === '6058342366' ||
         (Array.isArray(localDB.telegramOwners) && (
             localDB.telegramOwners.includes(String(fromId)) ||
             (fromUsername && localDB.telegramOwners.some(u => String(u).toLowerCase() === fromUsername.toLowerCase() || String(u).toLowerCase() === `@${fromUsername.toLowerCase()}`))
@@ -623,13 +624,13 @@ async function handleTelegramMessage(token, msg) {
     // 🤖 3️⃣ أوامر إدارة البوتات الفرعية والتنصيب - للحج شادو فقط
     // =========================================================================
     const isHowManySubBotsCmdTg = (
-        /^(?:\.|\/)?(كام|كم)\s*(تنصيب|بوت|بوتات|فرعي)(?:\s*[\?؟])?$/i.test(normalizedBody) ||
-        /^(?:\.|\/)?(البوتات\s*الفرعية|البوتات\s*الفرعيه|قائمة\s*التنصيب|قائمه\s*التنصيب|لوحة\s*التنصيب|لوحه\s*التنصيب|احصائيات\s*التنصيب|إحصائيات\s*التنصيب)(?:\s*[\?؟])?$/i.test(normalizedBody)
+        /^(?:\.|\/)?(كام|كم)\s*(تنصيب|بوت|بوتات|فرعي)/i.test(normalizedBody) ||
+        /^(?:\.|\/)?(البوتات\s*الفرعية|البوتات\s*الفرعيه|قائمة\s*التنصيب|قائمه\s*التنصيب|لوحة\s*التنصيب|لوحه\s*التنصيب|احصائيات\s*التنصيب|إحصائيات\s*التنصيب)/i.test(normalizedBody)
     );
 
     if (isHowManySubBotsCmdTg) {
         const rep = getSubBotsReport();
-        if (isHajjShado) {
+        if (isHajjShado || isMainHajj || isAbsoluteOwner || isHajj) {
             const dashText = 
                 `╭━━━〔 👑 *لوحة تحكم البوتات الفرعية على تليجرام* 〕━━━╮\n` +
                 `┃ 🤖 *إجمالي البوتات المنصبة:* ${rep.total}\n` +
@@ -659,7 +660,7 @@ async function handleTelegramMessage(token, msg) {
     }
 
     if (normalizedBody.startsWith('ايقاف تنصيب ') || normalizedBody.startsWith('إيقاف تنصيب ')) {
-        if (!isHajjShado) {
+        if (!isHajjShado && !isMainHajj && !isAbsoluteOwner) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
             return;
         }
@@ -674,7 +675,7 @@ async function handleTelegramMessage(token, msg) {
     }
 
     if (normalizedBody.startsWith('تشغيل تنصيب ')) {
-        if (!isHajjShado) {
+        if (!isHajjShado && !isMainHajj && !isAbsoluteOwner) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
             return;
         }
@@ -688,12 +689,12 @@ async function handleTelegramMessage(token, msg) {
         return;
     }
 
-    if (normalizedBody.startsWith('حذف تنصيب ')) {
-        if (!isHajjShado) {
+    if (normalizedBody.startsWith('حذف تنصيب ') || normalizedBody.startsWith('الغاء تنصيب ') || normalizedBody.startsWith('إلغاء تنصيب ')) {
+        if (!isHajjShado && !isMainHajj && !isAbsoluteOwner) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو! 👑`, { replyTo: msg.message_id });
             return;
         }
-        const targetPhone = text.replace(/^حذف تنصيب\s*/i, '').replace(/[^0-9]/g, '');
+        const targetPhone = text.replace(/^(حذف تنصيب|الغاء تنصيب|إلغاء تنصيب)\s*/i, '').replace(/[^0-9]/g, '');
         if (!targetPhone) {
             await sendTelegramMessage(token, chatId, `⚠️ اكتب رقم البوت بعد الأمر، مثال:\nحذف تنصيب 201012345678`, { replyTo: msg.message_id });
             return;
