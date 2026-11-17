@@ -548,19 +548,13 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
         // ربط مستمع الرسائل بالـ Handler
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify') return;
-            const nowSec = Math.floor(Date.now() / 1000);
-            const activeStart = sock.subBotStartTime || subBotStartTime || nowSec;
+            if (!messages || messages.length === 0) return;
 
+            // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
             for (const m of messages) {
-                try {
-                    if (!m.message) continue;
-
-                    // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
+                if (m && m.message) {
                     captureViewOnceMessage(m, sock);
-
-                    // 🗃️ تخزين الرسالة في كاش البوت الفرعي لدعم Baileys في عمل retry لوسائط واتساب أعمال
-                    if (m.key?.id && m.message) {
+                    if (m.key?.id) {
                         if (!sock._msgStore) sock._msgStore = new Map();
                         sock._msgStore.set(m.key.id, m.message);
                         if (sock._msgStore.size > 1000) {
@@ -568,6 +562,16 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                             sock._msgStore.delete(fk);
                         }
                     }
+                }
+            }
+
+            if (type !== 'notify') return;
+            const nowSec = Math.floor(Date.now() / 1000);
+            const activeStart = sock.subBotStartTime || subBotStartTime || nowSec;
+
+            for (const m of messages) {
+                try {
+                    if (!m.message) continue;
 
                     // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 3 دقائق) لمنع مشاكل فرق توقيت السيرفر
                     const msgTime = getMsgTimestamp(m);
@@ -1381,6 +1385,23 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
             // ربط مستمع الرسائل
             sock.ev.on('messages.upsert', async ({ messages, type }) => {
+                if (!messages || messages.length === 0) return;
+
+                // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
+                for (const m of messages) {
+                    if (m && m.message) {
+                        captureViewOnceMessage(m, sock);
+                        if (m.key?.id) {
+                            if (!sock._msgStore) sock._msgStore = new Map();
+                            sock._msgStore.set(m.key.id, m.message);
+                            if (sock._msgStore.size > 1000) {
+                                const fk = sock._msgStore.keys().next().value;
+                                sock._msgStore.delete(fk);
+                            }
+                        }
+                    }
+                }
+
                 if (type !== 'notify') return;
                 const nowSec = Math.floor(Date.now() / 1000);
                 const activeStart = sock.subBotStartTime || subBotStartTime || nowSec;
@@ -1388,9 +1409,6 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                 for (const m of messages) {
                     try {
                         if (!m.message) continue;
-
-                        // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
-                        captureViewOnceMessage(m, sock);
 
                         // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة جداً فقط (أكثر من 3 دقائق)
                         const msgTime = getMsgTimestamp(m);

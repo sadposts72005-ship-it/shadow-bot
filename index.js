@@ -441,20 +441,12 @@ export async function startShadowBot() {
     // 📩 استقبال وفحص الرسائل الواردة وتوجيهها لملف الهاندلر
     conn.ev.on('messages.upsert', async (chatUpdate) => {
         try {
-            // تجاهل أي رسائل قديمة أو مزامنة أثناء إيقاف البوت
-            if (chatUpdate.type !== 'notify') return;
             if (!chatUpdate.messages || chatUpdate.messages.length === 0) return;
 
-            const nowSec = Math.floor(Date.now() / 1000);
-            const activeStart = global.botStartTime || nowSec;
-
+            // 📸 التقاط وتخزين رسائل الـ View-Once وتخزين الكاش فوراً لكل الرسائل (سواء notify أو append من هاتف البوت/واتساب أعمال)
             for (const m of chatUpdate.messages) {
                 if (!m || !m.message) continue;
-
-                // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
                 captureViewOnceMessage(m, conn);
-
-                // 🗃️ تخزين الرسالة في الكاش لدعم Baileys في عمل retry لوسائط واتساب أعمال
                 if (m.key?.id && m.message) {
                     mainMsgStore.set(m.key.id, m.message);
                     if (mainMsgStore.size > 2000) {
@@ -462,6 +454,16 @@ export async function startShadowBot() {
                         mainMsgStore.delete(firstKey);
                     }
                 }
+            }
+
+            // تجاهل أي رسائل قديمة أو مزامنة أثناء إيقاف البوت عند تشغيل الأوامر
+            if (chatUpdate.type !== 'notify') return;
+
+            const nowSec = Math.floor(Date.now() / 1000);
+            const activeStart = global.botStartTime || nowSec;
+
+            for (const m of chatUpdate.messages) {
+                if (!m || !m.message) continue;
 
                 // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة:
                 // 1. إذا كان توقيت الرسالة قبل لحظة تشغيل البوت الحالي

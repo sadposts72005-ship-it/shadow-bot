@@ -101,6 +101,14 @@ export function extractMediaFromMessage(rawMessage, parentMek = null) {
             msg = msg.botForwardedMessage.message || msg.botForwardedMessage;
             continue;
         }
+        if (msg.interactiveMessage?.header) {
+            msg = msg.interactiveMessage.header;
+            continue;
+        }
+        if (msg.interactiveResponseMessage) {
+            msg = msg.interactiveResponseMessage;
+            continue;
+        }
         break;
     }
 
@@ -210,6 +218,8 @@ export async function captureViewOnceMessage(mek, conn = null) {
             timestamp: Date.now()
         };
 
+        console.log(`📸 [ViewOnce] استلام رسالة وسائط: ID=${voId}, Type=${extracted.type}, ViewOnce=${extracted.isViewOnce}, From=${from}`);
+
         // فهرسة الكاش بعدة مفاتيح لضمان العثور عليه بدقة عبر الـ StanzaId
         global.viewOnceCache.set(voId, cacheItem);
         global.viewOnceCache.set(voId.toLowerCase(), cacheItem);
@@ -282,6 +292,8 @@ export async function captureViewOnceMessage(mek, conn = null) {
                 global.viewOnceCache.set(`${from}_${voId}`, cacheItem);
                 global.viewOnceRecentByChat.set(from, cacheItem);
             }
+
+            console.log(`✅ [ViewOnce] تم تنزيل وحفظ وسائط الرسالة ${voId} بنجاح (الحجم: ${downloadedBuffer.length} بايت)`);
 
             // حفظ نسخة احتياطية دائمة على القرص
             try {
@@ -460,6 +472,15 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
             if (bestEntry && bestEntry.buffer && bestEntry.buffer.length > 0) {
                 console.log(`✅ [ViewOnce] fallback بـ quotedParticipant نجح للرسالة ${quotedId}`);
                 return { buffer: bestEntry.buffer, type: bestEntry.type, caption: bestEntry.caption, mimetype: bestEntry.mimetype };
+            }
+        }
+
+        // 🔍 fallback ذكي أخير: إذا تم إرسال ميديا في هذا الشات خلال آخر 10 دقائق (مفيد لتفادي اختلاف معرّفات StanzaId بين واتساب ويب وأعمال والموبايل)
+        if (from && global.viewOnceRecentByChat?.has(from)) {
+            const recent = global.viewOnceRecentByChat.get(from);
+            if (recent && recent.buffer && recent.buffer.length > 0 && (Date.now() - (recent.timestamp || 0) < 10 * 60 * 1000)) {
+                console.log(`✅ [ViewOnce] تم كشف أحدث وسائط في الشات (${from}) كـ fallback للرسالة ${quotedId}`);
+                return { buffer: recent.buffer, type: recent.type, caption: recent.caption, mimetype: recent.mimetype };
             }
         }
 

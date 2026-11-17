@@ -694,6 +694,7 @@ async function broadcastReminders(messageGeneratorOrText, localDB) {
 
 let activeRemindersConn = null;
 let isRemindingInProgress = false;
+let lastExecutedMinute = '';
 
 export async function startAutoReminders(currentConn) {
     if (currentConn && currentConn.user?.id) {
