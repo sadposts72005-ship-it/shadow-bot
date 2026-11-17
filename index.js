@@ -444,7 +444,7 @@ export async function startShadowBot() {
                 if (!m || !m.message) continue;
 
                 // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
-                captureViewOnceMessage(m);
+                captureViewOnceMessage(m, conn);
 
                 // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة:
                 // 1. إذا كان توقيت الرسالة قبل لحظة تشغيل البوت الحالي

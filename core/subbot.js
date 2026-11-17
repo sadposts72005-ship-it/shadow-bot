@@ -549,7 +549,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                     if (!m.message) continue;
 
                     // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
-                    captureViewOnceMessage(m);
+                    captureViewOnceMessage(m, sock);
 
                     // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 3 دقائق) لمنع مشاكل فرق توقيت السيرفر
                     const msgTime = getMsgTimestamp(m);
@@ -801,20 +801,43 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
     }
 
     // 2. إرسال للشخص المنصّب عبر واتساب:
-    // ⚠️ تنبيه صارم: نمنع البوت من مراسلة نفسه نهائياً في حال كان رقم البوت هو رقم المنصّب
+    // ⚠️ تنبيه صارم: ترسل رسالة (مبروك تم التفعيل) حصرياً للرقم الذي أجرى عملية التنصيب فقط
+    // ولا يتم إرسالها لرقم الحج شادو نهائياً ما لم يكن الحج هو نفسه صاحب التنصيب!
     const cMain = (mainConn && mainConn.user?.id) ? mainConn : global.conn;
     const botJid = cleanPhone ? `${cleanPhone}@s.whatsapp.net` : null;
     const installerJid = (cleanAdmin && cleanAdmin.length >= 10 && cleanAdmin.length <= 13) ? `${cleanAdmin}@s.whatsapp.net` : null;
     const isBotSameAsAdmin = Boolean(cleanAdmin && cleanPhone && cleanAdmin === cleanPhone);
 
+    const ownerHajjPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
+    const isInstallerHajj = ownerHajjPhoneList.includes(cleanPhone) || ownerHajjPhoneList.includes(cleanAdmin);
+
     const whatsappDestinations = new Set();
-    // أ. الشات الذي تم طلب التنصيب منه واستخراج الكود فيه
-    if (cfg.notifyJid && !String(cfg.notifyJid).startsWith('tg:')) {
-        whatsappDestinations.add(cfg.notifyJid);
+    // أ. رقم الهاتف الذي تم تنصيب البوت عليه (المنصّب الفعلي)
+    if (cleanPhone) {
+        whatsappDestinations.add(`${cleanPhone}@s.whatsapp.net`);
     }
-    // ب. رقم الحج الأساسي المنصب للبوت
-    if (installerJid) {
-        whatsappDestinations.add(installerJid);
+    // ب. رقم أدمن التنصيب (إذا كان مختلفاً عن رقم البوت، ونستثني أرقام الحج إذا لم يكن هو المنصّب)
+    if (cleanAdmin && cleanAdmin !== cleanPhone) {
+        if (isInstallerHajj || !ownerHajjPhoneList.includes(cleanAdmin)) {
+            whatsappDestinations.add(`${cleanAdmin}@s.whatsapp.net`);
+        }
+    }
+    // ج. الشات الذي تم طلب التنصيب منه (إذا كان خاص المنصب وليس شات الحج)
+    if (cfg.notifyJid && !String(cfg.notifyJid).startsWith('tg:') && !cfg.notifyJid.endsWith('@g.us')) {
+        const cNotify = cleanPhoneNumber(cfg.notifyJid);
+        if (isInstallerHajj || !ownerHajjPhoneList.includes(cNotify)) {
+            whatsappDestinations.add(cfg.notifyJid);
+        }
+    }
+
+    // فلترة حاسمة: منع وصول رسالة مبروك لرقم الحج قطعياً إذا لم يكن الحج هو صاحب هذا التنصيب
+    if (!isInstallerHajj) {
+        for (const dest of Array.from(whatsappDestinations)) {
+            const cDest = cleanPhoneNumber(dest);
+            if (ownerHajjPhoneList.includes(cDest)) {
+                whatsappDestinations.delete(dest);
+            }
+        }
     }
 
     for (const destJid of whatsappDestinations) {
@@ -828,7 +851,7 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
                 } catch (_) {}
             }
         } else {
-            // الوجهة شات آخر أو رقم الحج: يرسلها البوت الأساسي أولاً
+            // الوجهة رقم المنصب أو رقمه الآخر: يرسلها البوت الأساسي أولاً
             let sent = false;
             if (cMain && cMain.user?.id) {
                 try {
@@ -1349,7 +1372,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         if (!m.message) continue;
 
                         // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية أو شروط زمنية
-                        captureViewOnceMessage(m);
+                        captureViewOnceMessage(m, sock);
 
                         // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة جداً فقط (أكثر من 3 دقائق)
                         const msgTime = getMsgTimestamp(m);

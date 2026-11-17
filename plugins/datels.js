@@ -29,7 +29,13 @@ const linkSpamCounter = {};
 const stopRequestsControl = {};
 const recentWelcomes = new Set();
 let cronStarted = false;
-let dynamicPrayers = {};
+let dynamicPrayers = {
+    "04:52": "الفجر 🌌",
+    "11:40": "الظهر ☀️",
+    "14:39": "العصر 🌤️",
+    "16:58": "المغرب 🌅",
+    "18:19": "العشاء 🌃"
+};
 
 
 function normalizeArabic(text) {
@@ -546,11 +552,11 @@ async function fetchEgyptPrayerTimes() {
         // Fallback في حال تعذر الاتصال بـ API
     }
     dynamicPrayers = { 
-        "04:48": "الفجر 🌌", 
-        "11:39": "الظهر ☀️", 
-        "14:43": "العصر 🌤️", 
-        "17:02": "المغرب 🌅", 
-        "18:22": "العشاء 🌃" 
+        "04:52": "الفجر 🌌", 
+        "11:40": "الظهر ☀️", 
+        "14:39": "العصر 🌤️", 
+        "16:58": "المغرب 🌅", 
+        "18:19": "العشاء 🌃" 
     };
 }
 
@@ -644,24 +650,12 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
             try {
                 const meta = await getCachedGroupMetadata(conn, gid);
                 if (meta?.participants) participants = meta.participants;
-                else {
-                    const metaPromise = conn.groupMetadata(gid);
-                    const metaTimeout = new Promise(resolve => setTimeout(() => resolve(null), 3000));
-                    const fetchedMeta = await Promise.race([metaPromise, metaTimeout]);
-                    if (fetchedMeta?.participants) participants = fetchedMeta.participants;
-                }
             } catch (_) {}
 
-            if (participants && participants.length > 0) {
-                const mentions = participants.map(p => p.id).filter(Boolean);
-                const tagList = participants.map(mem => `@${mem.id.split('@')[0].split(':')[0]}`).join(' ');
-                const finalTaggedMessage = `${messageToSend}\n\n🔔 تذكير لجميع الأعضاء:\n${tagList}`;
-                await conn.sendMessage(gid, { text: finalTaggedMessage, mentions: mentions }).catch(() => {});
-            } else {
-                await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
-            }
+            const mentions = (participants && participants.length <= 150) ? participants.map(p => p.id).filter(Boolean) : [];
+            await conn.sendMessage(gid, { text: messageToSend, mentions }).catch(() => {});
         } catch (_) {}
-        await delay(5000); // ⏱️ تأخير 5 ثوانٍ كاملة بين كل جروب وجروب لحماية الرقم من الحظر ومنع اسبام الرسائل
+        await delay(2500); // ⏱️ تأخير متوازن وسريع لحماية الرقم
     }
 }
 
@@ -711,8 +705,6 @@ export async function startAutoReminders(currentConn) {
     // جلب مواعيد الصلاة فوراً في الخلفية
     fetchEgyptPrayerTimes().catch(() => {});
 
-    let lastExecutedMinute = '';
-
     setInterval(async () => {
         try {
             const mainConn = (activeRemindersConn && activeRemindersConn.user?.id) ? activeRemindersConn : global.conn;
@@ -733,24 +725,40 @@ export async function startAutoReminders(currentConn) {
                 fetchEgyptPrayerTimes().catch(() => {});
             }
 
-            // 1. أذكار ومواقيت الصلاة
-            if (dynamicPrayers[currentTimeStr]) {
-                const prayerName = dynamicPrayers[currentTimeStr];
+            // 1. أذكار ومواقيت الصلاة: فحص دقيق للصلوات بالدقائق
+            const cTotalMin = hourNum * 60 + minNum;
+            for (const [prayerTime, prayerName] of Object.entries(dynamicPrayers)) {
                 const prayerLogKey = `prayer_${todayDateStr}_${prayerName}`;
+                if (localDB.sentRemindersLog?.list?.includes(prayerLogKey)) continue;
 
-                if (!localDB.sentRemindersLog.list.includes(prayerLogKey)) {
+                const [pHour, pMin] = prayerTime.split(':').map(v => parseInt(v, 10));
+                const pTotalMin = pHour * 60 + pMin;
+                const diffMin = cTotalMin - pTotalMin;
+
+                // إرسال الأذان في موعده تماماً أو خلال 5 دقائق من دخوله (ضمان عدم فوات أي أذان عند انقطاع الاتصال)
+                if (diffMin >= 0 && diffMin <= 5) {
                     isRemindingInProgress = true;
                     try {
                         let messageGenerator = (sock) => {
                             const bName = sock.subBotConfig?.botName || sock.botName || (sock.isSubBot ? 'بوت فرعي' : 'شادو');
-                            return `🕌 *حان الآن موعد أذان ${prayerName} حسب توقيت مصر المحلي* 🕌\nصلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️\n\n🤖 *${bName}*`;
+                            return (
+                                `╭━━━〔 🕌 *أذان ${prayerName}* 〕━━━╮\n` +
+                                `الله أكبر، الله أكبر 🕋\n` +
+                                `حان الآن موعد أذان ${prayerName} حسب توقيت مصر والقاهرة 🇪🇬\n\n` +
+                                `«حَيَّ عَلَى الصَّلَاةِ، حَيَّ عَلَى الْفَلَاحِ» 🤍\n` +
+                                `صلاتك حياتك يا غالي، لا تؤخرها.. اذكر الله وصَلِّ على النبي محمد ﷺ ❤️\n` +
+                                `╰━━━━━━━━━━━━━━━━━━━━╯\n` +
+                                `🤖 *${bName}*`
+                            );
                         };
                         await broadcastReminders(messageGenerator, localDB);
+                        if (!localDB.sentRemindersLog.list) localDB.sentRemindersLog.list = [];
                         localDB.sentRemindersLog.list.push(prayerLogKey);
                         saveLocalDB(localDB);
                     } finally {
                         isRemindingInProgress = false;
                     }
+                    break;
                 }
             }
 
@@ -949,7 +957,7 @@ const datelsHandler = {
             }
 
             // 📸 [التقاط وتخزين رسائل الـ View-Once فور استلامها لكشفها فوراً بدون ضياع]
-            captureViewOnceMessage(mek);
+            captureViewOnceMessage(mek, currentConn);
 
             const isGroup = from.endsWith('@g.us');
             let sender = isGroup ? (mek.key.participant || mek.participant || '') : from;
@@ -1186,18 +1194,36 @@ const datelsHandler = {
             }
 
             // 🕌 أوامر مواقيت الصلاة والأذان
-            if (['مواقيت الصلاة', 'مواعيد الصلاة', 'مواقيت الصلاه', 'مواعيد الصلاه', 'الاذان', 'الأذان', 'الصلوات'].includes(normalizedBody)) {
+            const isAdhanAudioCmd = /^(?:\.|\/|!)?(?:صوت\s*الاذان|صوت\s*الأذان|اذان\s*صوت|أذان\s*صوت|اسمع\s*الاذان|سماع\s*الاذان)$/i.test(normalizedBody);
+            if (isAdhanAudioCmd) {
                 await handleCommandTiming('🕌');
-                const { todayDateStr } = getCairoTimeParts();
+                try {
+                    await currentConn.sendMessage(from, {
+                        audio: { url: 'https://cdn.islamic.network/adhan/makkah.mp3' },
+                        mimetype: 'audio/mp4',
+                        ptt: true
+                    }, { quoted: mek });
+                } catch (_) {
+                    await currentConn.sendMessage(from, { text: '🕌 «الله أكبر، الله أكبر.. أشهد أن لا إله إلا الله، وأشهد أن محمداً رسول الله» 🕋\n(حان الآن وقت الصلاة، تقبل الله منا ومنكم صالح الأعمال) ❤️' }, { quoted: mek });
+                }
+                return true;
+            }
+
+            const isAdhanTimesCmd = /^(?:\.|\/|!)?(?:مواقيت\s*الصلاة|مواعيد\s*الصلاة|مواقيت\s*الصلاه|مواعيد\s*الصلاه|الاذان|الأذان|اذان|أذان|الصلوات)$/i.test(normalizedBody);
+            if (isAdhanTimesCmd) {
+                await handleCommandTiming('🕌');
+                const { todayDateStr, currentTimeStr } = getCairoTimeParts();
                 let prayerList = '';
                 for (const [time, name] of Object.entries(dynamicPrayers)) {
                     prayerList += `• ${name}: *${time}*\n`;
                 }
                 const msg = 
                     `╭━━━〔 🕌 *مواقيت الصلاة في مصر* 〕━━━╮\n` +
-                    `📅 التاريخ: ${todayDateStr}\n\n` +
+                    `📅 التاريخ: ${todayDateStr}\n` +
+                    `⏰ الوقت الحالي بمصر: ${currentTimeStr}\n\n` +
                     (prayerList || '• جاري تحديث المواعيد...\n') +
                     `\n📢 *تنبيه:* يقوم البوت بالتنبيه تلقائياً في جميع الرومات عند حلول موعد كل صلاة.\n` +
+                    `🎧 *لسماع صوت الأذان:* اكتب (صوت الاذان)\n` +
                     `🤍 *صلاتك حياتك فلا تؤخرها.. صَلِّ على النبي ﷺ*` +
                     `\n╰━━━━━━━━━━━━━━━━━━━━╯`;
                 await currentConn.sendMessage(from, { text: msg }, { quoted: mek });
@@ -1218,7 +1244,8 @@ const datelsHandler = {
             }
 
             // 🧪 أوامر تجربة الأذان والصلاة على النبي فوراً لجميع الجروبات
-            if (['ارسل الاذان', 'أرسل الأذان', 'تست الاذان', 'تجربة الاذان', 'تجربه الاذان', 'تذكير الصلاة الان', 'تذكير الصلاه الان'].includes(normalizedBody)) {
+            const isTestAdhanCmd = /^(?:\.|\/|!)?(?:ارسل\s*الاذان|أرسل\s*الأذان|تست\s*الاذان|تجربة\s*الاذان|تجربه\s*الاذان|تذكير\s*الصلاة\s*الان|تذكير\s*الصلاه\s*الان)$/i.test(normalizedBody);
+            if (isTestAdhanCmd) {
                 if (!isHajj && !isBotOwner) {
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحجاج فقط لاختبار نظام الأذان والتذكيرات!' }, { quoted: mek });
@@ -1941,7 +1968,7 @@ const datelsHandler = {
                 }
 
                 // 🕌 تشغيل الأذكار والأذان (تشغيل مسلم)
-                const isEnableMuslim = /^(?:\.|\/|!)?(?:تشغيل\s*مسلم|تفعيل\s*مسلم|فتح\s*مسلم|تشغيل\s*الاذان|تفعيل\s*الاذان|تشغيل\s*الأذان|تفعيل\s*الأذان)$/i.test(normalizedBody);
+                const isEnableMuslim = /^(?:\.|\/|!)?(?:تشغيل\s*مسلم|تفعيل\s*مسلم|فتح\s*مسلم|تشغيلو|تشغيله|تشغيل\s*الاذان|تفعيل\s*الاذان|تشغيل\s*الأذان|تفعيل\s*الأذان)$/i.test(normalizedBody);
                 if (isEnableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
@@ -1962,7 +1989,7 @@ const datelsHandler = {
                 }
 
                 // 🛑 إيقاف الأذكار والأذان (وقف مسلم)
-                const isDisableMuslim = /^(?:\.|\/|!)?(?:وقف\s*مسلم|قفل\s*مسلم|تعطيل\s*مسلم|ايقاف\s*مسلم|إيقاف\s*مسلم|الغاء\s*مسلم|إلغاء\s*مسلم|وقف\s*الاذان|تعطيل\s*الاذان|ايقاف\s*الاذان|إيقاف\s*الاذان)$/i.test(normalizedBody);
+                const isDisableMuslim = /^(?:\.|\/|!)?(?:وقف\s*مسلم|وقفو|وقفه|قفل\s*مسلم|تعطيل\s*مسلم|ايقاف\s*مسلم|إيقاف\s*مسلم|الغاء\s*مسلم|إلغاء\s*مسلم|وقف\s*الاذان|تعطيل\s*الاذان|ايقاف\s*الاذان|إيقاف\s*الاذان)$/i.test(normalizedBody);
                 if (isDisableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');

@@ -531,7 +531,7 @@ async function resolveUserPhoneNumber(mek, currentConn, localDB) {
 export async function handleAllMessages(mek, currentConn) {
     try {
         // 📸 التقاط وتخزين رسائل العرض لمرة واحدة (View-Once) فوراً في الكاش قبل أي فحص أو شروط زمنية
-        captureViewOnceMessage(mek);
+        captureViewOnceMessage(mek, currentConn);
 
         // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة أُرسلت قبل تشغيل البوت الحالي أو أثناء إغلاقه
         const nowSec = Math.floor(Date.now() / 1000);

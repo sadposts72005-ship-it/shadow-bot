@@ -1,4 +1,4 @@
-import { downloadContentFromMessage, downloadMediaMessage, normalizeMessageContent, extractMessageContent } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, downloadMediaMessage, normalizeMessageContent } from '@whiskeysockets/baileys';
 import fs from 'fs';
 import path from 'path';
 
@@ -17,9 +17,6 @@ if (!global.viewOnceCache) {
 if (!global.viewOnceRecentByChat) {
     global.viewOnceRecentByChat = new Map();
 }
-if (!global.viewOnceChatHistory) {
-    global.viewOnceChatHistory = new Map();
-}
 
 function cleanNumber(str) {
     if (!str) return '';
@@ -29,7 +26,7 @@ function cleanNumber(str) {
 /**
  * فك تغليف الرسالة بدقة متناهية عبر كل الطبقات الممكنة
  * (viewOnce, ephemeral, documentWithCaption, deviceSent, edited, etc.)
- * للتعامل مع رسائل العرض لمرة واحدة بأي صيغة مشفرة أو مقتبسة
+ * للتعرف بدقة على رسائل العرض لمرة واحدة (View-Once)
  */
 export function extractMediaFromMessage(rawMessage) {
     if (!rawMessage) return null;
@@ -43,6 +40,18 @@ export function extractMediaFromMessage(rawMessage) {
         }
     } catch (_) {}
 
+    let isViewOnce = Boolean(
+        rawMessage.viewOnceMessage ||
+        rawMessage.viewOnceMessageV2 ||
+        rawMessage.viewOnceMessageV2Extension ||
+        rawMessage.message?.viewOnceMessage ||
+        rawMessage.message?.viewOnceMessageV2 ||
+        rawMessage.message?.viewOnceMessageV2Extension ||
+        msg?.viewOnceMessage ||
+        msg?.viewOnceMessageV2 ||
+        msg?.viewOnceMessageV2Extension
+    );
+
     // فك التغليف التكراري الشامل للطبقات المتداخلة
     for (let i = 0; i < 12; i++) {
         if (!msg || typeof msg !== 'object') break;
@@ -55,14 +64,17 @@ export function extractMediaFromMessage(rawMessage) {
             continue;
         }
         if (msg.viewOnceMessage) {
+            isViewOnce = true;
             msg = msg.viewOnceMessage.message || msg.viewOnceMessage;
             continue;
         }
         if (msg.viewOnceMessageV2) {
+            isViewOnce = true;
             msg = msg.viewOnceMessageV2.message || msg.viewOnceMessageV2;
             continue;
         }
         if (msg.viewOnceMessageV2Extension) {
+            isViewOnce = true;
             msg = msg.viewOnceMessageV2Extension.message || msg.viewOnceMessageV2Extension;
             continue;
         }
@@ -97,36 +109,29 @@ export function extractMediaFromMessage(rawMessage) {
     if (msg.imageMessage) {
         mediaObj = msg.imageMessage;
         type = 'image';
+        if (mediaObj.viewOnce) isViewOnce = true;
     } else if (msg.videoMessage) {
         mediaObj = msg.videoMessage;
         type = 'video';
+        if (mediaObj.viewOnce) isViewOnce = true;
     } else if (msg.ptvMessage) {
         mediaObj = msg.ptvMessage;
         type = 'video';
+        if (mediaObj.viewOnce) isViewOnce = true;
     } else if (msg.audioMessage) {
         mediaObj = msg.audioMessage;
         type = 'audio';
+        if (mediaObj.viewOnce) isViewOnce = true;
     } else if (msg.documentMessage) {
         mediaObj = msg.documentMessage;
         type = 'document';
+        if (mediaObj.viewOnce) isViewOnce = true;
     } else if (msg.stickerMessage) {
         mediaObj = msg.stickerMessage;
         type = 'sticker';
     }
 
     if (!mediaObj) return null;
-
-    const isViewOnce = Boolean(
-        mediaObj.viewOnce ||
-        rawMessage.viewOnceMessage ||
-        rawMessage.viewOnceMessageV2 ||
-        rawMessage.viewOnceMessageV2Extension ||
-        rawMessage.message?.viewOnceMessage ||
-        rawMessage.message?.viewOnceMessageV2 ||
-        rawMessage.message?.viewOnceMessageV2Extension ||
-        msg.viewOnceMessage ||
-        msg.viewOnceMessageV2
-    );
 
     return {
         mediaObj,
@@ -161,13 +166,20 @@ function cleanOldCacheFiles() {
 }
 
 /**
- * فحص الرسالة واستخراج ميديا الـ View-Once والميديا العامة فور استلامها وتنزيلها وتخزينها في الكاش وعلى القرص فوراً
+ * فحص الرسالة واستخراج ميديا الـ View-Once فور استلامها وتنزيلها وتخزينها في الكاش وعلى القرص فوراً
+ * ⚠️ تنبيه: نلتقط حصرياً رسائل الـ View-Once الحقيقية فقط لمنع تلوث الكاش بصور البروفايل أو صور الدردشة العادية!
  */
-export async function captureViewOnceMessage(mek) {
+export async function captureViewOnceMessage(mek, conn = null) {
     if (!mek?.message) return;
+    // 🛑 تجاهل قاطع لرسائل البوت نفسه (fromMe) لكي لا يحفظ البوت صوره الخاصة في كاش العرض لمرة واحدة
+    if (mek.key?.fromMe) return;
+
     try {
         const extracted = extractMediaFromMessage(mek.message);
         if (!extracted || !extracted.mediaObj || !extracted.type) return;
+
+        // 🔒 حظر حفظ أي ميديا عادية غير مخصصة للعرض لمرة واحدة لمنع إرسال صورة خاطئة للمستخدم
+        if (!extracted.isViewOnce) return;
 
         const voId = mek.key?.id;
         const from = mek.key?.remoteJid || mek.chat || '';
@@ -188,29 +200,26 @@ export async function captureViewOnceMessage(mek) {
             type: extracted.type,
             caption: extracted.caption || '',
             mimetype: extracted.mimetype || '',
-            isViewOnce: extracted.isViewOnce,
+            isViewOnce: true,
             from,
             sender,
             timestamp: Date.now()
         };
 
-        // فهرسة الكاش بعدة مفاتيح لضمان العثور عليه من أي مستخدم أو شات
+        // فهرسة الكاش بعدة مفاتيح لضمان العثور عليه بدقة عبر الـ StanzaId
         global.viewOnceCache.set(voId, cacheItem);
         global.viewOnceCache.set(voId.toLowerCase(), cacheItem);
         if (from) {
             global.viewOnceCache.set(`${from}_${voId}`, cacheItem);
             global.viewOnceCache.set(`${from}_${voId.toLowerCase()}`, cacheItem);
+            // حفظ كآخر ميديا View-Once حقيقية فقط في هذا الشات
             global.viewOnceRecentByChat.set(from, cacheItem);
-
-            // حفظ سجل آخر 50 وسائط بالشات
-            if (!global.viewOnceChatHistory) global.viewOnceChatHistory = new Map();
-            const history = global.viewOnceChatHistory.get(from) || [];
-            history.unshift(cacheItem);
-            if (history.length > 50) history.pop();
-            global.viewOnceChatHistory.set(from, history);
         }
 
         // محاولة تنزيل الميديا فوراً في الخلفية وحفظها في الذاكرة وعلى القرص
+        let downloadedBuffer = null;
+
+        // 1. التنزيل عبر downloadContentFromMessage
         try {
             const stream = await downloadContentFromMessage(extracted.mediaObj, extracted.type);
             let buffer = Buffer.from([]);
@@ -218,32 +227,51 @@ export async function captureViewOnceMessage(mek) {
                 buffer = Buffer.concat([buffer, chunk]);
             }
             if (buffer && buffer.length > 0) {
-                cacheItem.buffer = buffer;
-                global.viewOnceCache.set(voId, cacheItem);
-                global.viewOnceCache.set(voId.toLowerCase(), cacheItem);
-                if (from) {
-                    global.viewOnceCache.set(`${from}_${voId}`, cacheItem);
-                    global.viewOnceRecentByChat.set(from, cacheItem);
-                }
-
-                // حفظ نسخة احتياطية دائمة على القرص لضمان عدم ضياعها نهائياً
-                try {
-                    const filePath = path.join(CACHE_DIR, `${voId}.bin`);
-                    const metaPath = path.join(CACHE_DIR, `${voId}.json`);
-                    fs.writeFileSync(filePath, buffer);
-                    fs.writeFileSync(metaPath, JSON.stringify({
-                        id: voId,
-                        type: extracted.type,
-                        caption: extracted.caption || '',
-                        mimetype: extracted.mimetype || '',
-                        from,
-                        sender,
-                        timestamp: cacheItem.timestamp
-                    }));
-                } catch (_) {}
+                downloadedBuffer = buffer;
             }
-        } catch (_) {
-            // في حال تعذر التنزيل الفوري، يبقى mediaObj محفوظاً لإعادة المحاولة عند طلب الكشف عبر الاتصال المباشر
+        } catch (_) {}
+
+        // 2. إذا فشلت الطريقة الأولى، نحاول التنزيل عبر downloadMediaMessage مع إمكانية تجديد المفاتيح (reuploadRequest)
+        if (!downloadedBuffer && conn) {
+            try {
+                const targetMsg = extracted.unwrappedMsg || mek.message;
+                const buffer = await downloadMediaMessage(
+                    { key: mek.key, message: targetMsg },
+                    'buffer',
+                    {},
+                    { reuploadRequest: conn.updateMediaMessage }
+                );
+                if (buffer && buffer.length > 0) {
+                    downloadedBuffer = buffer;
+                }
+            } catch (_) {}
+        }
+
+        if (downloadedBuffer && downloadedBuffer.length > 0) {
+            cacheItem.buffer = downloadedBuffer;
+            global.viewOnceCache.set(voId, cacheItem);
+            global.viewOnceCache.set(voId.toLowerCase(), cacheItem);
+            if (from) {
+                global.viewOnceCache.set(`${from}_${voId}`, cacheItem);
+                global.viewOnceRecentByChat.set(from, cacheItem);
+            }
+
+            // حفظ نسخة احتياطية دائمة على القرص
+            try {
+                const filePath = path.join(CACHE_DIR, `${voId}.bin`);
+                const metaPath = path.join(CACHE_DIR, `${voId}.json`);
+                fs.writeFileSync(filePath, downloadedBuffer);
+                fs.writeFileSync(metaPath, JSON.stringify({
+                    id: voId,
+                    type: extracted.type,
+                    caption: extracted.caption || '',
+                    mimetype: extracted.mimetype || '',
+                    isViewOnce: true,
+                    from,
+                    sender,
+                    timestamp: cacheItem.timestamp
+                }));
+            } catch (_) {}
         }
 
         cleanOldCacheFiles();
@@ -251,7 +279,8 @@ export async function captureViewOnceMessage(mek) {
 }
 
 /**
- * استخراج وتحميل ميديا الـ View-Once أو أي ميديا عند طلب أمر كشف من قِبل أي مستخدم
+ * استخراج وتحميل ميديا الـ View-Once عند طلب أمر كشف
+ * 🎯 قاعدة ذهبية: إذا حدد المستخدم رسالة معينة بريبلاي (quotedId)، نكشف حصرياً تلك الرسالة المحددة فقط ولا نعود بأي صورة قديمة أخرى!
  */
 export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', directMsg = null, conn = null, quotedParticipant = null) {
     // 0. فحص ما إذا كانت الرسالة الحالية نفسها تحتوي على ميديا مباشرة (إرسال صورة مع كلمة كشف)
@@ -269,8 +298,12 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
         }
     }
 
-    // 1. البحث في كاش الذاكرة اللحظي بمعرف الرسالة المقتبسة (Stanza ID) بكافة أشكاله
+    // =========================================================================
+    // 🔍 المسار أ: المستخدم قام بعمل ريبلاي على رسالة محددة (quotedId أو quotedMsg)
+    // في هذا المسار نلتزم 100% بالرسالة المقتبسة المحددة ولا نجلب أي صورة عشوائية أخرى!
+    // =========================================================================
     if (quotedId) {
+        // 1. البحث في كاش الذاكرة اللحظي بمعرف الرسالة المقتبسة بالضبط
         const searchKeys = [
             quotedId,
             quotedId.toLowerCase(),
@@ -295,7 +328,6 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
                         }
                     } catch (_) {}
 
-                    // محاولة تنزيل بديلة عبر downloadMediaMessage وسوكيت الاتصال
                     if (conn && item.unwrappedMsg) {
                         try {
                             const buffer = await downloadMediaMessage(
@@ -313,10 +345,8 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
                 }
             }
         }
-    }
 
-    // 2. البحث في كاش القرص الدائم بمعرف الرسالة (مطابقة مباشرة أو بدون مراعاة حالة الأحرف)
-    if (quotedId) {
+        // 2. البحث في كاش القرص الدائم بمعرف الرسالة المقتبسة
         try {
             const binPath = path.join(CACHE_DIR, `${quotedId}.bin`);
             const metaPath = path.join(CACHE_DIR, `${quotedId}.json`);
@@ -329,7 +359,6 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
                 return { buffer, type: meta.type || 'image', caption: meta.caption || '', mimetype: meta.mimetype || '' };
             }
 
-            // بحث غير مقيد بحالة الأحرف في القرص
             const qLower = quotedId.toLowerCase();
             const diskFiles = fs.readdirSync(CACHE_DIR);
             const matchedBin = diskFiles.find(f => f.toLowerCase() === `${qLower}.bin`);
@@ -343,87 +372,47 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
                 return { buffer, type: meta.type || 'image', caption: meta.caption || '', mimetype: meta.mimetype || '' };
             }
         } catch (_) {}
-    }
 
-    // 3. محاولة التنزيل المباشر من الرسالة المقتبسة (للميديا التي تحتفظ بمفاتيح التشفير)
-    if (quotedMsg) {
-        const quotedExt = extractMediaFromMessage(quotedMsg);
-        if (quotedExt && quotedExt.mediaObj && quotedExt.type) {
+        // 3. محاولة التنزيل المباشر من الرسالة المقتبسة ذاتها
+        if (quotedMsg) {
+            const quotedExt = extractMediaFromMessage(quotedMsg);
+            if (quotedExt && quotedExt.mediaObj && quotedExt.type) {
+                try {
+                    const stream = await downloadContentFromMessage(quotedExt.mediaObj, quotedExt.type);
+                    let buffer = Buffer.from([]);
+                    for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                    if (buffer && buffer.length > 0) {
+                        return { buffer, type: quotedExt.type, caption: quotedExt.caption, mimetype: quotedExt.mimetype };
+                    }
+                } catch (_) {}
+            }
+
             try {
-                const stream = await downloadContentFromMessage(quotedExt.mediaObj, quotedExt.type);
-                let buffer = Buffer.from([]);
-                for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
+                const targetMsgToDownload = quotedExt?.unwrappedMsg || quotedMsg;
+                const buffer = await downloadMediaMessage(
+                    { message: targetMsgToDownload },
+                    'buffer',
+                    {},
+                    conn ? { reuploadRequest: conn.updateMediaMessage } : undefined
+                );
                 if (buffer && buffer.length > 0) {
-                    return { buffer, type: quotedExt.type, caption: quotedExt.caption, mimetype: quotedExt.mimetype };
+                    const innerType = quotedExt?.type || 'image';
+                    return { buffer, type: innerType, caption: quotedExt?.caption || '', mimetype: quotedExt?.mimetype || '' };
                 }
             } catch (_) {}
         }
 
-        // محاولة تنزيل متقدمة عبر Baileys downloadMediaMessage
-        try {
-            const targetMsgToDownload = quotedExt?.unwrappedMsg || quotedMsg;
-            const buffer = await downloadMediaMessage(
-                { message: targetMsgToDownload },
-                'buffer',
-                {},
-                conn ? { reuploadRequest: conn.updateMediaMessage } : undefined
-            );
-            if (buffer && buffer.length > 0) {
-                const innerType = quotedExt?.type || 'image';
-                return { buffer, type: innerType, caption: quotedExt?.caption || '', mimetype: quotedExt?.mimetype || '' };
-            }
-        } catch (_) {}
+        // 🛑 إذا تم عمل ريبلاي على رسالة محددة ولم نجدها، نرجع null ولا نجلب صورة عشوائية أخرى من الشات!
+        return null;
     }
 
-    // 4. البحث عبر مرسل الرسالة المقتبسة (quotedParticipant) في سجل الشات الحديث والقرص
-    if (from && quotedParticipant) {
-        const cleanQuotedP = cleanNumber(quotedParticipant);
-        const chatHistory = global.viewOnceChatHistory?.get(from) || [];
-        for (const item of chatHistory) {
-            const itemClean = cleanNumber(item.sender || item.participant);
-            if (itemClean && (itemClean === cleanQuotedP || (cleanQuotedP.length >= 10 && itemClean.endsWith(cleanQuotedP.slice(-10))))) {
-                if (item.buffer && item.buffer.length > 0) {
-                    return { buffer: item.buffer, type: item.type, caption: item.caption, mimetype: item.mimetype };
-                }
-                if (item.mediaObj && item.type) {
-                    try {
-                        const stream = await downloadContentFromMessage(item.mediaObj, item.type);
-                        let buffer = Buffer.from([]);
-                        for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
-                        if (buffer && buffer.length > 0) {
-                            item.buffer = buffer;
-                            return { buffer, type: item.type, caption: item.caption, mimetype: item.mimetype };
-                        }
-                    } catch (_) {}
-                }
-            }
-        }
-
-        // فحص القرص لمرسل الرسالة المقتبسة
-        try {
-            const files = fs.readdirSync(CACHE_DIR).filter(f => f.endsWith('.json'));
-            for (const f of files) {
-                try {
-                    const fullP = path.join(CACHE_DIR, f);
-                    const meta = JSON.parse(fs.readFileSync(fullP, 'utf8'));
-                    const metaClean = cleanNumber(meta.sender || meta.participant);
-                    if (meta.from === from && metaClean && (metaClean === cleanQuotedP || (cleanQuotedP.length >= 10 && metaClean.endsWith(cleanQuotedP.slice(-10))))) {
-                        const binFile = f.replace('.json', '.bin');
-                        const binP = path.join(CACHE_DIR, binFile);
-                        if (fs.existsSync(binP)) {
-                            const buffer = fs.readFileSync(binP);
-                            return { buffer, type: meta.type || 'image', caption: meta.caption || '', mimetype: meta.mimetype || '' };
-                        }
-                    }
-                } catch (_) {}
-            }
-        } catch (_) {}
-    }
-
-    // 5. الاحتياطي: البحث في آخر ميديا تم إرسالها في هذا الشات خلال آخر ساعة (ذاكرة وقرص)
+    // =========================================================================
+    // 🔍 المسار ب: المستخدم كتب كلمة (كشف) بدون ريبلاي
+    // هنا نبحث عن آخر رسالة View-Once حقيقية فقط تم إرسالها في هذا الشات
+    // =========================================================================
     if (from && global.viewOnceRecentByChat?.has(from)) {
         const recent = global.viewOnceRecentByChat.get(from);
-        if (recent && (Date.now() - (recent.timestamp || 0) < 60 * 60 * 1000)) {
+        if (recent && recent.isViewOnce && (Date.now() - (recent.timestamp || 0) < 2 * 60 * 60 * 1000)) {
             if (recent.buffer && recent.buffer.length > 0) {
                 return { buffer: recent.buffer, type: recent.type, caption: recent.caption, mimetype: recent.mimetype };
             }
@@ -441,7 +430,7 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
         }
     }
 
-    // 6. البحث في أحدث ملف مسجل على القرص ينتمي لهذا الشات
+    // فحص القرص لأحدث ملف View-Once حقيقي في هذا الشات
     if (from) {
         try {
             const files = fs.readdirSync(CACHE_DIR).filter(f => f.endsWith('.json'));
@@ -451,7 +440,7 @@ export async function resolveViewOnceMedia(quotedId, quotedMsg, from = '', direc
                 try {
                     const fullP = path.join(CACHE_DIR, f);
                     const meta = JSON.parse(fs.readFileSync(fullP, 'utf8'));
-                    if (meta.from === from && meta.timestamp > bestTime && (Date.now() - meta.timestamp < 60 * 60 * 1000)) {
+                    if (meta.from === from && meta.isViewOnce && meta.timestamp > bestTime && (Date.now() - meta.timestamp < 2 * 60 * 60 * 1000)) {
                         bestTime = meta.timestamp;
                         bestFile = f.replace('.json', '');
                     }
