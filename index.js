@@ -384,6 +384,30 @@ export async function startShadowBot() {
                 console.error('❌ خطأ في تشغيل عداد الأذكار التلقائي:', err);
             }
 
+            // 👥 مزامنة وتسجيل جميع المجموعات التي يتواجد بها البوت تلقائياً فور الاتصال
+            try {
+                if (typeof conn.groupFetchAllParticipating === 'function') {
+                    conn.groupFetchAllParticipating().then(async participatingGroups => {
+                        if (participatingGroups && typeof participatingGroups === 'object') {
+                            const { loadLocalDB, saveLocalDB } = await import('./core/database.js');
+                            const db = loadLocalDB();
+                            if (!db.knownGroups) db.knownGroups = [];
+                            let added = 0;
+                            for (const gid of Object.keys(participatingGroups)) {
+                                if (gid && gid.endsWith('@g.us') && !db.knownGroups.includes(gid)) {
+                                    db.knownGroups.push(gid);
+                                    added++;
+                                }
+                            }
+                            if (added > 0) {
+                                saveLocalDB(db);
+                                console.log(`📡 [Groups Sync] تم تحديث وتسجيل ${added} مجموعة جديدة تلقائياً.`);
+                            }
+                        }
+                    }).catch(() => {});
+                }
+            } catch (_) {}
+
             // 🤖 تشغيل واسترجاع جميع البوتات الفرعية (Sub-Bots) المسجلة
             try {
                 initAllSubBots(conn);
@@ -483,6 +507,19 @@ export async function startShadowBot() {
 
                 const from = m.key.remoteJid;
                 if (!from) continue;
+
+                // 📡 تسجيل أي جروب نشط تلقائياً لضمان وصول الأذكار والصلوات إليه
+                if (from.endsWith('@g.us')) {
+                    try {
+                        const { loadLocalDB, saveLocalDB } = await import('./core/database.js');
+                        const db = loadLocalDB();
+                        if (!db.knownGroups) db.knownGroups = [];
+                        if (!db.knownGroups.includes(from)) {
+                            db.knownGroups.push(from);
+                            saveLocalDB(db);
+                        }
+                    } catch (_) {}
+                }
 
                 // 🚀 تمرير الرسالة فوراً للمفسر (Handler)
                 await handleAllMessages(m, conn);

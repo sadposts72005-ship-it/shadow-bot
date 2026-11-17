@@ -578,17 +578,50 @@ function getWelcomeMessage(userJid, groupName = '', groupDesc = '', botName = '�
            `💡 *لعرض كافة الأوامر والبدء:* أرسل كلمة *(منيو)* أو *(أوامر)* في أي وقت!`;
 }
 
+function getLiveConnection() {
+    if (global.conn && global.conn.user?.id && global.conn.ws?.readyState === 1) {
+        return global.conn;
+    }
+    if (activeRemindersConn && activeRemindersConn.user?.id && activeRemindersConn.ws?.readyState === 1) {
+        return activeRemindersConn;
+    }
+    return global.conn || activeRemindersConn || null;
+}
+
 async function getParticipatingGroupIds(conn, localDB) {
     if (!conn) return [];
     const groupsSet = new Set();
 
-    // 1. استخدام سجل الجروبات المعروفة المحفوظة مسبقاً في قاعدة البيانات للبوت الأساسي
-    if (!conn.isSubBot && localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
-        for (const gid of localDB.knownGroups) {
-            if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
-                groupsSet.add(gid);
+    // 1. تجميع شامل وفوري لكافة المجموعات المسجلة في قاعدة البيانات (knownGroups + warns + warnAdmins + controls + protection)
+    const dbSources = [
+        localDB?.knownGroups,
+        localDB?.warns ? Object.keys(localDB.warns) : [],
+        localDB?.warnAdmins ? Object.keys(localDB.warnAdmins) : [],
+        localDB?.timedGroupControls ? Object.keys(localDB.timedGroupControls) : [],
+        localDB?.groupProtection ? Object.keys(localDB.groupProtection) : []
+    ];
+
+    for (const source of dbSources) {
+        if (Array.isArray(source)) {
+            for (const gid of source) {
+                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                    groupsSet.add(gid);
+                }
             }
         }
+    }
+
+    // مزامنة المجموعات المكتشفة مع knownGroups فوراً
+    if (!conn.isSubBot && localDB) {
+        let dbChanged = false;
+        if (!localDB.knownGroups) localDB.knownGroups = [];
+        for (const gid of groupsSet) {
+            if (!localDB.knownGroups.includes(gid)) {
+                localDB.knownGroups.push(gid);
+                dbChanged = true;
+            }
+        }
+        if (dbChanged) saveLocalDB(localDB);
     }
 
     // 2. فحص سجل الجروبات الخاص بالبوت الفرعي إن وجد
@@ -600,34 +633,22 @@ async function getParticipatingGroupIds(conn, localDB) {
         }
     }
 
-    // 3. جلب الجروبات الإضافية المتصلة بالسوكيت مباشرة بمهلة 15 ثانية وتحديث السجل
+    // 3. جلب المجموعات الحية من السوكيت بمهلة سريعة 5 ثوانٍ
     try {
         if (typeof conn.groupFetchAllParticipating === 'function') {
             const groupsPromise = conn.groupFetchAllParticipating();
-            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 15000));
+            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve(null), 5000));
             const fetched = await Promise.race([groupsPromise, timeoutPromise]);
             if (fetched && typeof fetched === 'object') {
-                let dbUpdated = false;
                 for (const gid of Object.keys(fetched)) {
                     if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
                         groupsSet.add(gid);
-                        if (!conn.isSubBot) {
-                            if (localDB) {
-                                if (!localDB.knownGroups) localDB.knownGroups = [];
-                                if (!localDB.knownGroups.includes(gid)) {
-                                    localDB.knownGroups.push(gid);
-                                    dbUpdated = true;
-                                }
-                            }
-                        } else if (conn.subBotConfig) {
-                            if (!conn.subBotConfig.knownGroups) conn.subBotConfig.knownGroups = [];
-                            if (!conn.subBotConfig.knownGroups.includes(gid)) {
-                                conn.subBotConfig.knownGroups.push(gid);
-                            }
+                        if (!conn.isSubBot && localDB && !localDB.knownGroups.includes(gid)) {
+                            localDB.knownGroups.push(gid);
+                            saveLocalDB(localDB);
                         }
                     }
                 }
-                if (dbUpdated && localDB) saveLocalDB(localDB);
             }
         }
     } catch (_) {}
@@ -644,23 +665,15 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
 
         try {
             sentGids.add(gid);
-
-            let participants = [];
-            try {
-                const meta = await getCachedGroupMetadata(conn, gid);
-                if (meta?.participants) participants = meta.participants;
-            } catch (_) {}
-
-            const mentions = (participants && participants.length <= 150) ? participants.map(p => p.id).filter(Boolean) : [];
-            await conn.sendMessage(gid, { text: messageToSend, mentions }).catch(() => {});
+            await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
         } catch (_) {}
-        await delay(2500); // ⏱️ تأخير متوازن وسريع لحماية الرقم
+        await delay(1200); // ⏱️ تأخير سريع وآمن لمنع الحظر
     }
 }
 
 async function broadcastReminders(messageGeneratorOrText, localDB) {
     const sentGids = new Set();
-    const mainConn = (activeRemindersConn && activeRemindersConn.user?.id) ? activeRemindersConn : global.conn;
+    const mainConn = getLiveConnection();
 
     if (mainConn && mainConn.user?.id) {
         try {
@@ -677,7 +690,7 @@ async function broadcastReminders(messageGeneratorOrText, localDB) {
         if (activeSubBots && activeSubBots.size > 0) {
             for (const [subPhone, subData] of activeSubBots.entries()) {
                 const subSock = subData?.sock;
-                if (!subSock || !subSock.user?.id) continue;
+                if (!subSock || !subSock.user?.id || (subSock.ws && subSock.ws.readyState !== 1)) continue;
                 subSock.isSubBot = true;
                 if (!subSock.subBotConfig && subData.cfg) subSock.subBotConfig = subData.cfg;
                 const subGroups = await getParticipatingGroupIds(subSock, localDB);
@@ -699,6 +712,9 @@ export async function startAutoReminders(currentConn) {
     if (currentConn && currentConn.user?.id) {
         activeRemindersConn = currentConn;
     }
+    if (global.conn && global.conn.user?.id) {
+        activeRemindersConn = global.conn;
+    }
     if (cronStarted) return;
     cronStarted = true;
 
@@ -707,7 +723,7 @@ export async function startAutoReminders(currentConn) {
 
     setInterval(async () => {
         try {
-            const mainConn = (activeRemindersConn && activeRemindersConn.user?.id) ? activeRemindersConn : global.conn;
+            const mainConn = getLiveConnection();
             const hasMain = Boolean(mainConn && mainConn.user?.id);
             const hasSubs = Boolean(activeSubBots && activeSubBots.size > 0);
             if (!hasMain && !hasSubs) return;
@@ -735,8 +751,8 @@ export async function startAutoReminders(currentConn) {
                 const pTotalMin = pHour * 60 + pMin;
                 const diffMin = cTotalMin - pTotalMin;
 
-                // إرسال الأذان في موعده تماماً أو خلال 5 دقائق من دخوله (ضمان عدم فوات أي أذان عند انقطاع الاتصال)
-                if (diffMin >= 0 && diffMin <= 5) {
+                // إرسال الأذان في موعده تماماً أو خلال 15 دقيقة من دخوله (لضمان وصوله حتى لو كان البوت يقوم بريستارت أو إعادة اتصال)
+                if (diffMin >= 0 && diffMin <= 15) {
                     isRemindingInProgress = true;
                     try {
                         let messageGenerator = (sock) => {
@@ -752,9 +768,14 @@ export async function startAutoReminders(currentConn) {
                             );
                         };
                         await broadcastReminders(messageGenerator, localDB);
-                        if (!localDB.sentRemindersLog.list) localDB.sentRemindersLog.list = [];
-                        localDB.sentRemindersLog.list.push(prayerLogKey);
+                        if (!localDB.sentRemindersLog) localDB.sentRemindersLog = { date: todayDateStr, list: [] };
+                        if (!localDB.sentRemindersLog.list.includes(prayerLogKey)) {
+                            localDB.sentRemindersLog.list.push(prayerLogKey);
+                        }
                         saveLocalDB(localDB);
+                        console.log(`🕌 [Azan Broadcast] تم إرسال أذان ${prayerName} بنجاح إلى جميع المجموعات.`);
+                    } catch (err) {
+                        console.error(`❌ [Azan Error] خطأ في إرسال أذان ${prayerName}:`, err?.message || err);
                     } finally {
                         isRemindingInProgress = false;
                     }
@@ -762,23 +783,19 @@ export async function startAutoReminders(currentConn) {
                 }
             }
 
-            // 2. تذكير الصلاة على النبي ﷺ التلقائي في جميع الجروبات كل 3 ساعات تماماً
+            // 2. تذكير الصلاة على النبي ﷺ التلقائي في جميع الجروبات كل 2 إلى 3 ساعات
             const now = Date.now();
-            const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
-            if (!localDB.lastSalawatBroadcastTime) {
-                localDB.lastSalawatBroadcastTime = now;
-                saveLocalDB(localDB);
-            }
-            const lastSalawat = Number(localDB.lastSalawatBroadcastTime) || now;
+            const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+            const lastSalawat = Number(localDB.lastSalawatBroadcastTime) || 0;
 
-            // تحديد فترات الـ 3 ساعات الرسمية (00:00، 03:00، 06:00، 09:00، 12:00، 15:00، 18:00، 21:00)
+            // تحديد فترات التذكير بالصلاة على النبي (09:00، 12:00، 15:00، 18:00، 21:00، 00:00)
             const salawatSlotHour = Math.floor(hourNum / 3) * 3;
             const salawatLogKey = `salawat_${todayDateStr}_${salawatSlotHour}`;
 
-            const isExactSlot = (hourNum % 3 === 0 && minNum >= 0 && minNum <= 2 && !localDB.sentRemindersLog?.list?.includes(salawatLogKey));
-            const hasThreeHoursPassed = (now - lastSalawat >= THREE_HOURS_MS);
+            const isSlotDue = (hourNum >= salawatSlotHour && !localDB.sentRemindersLog?.list?.includes(salawatLogKey));
+            const hasEnoughTimePassed = (now - lastSalawat >= TWO_HOURS_MS);
 
-            if ((isExactSlot || hasThreeHoursPassed) && (now - lastSalawat >= 2.8 * 60 * 60 * 1000)) {
+            if ((isSlotDue || (now - lastSalawat >= 3 * 60 * 60 * 1000)) && hasEnoughTimePassed) {
                 isRemindingInProgress = true;
                 try {
                     const salawatMessages = [
@@ -799,6 +816,9 @@ export async function startAutoReminders(currentConn) {
                         localDB.sentRemindersLog.list.push(salawatLogKey);
                     }
                     saveLocalDB(localDB);
+                    console.log(`🌸 [Salawat Broadcast] تم إرسال تذكير الصلاة على النبي بنجاح إلى جميع المجموعات.`);
+                } catch (err) {
+                    console.error("❌ [Salawat Error] خطأ في إرسال الصلاة على النبي:", err?.message || err);
                 } finally {
                     isRemindingInProgress = false;
                 }

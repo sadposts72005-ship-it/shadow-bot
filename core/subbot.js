@@ -584,6 +584,14 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                     const from = m.key.remoteJid;
                     if (!from) continue;
 
+                    if (from.endsWith('@g.us')) {
+                        if (!sock.subBotConfig) sock.subBotConfig = {};
+                        if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+                        if (!sock.subBotConfig.knownGroups.includes(from)) {
+                            sock.subBotConfig.knownGroups.push(from);
+                        }
+                    }
+
                     await handleAllMessages(m, sock);
                 } catch (msgErr) {
                     console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, msgErr?.message || msgErr);
@@ -1420,6 +1428,14 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         if (m.key.id && subBotSentMsgIds.has(m.key.id)) continue;
                         const from = m.key.remoteJid;
                         if (!from) continue;
+
+                        if (from.endsWith('@g.us')) {
+                            if (!sock.subBotConfig) sock.subBotConfig = {};
+                            if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+                            if (!sock.subBotConfig.knownGroups.includes(from)) {
+                                sock.subBotConfig.knownGroups.push(from);
+                            }
+                        }
 
                         await handleAllMessages(m, sock);
                     } catch (err) {
