@@ -471,11 +471,14 @@ export async function startShadowBot() {
                 if (!m || !m.message) continue;
                 if (m.key?.id && m.message) {
                     mainMsgStore.set(m.key.id, m.message);
-                    if (mainMsgStore.size > 2000) {
+                    if (mainMsgStore.size > 200) {
                         const firstKey = mainMsgStore.keys().next().value;
                         mainMsgStore.delete(firstKey);
                     }
-                    cacheIncomingMedia(m);
+                    const isVO = !!(m.message.viewOnceMessage || m.message.viewOnceMessageV2 || m.message.viewOnceMessageV2Extension || m.message.imageMessage?.viewOnce || m.message.videoMessage?.viewOnce || m.message.audioMessage?.viewOnce);
+                    if (isVO) {
+                        cacheIncomingMedia(m);
+                    }
                 }
             }
 

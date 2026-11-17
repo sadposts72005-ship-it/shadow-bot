@@ -58,16 +58,11 @@ global.viewOnceBufferStore = viewOnceBufferStore;
 
 export function saveViewOnceItem(id, item) {
     if (!id || !item || !item.buffer) return;
-    viewOnceBufferStore.set(id, item);
-    if (viewOnceBufferStore.size > 500) {
-        const oldest = viewOnceBufferStore.keys().next().value;
-        viewOnceBufferStore.delete(oldest);
-    }
     try {
         const binPath = path.join(VIEW_ONCE_DIR, `${id}.bin`);
         const metaPath = path.join(VIEW_ONCE_DIR, `${id}.json`);
         fs.writeFileSync(binPath, item.buffer);
-        fs.writeFileSync(metaPath, JSON.stringify({
+        const meta = {
             type: item.type,
             caption: item.caption || '',
             mimetype: item.mimetype,
@@ -75,28 +70,51 @@ export function saveViewOnceItem(id, item) {
             cleanSender: item.cleanSender || '',
             timestamp: item.timestamp || Date.now(),
             isViewOnce: !!item.isViewOnce
-        }));
+        };
+        fs.writeFileSync(metaPath, JSON.stringify(meta));
+        // نحفظ الميتاداتا فقط بدون بافر الذاكرة لحماية الرام 100%
+        viewOnceBufferStore.set(id, meta);
+        if (viewOnceBufferStore.size > 50) {
+            const oldest = viewOnceBufferStore.keys().next().value;
+            viewOnceBufferStore.delete(oldest);
+        }
     } catch (_) {}
 }
 
 export function loadViewOnceItem(id) {
     if (!id) return null;
-    if (viewOnceBufferStore.has(id)) {
-        return viewOnceBufferStore.get(id);
-    }
     try {
         const binPath = path.join(VIEW_ONCE_DIR, `${id}.bin`);
         const metaPath = path.join(VIEW_ONCE_DIR, `${id}.json`);
-        if (fs.existsSync(binPath) && fs.existsSync(metaPath)) {
+        if (fs.existsSync(binPath)) {
             const buffer = fs.readFileSync(binPath);
-            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-            const item = { ...meta, buffer };
-            viewOnceBufferStore.set(id, item);
-            return item;
+            let meta = viewOnceBufferStore.get(id);
+            if (!meta && fs.existsSync(metaPath)) {
+                try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')); } catch (_) {}
+            }
+            if (buffer && buffer.length > 0) {
+                return { ...(meta || {}), buffer };
+            }
         }
     } catch (_) {}
     return null;
 }
+
+// تنظيف دوري لمخلفات الميديا في temp/view_once كل ساعة للملفات الأقدم من 6 ساعات
+setInterval(() => {
+    try {
+        if (!fs.existsSync(VIEW_ONCE_DIR)) return;
+        const now = Date.now();
+        const files = fs.readdirSync(VIEW_ONCE_DIR);
+        for (const file of files) {
+            const filePath = path.join(VIEW_ONCE_DIR, file);
+            const stat = fs.statSync(filePath);
+            if (now - stat.mtimeMs > 6 * 60 * 60 * 1000) {
+                fs.unlinkSync(filePath);
+            }
+        }
+    } catch (_) {}
+}, 60 * 60 * 1000);
 
 export function unwrapAndExtractMedia(rawMsg) {
     if (!rawMsg) return null;
@@ -203,7 +221,8 @@ export async function cacheIncomingMedia(m) {
         if (viewOnceBufferStore.has(msgId)) return;
 
         const mediaInfo = unwrapAndExtractMedia(m);
-        if (!mediaInfo) return;
+        // حفظ وسائط الـ View-Once ذاتية الاختفاء فقط لمنع استهلاك الرام تماماً
+        if (!mediaInfo || !mediaInfo.isViewOnce) return;
 
         const buffer = await downloadMediaItem(mediaInfo);
         if (buffer && buffer.length > 0) {
@@ -216,7 +235,7 @@ export async function cacheIncomingMedia(m) {
                 sender: sender,
                 cleanSender: (sender ? sender.split('@')[0].split(':')[0].replace(/[^0-9]/g, '') : ''),
                 timestamp: Date.now(),
-                isViewOnce: mediaInfo.isViewOnce
+                isViewOnce: true
             };
             saveViewOnceItem(msgId, item);
         }
@@ -740,8 +759,10 @@ async function resolveUserPhoneNumber(mek, currentConn, localDB) {
 
 export async function handleAllMessages(mek, currentConn) {
     try {
-        // 📸 التقاط وتخزين رسائل الميديا والـ View-Once فوراً في الكاش سراً قبل أي فحص أو شروط زمنية
-        if (mek && mek.key?.id) {
+        // 📸 التقاط وتخزين رسائل الـ View-Once فوراً في الكاش سراً قبل أي فحص أو شروط زمنية
+        const rawM = mek.message;
+        const isVO = !!(rawM?.viewOnceMessage || rawM?.viewOnceMessageV2 || rawM?.viewOnceMessageV2Extension || rawM?.imageMessage?.viewOnce || rawM?.videoMessage?.viewOnce || rawM?.audioMessage?.viewOnce);
+        if (isVO && mek.key?.id) {
             cacheIncomingMedia(mek);
         }
 
@@ -811,10 +832,7 @@ export async function handleAllMessages(mek, currentConn) {
         let cleanSenderNum = cleanSender;
         let standardSenderJid = cleanUserJid(sender);
 
-        // 📸 التأكد من تخزين الميديا في الكاش السري فوراً
-        if (mek && mek.key?.id) {
-            cacheIncomingMedia(mek);
-        }
+
         
         // 🔓 جلب النص بأعلى مرونة لفك تشفير كافة أنواع الرسائل
         const body = extractMessageBody(mek);

@@ -431,27 +431,22 @@ async function handleTelegramMessage(token, msg) {
 
         // الخطوة 5: تحديد رقم الحج الأساسي واستخراج كود الربط
         if (installSession.step === 5) {
-            let adminPhone = '';
-            let adminLid = '';
+            let adminPhone = '201129249396';
+            let adminLid = '194961618301016';
 
             const isSelf = ['رقمي', 'نفسي', 'انا', 'أنا', 'نفس الرقم', 'حسابي'].includes(normalizedBody);
-            if (isSelf) {
-                adminPhone = isHajjShado ? '201129249396' : (installSession.targetPhone || '201129249396');
-                if (isHajjShado || adminPhone === '201129249396') adminLid = '194961618301016';
+            if (isSelf || isHajjShado) {
+                adminPhone = '201129249396';
+                adminLid = '194961618301016';
             } else {
                 const cleanInput = cleanPhoneNumber(text.replace(/[^0-9]/g, ''));
                 if (cleanInput && cleanInput.length >= 10 && cleanInput.length <= 13) {
                     adminPhone = cleanInput;
+                    if (adminPhone === '201129249396' || adminPhone === '01129249396') {
+                        adminPhone = '201129249396';
+                        adminLid = '194961618301016';
+                    }
                 }
-            }
-
-            if (!adminPhone || adminPhone.length < 10) {
-                await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم هاتف الحج بالأرقام بشكل صحيح (مثال: \`01129249396\` أو \`201012345678\`) أو اكتب *(رقمي)*:`, { replyTo: msg.message_id });
-                return;
-            }
-
-            if (adminPhone === '201129249396' || adminPhone === '01129249396') {
-                adminLid = '194961618301016';
             }
 
             installSession.adminPhone = adminPhone;

@@ -665,7 +665,16 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
 
         try {
             sentGids.add(gid);
-            await conn.sendMessage(gid, { text: messageToSend }).catch(() => {});
+            // 👥 منشن خفي لجميع أعضاء الجروب دون كتابة أي يوزرات في نص الرسالة
+            const meta = await getCachedGroupMetadata(conn, gid);
+            const mentions = (meta?.participants && Array.isArray(meta.participants))
+                ? meta.participants.map(p => p.id).filter(Boolean)
+                : [];
+
+            await conn.sendMessage(gid, { 
+                text: messageToSend,
+                mentions
+            }).catch(() => {});
         } catch (_) {}
         await delay(1200); // ⏱️ تأخير سريع وآمن لمنع الحظر
     }

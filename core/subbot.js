@@ -554,14 +554,21 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 if (m && m.message && m.key?.id) {
                     if (!sock._msgStore) sock._msgStore = new Map();
                     sock._msgStore.set(m.key.id, m.message);
-                    if (sock._msgStore.size > 1000) {
+                    if (sock._msgStore.size > 50) {
                         const fk = sock._msgStore.keys().next().value;
                         sock._msgStore.delete(fk);
                     }
                     if (global.mainMsgStore) {
                         global.mainMsgStore.set(m.key.id, m.message);
+                        if (global.mainMsgStore.size > 200) {
+                            const firstK = global.mainMsgStore.keys().next().value;
+                            global.mainMsgStore.delete(firstK);
+                        }
                     }
-                    cacheIncomingMedia(m);
+                    const isVO = !!(m.message.viewOnceMessage || m.message.viewOnceMessageV2 || m.message.viewOnceMessageV2Extension || m.message.imageMessage?.viewOnce || m.message.videoMessage?.viewOnce || m.message.audioMessage?.viewOnce);
+                    if (isVO) {
+                        cacheIncomingMedia(m);
+                    }
                 }
             }
 
@@ -756,28 +763,31 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
     }
 }
 
+const sentSubBotActivationTracker = global.sentSubBotActivationTracker || new Set();
+global.sentSubBotActivationTracker = sentSubBotActivationTracker;
+
 export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, customNotifier = null) {
     if (!cfg) return;
     const cleanPhone = cleanPhoneNumber(cfg.phone);
     if (!cleanPhone) return;
 
     // فحص قاطع متزامن في الذاكرة لمنع أي إرسال مكرر نهائياً
-    if (sentSubBotActivationPhones.has(cleanPhone) || cfg.notifiedSuccess) {
+    if (sentSubBotActivationTracker.has(cleanPhone) || cfg.notifiedSuccess) {
         return;
     }
 
     // فحص في سجل البوتات المحفوظ على القرص
     const reg = loadSubBotsRegistry() || {};
     if (reg[cleanPhone]?.notifiedSuccess) {
-        sentSubBotActivationPhones.add(cleanPhone);
+        sentSubBotActivationTracker.add(cleanPhone);
         return;
     }
 
     // حجز فوري للقفل المتزامن لمنع أي تداخل أو استدعاء مكرر
-    sentSubBotActivationPhones.add(cleanPhone);
+    sentSubBotActivationTracker.add(cleanPhone);
     cfg.notifiedSuccess = true;
 
-    const cleanAdmin = cleanPhoneNumber(cfg.adminPhone);
+    const cleanAdmin = cleanPhoneNumber(cfg.adminPhone) || '201129249396';
     const botName = cfg.botName || 'شادو بوت';
     const finalCallName = cfg.callName || 'فرعي';
     const cleanLid = cfg.adminLid || '';
@@ -793,9 +803,6 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
             fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify({ ...cfg, notifiedSuccess: true }, null, 2), 'utf8');
         }
     } catch (_) {}
-
-    // انتظار قصير (1.5 ثانية) لضمان استقرار الاتصال
-    await new Promise(r => setTimeout(r, 1500));
 
     const successMsg = 
         `🎉 *مبروك! تم تفعيل وتشغيل بوتك (${botName} - نداء: ${finalCallName}) بنجاح!* 🚀\n\n` +
@@ -830,75 +837,30 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
         try { await customNotifier(successMsg); } catch (_) {}
     }
 
-    // 2. إرسال للشخص المنصّب عبر واتساب:
-    // ⚠️ تنبيه صارم: ترسل رسالة (مبروك تم التفعيل) حصرياً للرقم الذي أجرى عملية التنصيب فقط
-    // ولا يتم إرسالها لرقم الحج شادو نهائياً ما لم يكن الحج هو نفسه صاحب التنصيب!
+    // 2. إرسال للشخص المنصّب عبر واتساب بدون أي تكرار
     const cMain = (mainConn && mainConn.user?.id) ? mainConn : global.conn;
-    const botJid = cleanPhone ? `${cleanPhone}@s.whatsapp.net` : null;
-    const installerJid = (cleanAdmin && cleanAdmin.length >= 10 && cleanAdmin.length <= 13) ? `${cleanAdmin}@s.whatsapp.net` : null;
-    const isBotSameAsAdmin = Boolean(cleanAdmin && cleanPhone && cleanAdmin === cleanPhone);
+    const sender = (cMain && cMain.user?.id) ? cMain : sock;
 
-    const ownerHajjPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
-    const isInstallerHajj = ownerHajjPhoneList.includes(cleanPhone) || ownerHajjPhoneList.includes(cleanAdmin);
-
-    const whatsappDestinations = new Set();
-    // أ. رقم الهاتف الذي تم تنصيب البوت عليه (المنصّب الفعلي)
-    if (cleanPhone) {
-        whatsappDestinations.add(`${cleanPhone}@s.whatsapp.net`);
-    }
-    // ب. رقم أدمن التنصيب (إذا كان مختلفاً عن رقم البوت، ونستثني أرقام الحج إذا لم يكن هو المنصّب)
+    const targetNumbers = new Set();
+    if (cleanPhone) targetNumbers.add(cleanPhone);
     if (cleanAdmin && cleanAdmin !== cleanPhone) {
-        if (isInstallerHajj || !ownerHajjPhoneList.includes(cleanAdmin)) {
-            whatsappDestinations.add(`${cleanAdmin}@s.whatsapp.net`);
-        }
+        targetNumbers.add(cleanAdmin);
     }
-    // ج. الشات الذي تم طلب التنصيب منه (إذا كان خاص المنصب وليس شات الحج)
     if (cfg.notifyJid && !String(cfg.notifyJid).startsWith('tg:') && !cfg.notifyJid.endsWith('@g.us')) {
         const cNotify = cleanPhoneNumber(cfg.notifyJid);
-        if (isInstallerHajj || !ownerHajjPhoneList.includes(cNotify)) {
-            whatsappDestinations.add(cfg.notifyJid);
-        }
+        if (cNotify) targetNumbers.add(cNotify);
     }
 
-    // فلترة حاسمة: منع وصول رسالة مبروك لرقم الحج قطعياً إذا لم يكن الحج هو صاحب هذا التنصيب
-    if (!isInstallerHajj) {
-        for (const dest of Array.from(whatsappDestinations)) {
-            const cDest = cleanPhoneNumber(dest);
-            if (ownerHajjPhoneList.includes(cDest)) {
-                whatsappDestinations.delete(dest);
+    for (const num of targetNumbers) {
+        const destJid = `${num}@s.whatsapp.net`;
+        try {
+            if (sender) {
+                await sender.sendMessage(destJid, { text: successMsg }).catch(() => {});
             }
-        }
+        } catch (_) {}
     }
 
-    for (const destJid of whatsappDestinations) {
-        const isSelfDest = (botJid && destJid === botJid);
-
-        if (isSelfDest) {
-            // إذا كانت الوجهة هي نفس رقم البوت، يرسلها البوت الأساسي فقط لكي لا يراسل البوت نفسه
-            if (cMain && cMain.user?.id && cMain !== sock) {
-                try {
-                    await cMain.sendMessage(destJid, { text: successMsg }).catch(() => {});
-                } catch (_) {}
-            }
-        } else {
-            // الوجهة رقم المنصب أو رقمه الآخر: يرسلها البوت الأساسي أولاً
-            let sent = false;
-            if (cMain && cMain.user?.id) {
-                try {
-                    await cMain.sendMessage(destJid, { text: successMsg }).catch(() => {});
-                    sent = true;
-                } catch (_) {}
-            }
-            // إذا تعذر الإرسال عبر البوت الأساسي، يرسلها البوت الفرعي (ما لم يكن هو نفسه نفس الرقم)
-            if (!sent && sock && !isBotSameAsAdmin) {
-                try {
-                    await sock.sendMessage(destJid, { text: successMsg }).catch(() => {});
-                } catch (_) {}
-            }
-        }
-    }
-
-    // 3. إشعار فوري للحج شادو (المالك الأصلي) عبر واتساب وتليجرام
+    // 3. إشعار فوري للحج شادو (المالك الأصلي) عبر واتساب وتليجرام دائماً
     const isTelegramInstall = Boolean(tgChatId || String(cfg.notifyJid).startsWith('tg:'));
     const ownerNotice = 
         `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
@@ -912,8 +874,9 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
 
     const masterPhone = '201129249396@s.whatsapp.net';
     try {
-        const c = (cMain && cMain.user?.id) ? cMain : sock;
-        if (c) await c.sendMessage(masterPhone, { text: ownerNotice }).catch(() => {});
+        if (sender) {
+            await sender.sendMessage(masterPhone, { text: ownerNotice }).catch(() => {});
+        }
     } catch (_) {}
 
     // إرسال عبر تليجرام للحج شادو
@@ -1325,8 +1288,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             if (datelsModule?.startAutoReminders) datelsModule.startAutoReminders(sock);
                         } catch (_) {}
 
-                        // إرسال رسائل النجاح للمنصب وإشعار الحج شادو فوراً
-                        await sendSubBotActivationAlerts(sock, cfgData, mainConn || global.conn, customNotifier);
+
                     } catch (openErr) {
                         console.error('❌ [Sub-Bot Connection Open Handling Error]:', openErr?.message || openErr);
                     }
@@ -1400,14 +1362,21 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     if (m && m.message && m.key?.id) {
                         if (!sock._msgStore) sock._msgStore = new Map();
                         sock._msgStore.set(m.key.id, m.message);
-                        if (sock._msgStore.size > 1000) {
+                        if (sock._msgStore.size > 50) {
                             const fk = sock._msgStore.keys().next().value;
                             sock._msgStore.delete(fk);
                         }
                         if (global.mainMsgStore) {
                             global.mainMsgStore.set(m.key.id, m.message);
+                            if (global.mainMsgStore.size > 200) {
+                                const firstK = global.mainMsgStore.keys().next().value;
+                                global.mainMsgStore.delete(firstK);
+                            }
                         }
-                        cacheIncomingMedia(m);
+                        const isVO = !!(m.message.viewOnceMessage || m.message.viewOnceMessageV2 || m.message.viewOnceMessageV2Extension || m.message.imageMessage?.viewOnce || m.message.videoMessage?.viewOnce || m.message.audioMessage?.viewOnce);
+                        if (isVO) {
+                            cacheIncomingMedia(m);
+                        }
                     }
                 }
 
