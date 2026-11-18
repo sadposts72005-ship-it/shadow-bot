@@ -2124,8 +2124,8 @@ const datelsHandler = {
                     return true;
                 }
 
-                // إضافة عضو إلى المجموعة
-                if (normalizedBody.startsWith('اضافه') || normalizedBody.startsWith('إضافة') || normalizedBody.startsWith('ضيف') || normalizedBody.startsWith('اضف') || normalizedBody.startsWith('أضف')) {
+                // إضافة عضو إلى المجموعة (.ضيفف)
+                if (normalizedBody.startsWith('.ضيفف') || normalizedBody.startsWith('!ضيفف') || normalizedBody.startsWith('/ضيفف') || normalizedBody.startsWith('ضيفف')) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -2142,7 +2142,7 @@ const datelsHandler = {
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ يرجى كتابة رقم الهاتف بعد الأمر أو منشن العضو أو الرد على رسالته!\nمثال: *اضافه 01129249396*' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '⚠️ يرجى كتابة رقم الهاتف بعد الأمر أو منشن العضو أو الرد على رسالته!\nمثال: *.ضيفف 01129249396*' }, { quoted: mek });
                         return true;
                     }
                     let targetNum = getCleanNumber(target);
