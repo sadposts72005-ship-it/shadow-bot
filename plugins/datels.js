@@ -259,7 +259,8 @@ function containsBadWords(text) {
     return false;
 }
 
-function isUserMuted(senderJid, fromGid, localDB) {
+function isUserMuted(senderJid, fromGid, localDB, isBotAdmin = false) {
+    if (!isBotAdmin) return false;
     if (!fromGid || !localDB?.mutedUsers?.[fromGid]) return false;
     const mutedList = localDB.mutedUsers[fromGid];
     if (!Array.isArray(mutedList) || mutedList.length === 0) return false;
@@ -271,11 +272,15 @@ function isUserMuted(senderJid, fromGid, localDB) {
 
     for (let i = 0; i < mutedList.length; i++) {
         const u = mutedList[i];
-        const cleanU = typeof u === 'string' ? (u.includes('@') ? getCleanNumber(u) : u) : String(u);
+        let targetU = u;
+        if (u && typeof u === 'object') {
+            targetU = u.user || u.id;
+        }
+        const cleanU = typeof targetU === 'string' ? (targetU.includes('@') ? getCleanNumber(targetU) : targetU) : String(targetU || '');
         if (cleanU === senderClean) return true;
         if (mappedPhone && cleanU === mappedPhone) return true;
         if (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) return true;
-        if (u === senderJid) return true;
+        if (targetU === senderJid) return true;
     }
     return false;
 }
@@ -597,6 +602,13 @@ async function getParticipatingGroupIds(conn, localDB) {
 
     // 1. تجميع المجموعات الخاصة بهذا السوكيت (الأساسي أو الفرعي)
     if (conn.isSubBot) {
+        if (conn._knownGroupsCache && conn._knownGroupsCache instanceof Set) {
+            for (const gid of conn._knownGroupsCache) {
+                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                    groupsSet.add(gid);
+                }
+            }
+        }
         if (conn.subBotConfig?.knownGroups && Array.isArray(conn.subBotConfig.knownGroups)) {
             for (const gid of conn.subBotConfig.knownGroups) {
                 if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
@@ -618,6 +630,14 @@ async function getParticipatingGroupIds(conn, localDB) {
                 }
             }
         } catch (_) {}
+        // في حال لم تكن هناك مجموعات مسجلة بعد للبوت الفرعي، نتحقق من المجموعات المعروفة
+        if (groupsSet.size === 0 && localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
+            for (const gid of localDB.knownGroups) {
+                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                    groupsSet.add(gid);
+                }
+            }
+        }
     } else {
         const dbSources = [
             localDB?.knownGroups,
@@ -716,7 +736,7 @@ async function broadcastReminders(messageGeneratorOrText, localDB) {
         } catch (_) {}
     }
 
-    // دعم بث الأذكار في جروبات البوتات الفرعية النشطة أيضاً بدون تكرار في نفس الروم
+    // دعم بث الأذكار والصلوات في جروبات البوتات الفرعية النشطة أيضاً
     try {
         if (activeSubBots && activeSubBots.size > 0) {
             for (const [subPhone, subData] of activeSubBots.entries()) {
@@ -725,10 +745,10 @@ async function broadcastReminders(messageGeneratorOrText, localDB) {
                 subSock.isSubBot = true;
                 if (!subSock.subBotConfig && subData.cfg) subSock.subBotConfig = subData.cfg;
                 const subGroups = await getParticipatingGroupIds(subSock, localDB);
-                const uniqueSubGroups = subGroups.filter(g => !sentGids.has(g));
+                const subSentGids = new Set();
                 const subMsg = typeof messageGeneratorOrText === 'function' ? messageGeneratorOrText(subSock) : messageGeneratorOrText;
-                if (uniqueSubGroups.length > 0) {
-                    await sendRemindersWithDelay(subSock, uniqueSubGroups, subMsg, localDB, sentGids);
+                if (subGroups.length > 0) {
+                    await sendRemindersWithDelay(subSock, subGroups, subMsg, localDB, subSentGids);
                 }
             }
         }
@@ -1117,10 +1137,42 @@ const datelsHandler = {
                 (!isSubBot && ownerPhoneList.includes(myBotNum) && mek.key.fromMe)
             );
 
-            // 🔇 فحص كتم العضو فوراً قبل استخراج النص لحذف جميع الرسائل والوسائط حرفياً (صور، ملصقات، صوت، ريكوردات، ملفات، إلخ)
-            if (isGroup && isUserMuted(sender, from, localDB) && !isAbsoluteOwner) {
-                currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
-                return true;
+            // 🤖 استخراج هويات البوتات الأخرى في النظام لمنع تداخل الأوامر في نفس الروم
+            const thisBotIdentities = new Set([myBotNum]);
+            if (currentConn.user?.id) thisBotIdentities.add(currentConn.user.id.split('@')[0].split(':')[0].replace(/[^0-9]/g, ''));
+            if (currentConn.user?.lid) thisBotIdentities.add(currentConn.user.lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, ''));
+            if (currentConn.subBotConfig?.phone) thisBotIdentities.add(String(currentConn.subBotConfig.phone).replace(/[^0-9]/g, ''));
+
+            let subBotsRegistry = {};
+            try { subBotsRegistry = loadSubBotsRegistry(); } catch (_) {}
+            const otherBotNames = [];
+            const otherCallNames = [];
+            const allOtherBotNumbers = new Set();
+            const mainBotNumber = '201229409956';
+
+            if (currentConn.isSubBot) {
+                allOtherBotNumbers.add(mainBotNumber);
+                otherBotNames.push('شادو');
+                otherCallNames.push('شادو');
+            }
+
+            for (const [p, info] of Object.entries(subBotsRegistry)) {
+                const cleanP = p.replace(/[^0-9]/g, '');
+                if (cleanP && !thisBotIdentities.has(cleanP)) {
+                    allOtherBotNumbers.add(cleanP);
+                    if (info.phone) allOtherBotNumbers.add(info.phone.replace(/[^0-9]/g, ''));
+                    if (info.botName) otherBotNames.push(normalizeArabic(info.botName.toLowerCase().trim()));
+                    if (info.callName) otherCallNames.push(normalizeArabic(info.callName.toLowerCase().trim()));
+                }
+            }
+
+            // 0️⃣ إذا كانت الرسالة عبارة عن ريبلاي (اقتباس) لبوت آخر في النظام، يتجاهلها هذا البوت تماماً
+            const quotedParticipant = mek.message?.extendedTextMessage?.contextInfo?.participant;
+            if (quotedParticipant) {
+                const cleanQuotedPart = quotedParticipant.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                if (cleanQuotedPart && allOtherBotNumbers.has(cleanQuotedPart) && !thisBotIdentities.has(cleanQuotedPart)) {
+                    return false;
+                }
             }
 
             const isSubBotOwner = isSubBot && (
@@ -1150,11 +1202,53 @@ const datelsHandler = {
                 : (isAbsoluteOwner || isMainHajj);
 
             // استخراج النص من الرسالة
-            const body = extractMessageBody(mek);
+            let body = extractMessageBody(mek);
             if (!body) return false;
 
-            const textLower = body.toLowerCase().trim();
-            const normalizedBody = normalizeArabic(textLower);
+            let textLower = body.toLowerCase().trim();
+            let normalizedBody = normalizeArabic(textLower);
+
+            // فحص هل الرسالة موجهة صراحةً لبوت آخر في نفس الروم؟
+            const isCallingOtherBot = otherCallNames.concat(otherBotNames).filter(Boolean).some(otherName => {
+                return (
+                    normalizedBody === otherName ||
+                    normalizedBody === `يا ${otherName}` ||
+                    normalizedBody.startsWith(otherName + ' ') ||
+                    normalizedBody.startsWith(`يا ${otherName} `)
+                );
+            });
+
+            if (isCallingOtherBot) {
+                return false;
+            }
+
+            // فحص هل الرسالة تنادي هذا البوت بالاسم وقص اسم النداء
+            const callName = currentConn.callName || currentConn.subBotConfig?.callName || '';
+            const normalizedCallName = normalizeArabic((callName || '').toLowerCase().trim());
+            let matchedPrefix = null;
+            const myPrefixes = [];
+            if (normalizedCallName) {
+                myPrefixes.push(`يا ${normalizedCallName} `, `${normalizedCallName} `);
+            }
+            if (normalizedBotName) {
+                myPrefixes.push(`يا ${normalizedBotName} `, `${normalizedBotName} `);
+            }
+            if (!currentConn.isSubBot) {
+                myPrefixes.push('يا شادو ', 'شادو ');
+            }
+
+            for (const pfx of myPrefixes) {
+                if (normalizedBody.startsWith(pfx)) {
+                    matchedPrefix = pfx;
+                    break;
+                }
+            }
+
+            if (matchedPrefix) {
+                normalizedBody = normalizedBody.slice(matchedPrefix.length).trim();
+                textLower = textLower.slice(matchedPrefix.length).trim();
+                body = body.slice(matchedPrefix.length).trim();
+            }
 
             // دالة التفاعل والمزامنة
             async function handleCommandTiming(emoji = '🕵️‍♂️') {
@@ -1210,6 +1304,11 @@ const datelsHandler = {
                 }
             }
             const groupAdmins = Array.from(groupAdminsSet);
+
+            const isBotAdmin = groupAdmins.includes(myBotNum) || 
+                               (currentConn.user?.lid && groupAdmins.includes(getCleanNumber(currentConn.user.lid))) ||
+                               (localDB.lidMap?.[myBotNum] && groupAdmins.includes(localDB.lidMap[myBotNum])) ||
+                               (currentConn.subBotConfig?.phone && groupAdmins.includes(cleanPhoneNumber(currentConn.subBotConfig.phone)));
 
             let isSenderAdmin = groupAdmins.includes(cleanSenderNum) || 
                                 (localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum])) ||
@@ -1284,8 +1383,8 @@ const datelsHandler = {
                 }
             }
 
-            // 🔇 0️⃣ [حذف رسائل الأعضاء المكتومين بالجروب فوراً بدون تعطيل البوت]
-            if (isGroup && isUserMuted(sender, from, localDB)) {
+            // 🔇 0️⃣ [حذف رسائل الأعضاء المكتومين بالجروب فوراً إذا كان هذا البوت مشرفاً]
+            if (isGroup && isBotAdmin && isUserMuted(sender, from, localDB, isBotAdmin)) {
                 currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
                 return true;
             }
@@ -1825,9 +1924,6 @@ const datelsHandler = {
             // =========================================================================
             // 🚪 4️⃣ [مغادرة الجروب - لمالك البوت أو الحج شادو الأصلي]
             // =========================================================================
-            const callName = currentConn.callName || currentConn.subBotConfig?.callName || '';
-            const normalizedCallName = normalizeArabic((callName || '').toLowerCase().trim());
-
             let specifiedName = '';
             let isLeaveMatch = false;
 
@@ -2342,6 +2438,11 @@ const datelsHandler = {
                 // كتم عضو (حذف كل رسائله بالجروب فوراً وتلقائياً)
                 const isMuteCmd = /^(?:\.|\/|!)?(?:كتم|اكتم)(?:\s|$)/i.test(normalizedBody);
                 if (isMuteCmd) {
+                    if (!isBotAdmin) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ البوت لازم يكون مشرف (أدمن) في الجروب عشان يقدر يكتم الأعضاء!' }, { quoted: mek });
+                        return true;
+                    }
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -2442,6 +2543,11 @@ const datelsHandler = {
                 // فك كتم عضو
                 const isUnmuteCmd = /^(?:\.|\/|!)?(?:فك\s*كتم|فك\s*الكتم|الغاء\s*كتم|إلغاء\s*كتم)(?:\s|$)/i.test(normalizedBody);
                 if (isUnmuteCmd) {
+                    if (!isBotAdmin) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ البوت لازم يكون مشرف (أدمن) في الجروب عشان يقدر يفك كتم الأعضاء!' }, { quoted: mek });
+                        return true;
+                    }
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });

@@ -1626,18 +1626,30 @@ export async function initAllSubBots(mainConn) {
     console.log(`🔄 [Sub-Bots] جاري استرجاع وتشغيل ${phones.length} بوت فرعي مسجل ومحفوظ...`);
 
     let delaySec = 3;
+    let bootModified = false;
     for (const phone of phones) {
         const cfg = registry[phone];
-        if (cfg && cfg.status !== 'stopped' && cfg.status !== 'banned' && cfg.status !== 'loggedOut') {
-            setTimeout(async () => {
-                try {
-                    await bootSubBot(phone, cfg, mainConn || global.conn);
-                } catch (err) {
-                    console.error(`❌ تعذر تشغيل البوت الفرعي (+${phone}):`, err?.message || err);
+        const sessionCreds = path.join(process.cwd(), 'sessions', 'sub_bots', phone, 'creds.json');
+        const hasCreds = fs.existsSync(sessionCreds);
+        if (cfg && cfg.status !== 'stopped' && cfg.status !== 'banned') {
+            if (hasCreds || cfg.status === 'active') {
+                if (cfg.status === 'loggedOut') {
+                    cfg.status = 'active';
+                    bootModified = true;
                 }
-            }, delaySec * 1000);
-            delaySec += 4; // تأخير 4 ثوانٍ بين كل بوت فرعي والآخر للأمان التام
+                setTimeout(async () => {
+                    try {
+                        await bootSubBot(phone, cfg, mainConn || global.conn);
+                    } catch (err) {
+                        console.error(`❌ تعذر تشغيل البوت الفرعي (+${phone}):`, err?.message || err);
+                    }
+                }, delaySec * 1000);
+                delaySec += 4; // تأخير 4 ثوانٍ بين كل بوت فرعي والآخر للأمان التام
+            }
         }
+    }
+    if (bootModified) {
+        saveSubBotsRegistry(registry);
     }
 }
 

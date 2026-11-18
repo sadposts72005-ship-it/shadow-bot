@@ -7,9 +7,12 @@ import v8 from 'v8';
 import vm from 'vm';
 import { handleAllMessages } from './handler.js';
 
-// ⚡ تفعيل واستدعاء Garbage Collector لتحرير الذاكرة وتخفيف استهلاك الرام
+// ⚡ تفعيل واستدعاء Garbage Collector وضبط استهلاك الذاكرة وتخفيف استهلاك الرام
 try {
     v8.setFlagsFromString('--expose_gc');
+    v8.setFlagsFromString('--optimize_for_size');
+    v8.setFlagsFromString('--max_old_space_size=120');
+    v8.setFlagsFromString('--max_semi_space_size=2');
     if (!global.gc) {
         global.gc = vm.runInNewContext('gc');
     }
@@ -22,11 +25,14 @@ console.info = function (...args) {
     _origInfo.apply(console, args);
 };
 
-// ⚡ تحرير الذاكرة دورياً كل 45 ثانية لضمان بقاء استهلاك الرام خفيفاً جداً
+// ⚡ تحرير الذاكرة دورياً وبشكل مكثف للحفاظ على استهلاك الرام خفيفاً جداً
 if (typeof global.gc === 'function') {
+    setTimeout(() => { try { global.gc(); } catch (_) {} }, 3000);
+    setTimeout(() => { try { global.gc(); } catch (_) {} }, 7000);
+    setTimeout(() => { try { global.gc(); } catch (_) {} }, 15000);
     setInterval(() => {
         try { global.gc(); } catch (_) {}
-    }, 45000);
+    }, 25000);
 }
 // ⏰ استيراد دالة الأذكار التلقائية والترحيب من ملف الـ plugins
 import { startAutoReminders } from './plugins/datels.js';
@@ -495,7 +501,7 @@ export async function startShadowBot() {
                 if (!m || !m.message) continue;
                 if (m.key?.id && m.message) {
                     mainMsgStore.set(m.key.id, m.message);
-                    if (mainMsgStore.size > 200) {
+                    if (mainMsgStore.size > 50) {
                         const firstKey = mainMsgStore.keys().next().value;
                         mainMsgStore.delete(firstKey);
                     }

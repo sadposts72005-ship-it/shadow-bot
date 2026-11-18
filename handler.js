@@ -1401,8 +1401,8 @@ export async function handleAllMessages(mek, currentConn) {
                 return;
             }
 
-            // 4️⃣ في حال تواجد البوت الرئيسي وبوتات فرعية في نفس الجروب، ولم يتم ذكر اسم البوت صراحة:
-            if (isRealGroup && currentConn.isSubBot && mainBotPresentInRoom) {
+            // 4️⃣ في حال تواجد عدة بوتات في نفس الجروب، ولم يتم توجيه الأمر أو اللعبة لبوت معين صراحة:
+            if (isRealGroup && (otherBotsPresentInRoom || mainBotPresentInRoom)) {
                 const isQuotedToThisBot = Boolean(
                     quotedParticipantEarly && thisBotIdentities.has(quotedParticipantEarly.split('@')[0].split(':')[0].replace(/[^0-9]/g, ''))
                 );
@@ -1422,7 +1422,20 @@ export async function handleAllMessages(mek, currentConn) {
                     const isGameStarter = /^(كوره|كورة|لعبة الكورة|احزر|احذر|رتب|ترتيب|xo|اكس او|صراحه|صراحة|بكاسه|بكاسة|بازل|puzzle|فيلم|افلام)$/i.test(normalizedBody);
                     const isGeneralCmd = /^(اوامر|الاوامر|أوامر|الأوامر|منيو|المنيو|مطور|المطور|بنج|ping)$/i.test(normalizedBody);
                     if (isGameStarter || isGeneralCmd) {
-                        return;
+                        if (mainBotPresentInRoom) {
+                            if (currentConn.isSubBot) return;
+                        } else if (otherBotsPresentInRoom) {
+                            // إذا لم يكن البوت الأساسي متواجداً وتوجد عدة بوتات فرعية في نفس الروم:
+                            // نختار بوتاً فرعياً واحداً فقط لبدء الأمر غير الموجه تفادياً لتضارب الألعاب
+                            const subBotNumbersInRoom = [myBotNum];
+                            for (const num of allOtherBotNumbers) {
+                                subBotNumbersInRoom.push(num);
+                            }
+                            subBotNumbersInRoom.sort();
+                            if (subBotNumbersInRoom[0] !== myBotNum) {
+                                return;
+                            }
+                        }
                     }
                 }
             }
