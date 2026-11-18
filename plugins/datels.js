@@ -961,6 +961,38 @@ const datelsHandler = {
                 });
             }
         }
+        if (action === 'remove' && id.endsWith('@g.us')) {
+            let localDB = loadLocalDB();
+            if (localDB.bannedGroups?.includes(id) || localDB.disabledWelcomes?.includes(id)) return;
+
+            const myBotNum = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
+            if (currentConn.isSubBot && global.mainConn && global.mainConn.user?.id) {
+                const mainKnown = localDB.knownGroups || [];
+                if (mainKnown.includes(id)) return;
+            }
+
+            for (let participant of participants) {
+                let userJid = typeof participant === 'string' ? participant : (participant.id || '');
+                if (!userJid) continue;
+                const cleanUser = getCleanNumber(userJid);
+                if (cleanUser === myBotNum) continue;
+
+                const leaveKey = `leave_${id}_${cleanUser}`;
+                if (recentWelcomes.has(leaveKey)) continue;
+                recentWelcomes.add(leaveKey);
+                setTimeout(() => recentWelcomes.delete(leaveKey), 15000);
+
+                const mappedPhone = localDB.lidMap?.[cleanUser];
+                const displayName = mappedPhone ? `@${mappedPhone}` : `@${cleanUser}`;
+                const mentions = [userJid];
+                if (mappedPhone && `${mappedPhone}@s.whatsapp.net` !== userJid) {
+                    mentions.push(`${mappedPhone}@s.whatsapp.net`);
+                }
+
+                const leaveText = `👋 *تم مغادرة المجموعة!*\n\nمع السلامة يا ${displayName}، نتمنى لك التوفيق دائماً! ✨`;
+                await currentConn.sendMessage(id, { text: leaveText, mentions }).catch(() => {});
+            }
+        }
     },
 
     before: async function (mek, currentConn) {
@@ -2088,6 +2120,70 @@ const datelsHandler = {
                         await currentConn.sendMessage(from, { text: `📉 *تم تنزيل الرتبة بنجاح!* \nتم سحب الإشراف من @${targetNum}.`, mentions: [target] }, { quoted: mek });
                     } catch (e) {
                         await currentConn.sendMessage(from, { text: '❌ تعذر تنزيل المشرف. تأكد من صلاحيات البوت!' }, { quoted: mek });
+                    }
+                    return true;
+                }
+
+                // إضافة عضو إلى المجموعة
+                if (normalizedBody.startsWith('اضافه') || normalizedBody.startsWith('إضافة') || normalizedBody.startsWith('ضيف') || normalizedBody.startsWith('اضف') || normalizedBody.startsWith('أضف')) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
+                    const isBotAdmin = groupAdmins.includes(myBotNum) || 
+                                       (localDB.lidMap?.[myBotNum] && groupAdmins.includes(localDB.lidMap[myBotNum])) || 
+                                       (currentConn.user?.lid && groupAdmins.includes(getCleanNumber(currentConn.user.lid)));
+                    if (!isBotAdmin) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ يجب ترقية البوت لمشرف (Admin) في المجموعة أولاً ليتمكن من الإضافة! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
+                    let target = extractTarget(mek, body);
+                    if (!target) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: '⚠️ يرجى كتابة رقم الهاتف بعد الأمر أو منشن العضو أو الرد على رسالته!\nمثال: *اضافه 01129249396*' }, { quoted: mek });
+                        return true;
+                    }
+                    let targetNum = getCleanNumber(target);
+                    let targetJid = target.endsWith('@s.whatsapp.net') 
+                        ? target 
+                        : (target.endsWith('@lid') 
+                            ? (localDB.lidMap?.[targetNum] ? `${localDB.lidMap[targetNum]}@s.whatsapp.net` : `${targetNum}@s.whatsapp.net`) 
+                            : `${targetNum}@s.whatsapp.net`);
+
+                    await handleCommandTiming('➕');
+                    try {
+                        const res = await currentConn.groupParticipantsUpdate(from, [targetJid], 'add');
+                        const status = res?.[0]?.status;
+                        if (status === '200' || status === 200) {
+                            groupMetaCache.delete(from);
+                            await currentConn.sendMessage(from, { text: `✅ *تم إضافة العضو بنجاح!* 🎉\nأهلاً بك يا @${targetNum} في المجموعة! ✨`, mentions: [targetJid] }, { quoted: mek });
+                        } else if (status === '409' || status === 409) {
+                            await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} موجود بالفعل داخل المجموعة!`, mentions: [targetJid] }, { quoted: mek });
+                        } else {
+                            throw new Error('privacy_or_failed');
+                        }
+                    } catch (err) {
+                        try {
+                            const inviteCode = await currentConn.groupInviteCode(from);
+                            const inviteUrl = `https://chat.whatsapp.com/${inviteCode}`;
+                            const groupMeta = await getCachedGroupMetadata(currentConn, from);
+                            const groupSubject = groupMeta?.subject || 'المجموعة';
+
+                            const pvMsg = `👋 *مرحباً بك!*\n\nقام أحد مشرفي مجموعة *[ ${groupSubject} ]* بطلب إضافتك، ولكن نظراً لإعدادات الخصوصية في حسابك، تعذرت الإضافة المباشرة.\n\n🔗 *رابط الانضمام للمجموعة:*\n${inviteUrl}\n\nنتشرف بوجودك معنا! ✨`;
+                            await currentConn.sendMessage(targetJid, { text: pvMsg });
+
+                            await currentConn.sendMessage(from, {
+                                text: `⚠️ تعذر إضافة العضو @${targetNum} مباشرة بسبب إعدادات الخصوصية لديه.\n📩 *تم إرسال رابط دعوة الجروب له في الخاص بنجاح!* ✨`,
+                                mentions: [targetJid]
+                            }, { quoted: mek });
+                        } catch (invErr) {
+                            await currentConn.sendMessage(from, {
+                                text: `❌ تعذر إضافة العضو @${targetNum} أو إرسال رابط الدعوة له. تأكد من صحة الرقم ومن إمكانية مراسلته!`,
+                                mentions: [targetJid]
+                            }, { quoted: mek });
+                        }
                     }
                     return true;
                 }

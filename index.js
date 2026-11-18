@@ -4,6 +4,20 @@ import fs from 'fs';
 import path from 'path';
 import http from 'http';
 import { handleAllMessages } from './handler.js';
+
+// 🧹 كتم سجلات Baileys / libsignal الضخمة الخاصة بالجلسات لمنع امتلاء الرام
+const _origInfo = console.info;
+console.info = function (...args) {
+    if (typeof args[0] === 'string' && (args[0].includes('Closing session') || args[0].includes('SessionEntry'))) return;
+    _origInfo.apply(console, args);
+};
+
+// ⚡ تحرير الذاكرة دورياً لضمان بقاء استهلاك الرام خفيفاً جداً
+if (global.gc) {
+    setInterval(() => {
+        try { global.gc(); } catch (_) {}
+    }, 60000);
+}
 // ⏰ استيراد دالة الأذكار التلقائية والترحيب من ملف الـ plugins
 import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
