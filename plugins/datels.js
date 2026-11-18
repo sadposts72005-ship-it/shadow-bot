@@ -587,10 +587,10 @@ function getWelcomeMessage(userJid, groupName = '', groupDesc = '', botName = '�
 }
 
 function getLiveConnection() {
-    if (global.conn && global.conn.user?.id && global.conn.ws?.readyState === 1) {
+    if (global.conn && global.conn.user?.id && global.conn.ws?.isOpen !== false) {
         return global.conn;
     }
-    if (activeRemindersConn && activeRemindersConn.user?.id && activeRemindersConn.ws?.readyState === 1) {
+    if (activeRemindersConn && activeRemindersConn.user?.id && activeRemindersConn.ws?.isOpen !== false) {
         return activeRemindersConn;
     }
     return global.conn || activeRemindersConn || null;
@@ -630,8 +630,8 @@ async function getParticipatingGroupIds(conn, localDB) {
                 }
             }
         } catch (_) {}
-        // في حال لم تكن هناك مجموعات مسجلة بعد للبوت الفرعي، نتحقق من المجموعات المعروفة
-        if (groupsSet.size === 0 && localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
+        // إضافة كافة المجموعات المسجلة بقاعدة البيانات ليتمكن البوت الفرعي من الإرسال لجميع مجموعاته
+        if (localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
             for (const gid of localDB.knownGroups) {
                 if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
                     groupsSet.add(gid);
@@ -741,7 +741,7 @@ async function broadcastReminders(messageGeneratorOrText, localDB) {
         if (activeSubBots && activeSubBots.size > 0) {
             for (const [subPhone, subData] of activeSubBots.entries()) {
                 const subSock = subData?.sock;
-                if (!subSock || !subSock.user?.id || (subSock.ws && subSock.ws.readyState !== 1)) continue;
+                if (!subSock || !subSock.user?.id || subSock.ws?.isOpen === false) continue;
                 subSock.isSubBot = true;
                 if (!subSock.subBotConfig && subData.cfg) subSock.subBotConfig = subData.cfg;
                 const subGroups = await getParticipatingGroupIds(subSock, localDB);
@@ -960,12 +960,6 @@ const datelsHandler = {
             const myBotNum = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
             const botName = currentConn.botName || (currentConn.subBotConfig?.botName) || 'شادو';
 
-            // إذا كان هذا بوت فرعي والبوت الرئيسي شغال وموجود في نفس الجروب، نترك الترحيب للبوت الرئيسي لعدم التكرار
-            if (currentConn.isSubBot && global.mainConn && global.mainConn.user?.id) {
-                const mainKnown = localDB.knownGroups || [];
-                if (mainKnown.includes(id)) return;
-            }
-
             // جلب معلومات الجروب (الاسم والوصف)
             let groupName = '';
             let groupDesc = '';
@@ -983,13 +977,15 @@ const datelsHandler = {
                 // لا يرحب البوت بنفسه إذا انضم للجروب
                 if (cleanUser === myBotNum) continue;
 
-                const welcomeKey = `${id}_${cleanUser}`;
+                // مفتاح ترحيب خاص بكل بوت على حدة ليرحب كل بوت بهويته حتى لو تواجد مليون بوت في نفس الروم
+                const welcomeKey = `${id}_${cleanUser}_${myBotNum}`;
                 if (recentWelcomes.has(welcomeKey)) continue;
 
                 recentWelcomes.add(welcomeKey);
                 setTimeout(() => recentWelcomes.delete(welcomeKey), 15000);
 
-                await delay(DELAYS.welcomeDelay);
+                const botStagger = currentConn.isSubBot ? 1000 : 0;
+                await delay(DELAYS.welcomeDelay + botStagger);
                 let welcomeText = getWelcomeMessage(newUser, groupName, groupDesc, botName, localDB);
 
                 const mappedPhone = localDB.lidMap?.[cleanUser];
@@ -1008,10 +1004,7 @@ const datelsHandler = {
             if (localDB.bannedGroups?.includes(id) || localDB.disabledWelcomes?.includes(id)) return;
 
             const myBotNum = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
-            if (currentConn.isSubBot && global.mainConn && global.mainConn.user?.id) {
-                const mainKnown = localDB.knownGroups || [];
-                if (mainKnown.includes(id)) return;
-            }
+            const botName = currentConn.botName || (currentConn.subBotConfig?.botName) || 'شادو';
 
             for (let participant of participants) {
                 let userJid = typeof participant === 'string' ? participant : (participant.id || '');
@@ -1019,7 +1012,8 @@ const datelsHandler = {
                 const cleanUser = getCleanNumber(userJid);
                 if (cleanUser === myBotNum) continue;
 
-                const leaveKey = `leave_${id}_${cleanUser}`;
+                // مفتاح مغادرة خاص بكل بوت على حدة ليرسل كل بوت إشعار المغادرة بهويته حتى لو تواجد مليون بوت في نفس الروم
+                const leaveKey = `leave_${id}_${cleanUser}_${myBotNum}`;
                 if (recentWelcomes.has(leaveKey)) continue;
                 recentWelcomes.add(leaveKey);
                 setTimeout(() => recentWelcomes.delete(leaveKey), 15000);
@@ -1031,7 +1025,10 @@ const datelsHandler = {
                     mentions.push(`${mappedPhone}@s.whatsapp.net`);
                 }
 
-                const leaveText = `👋 *تم مغادرة المجموعة!*\n\nمع السلامة يا ${displayName}، نتمنى لك التوفيق دائماً! ✨`;
+                const botStagger = currentConn.isSubBot ? 1000 : 0;
+                await delay(DELAYS.actionExecute + botStagger);
+
+                const leaveText = `👋 *تم مغادرة المجموعة!*\n\nمع السلامة يا ${displayName}، نتمنى لك التوفيق دائماً! ✨\n\n🤖 *${botName}*`;
                 await currentConn.sendMessage(id, { text: leaveText, mentions }).catch(() => {});
             }
         }

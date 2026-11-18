@@ -740,20 +740,19 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
 
-                const isTerminal = statusCode === DisconnectReason.loggedOut || statusCode === 403 || statusCode === 401;
+                const isTerminal = statusCode === 403;
                 if (isTerminal) {
-                    const statusReason = statusCode === 403 ? 'banned' : 'loggedOut';
-                    console.log(`❌ [Sub-Bot] تم ${statusCode === 403 ? 'حظر رقم البوت الفرعي من واتساب' : 'تسجيل الخروج من البوت الفرعي'} (+${cleanPhone}) بكود: ${statusCode}. تم إيقافه لمنع السبام والتكرار.`);
+                    console.log(`❌ [Sub-Bot] تم حظر رقم البوت الفرعي من واتساب (+${cleanPhone}) بكود: 403. تم إيقافه.`);
                     try {
                         const registry = loadSubBotsRegistry() || {};
                         if (registry[cleanPhone]) {
-                            registry[cleanPhone].status = statusReason;
+                            registry[cleanPhone].status = 'banned';
                             saveSubBotsRegistry(registry);
                         }
                         const cfgPath = path.join(SUB_BOTS_DIR, cleanPhone, 'config.json');
                         if (fs.existsSync(cfgPath)) {
                             const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-                            c.status = statusReason;
+                            c.status = 'banned';
                             fs.writeFileSync(cfgPath, JSON.stringify(c, null, 2), 'utf8');
                         }
                     } catch (_) {}
@@ -761,14 +760,14 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 }
 
                 // لا نقوم بحذف الجلسة مطلقاً، ونعيد الاتصال تلقائياً طالما لم يتم إيقافه يدوياً بأمر (ايقاف تنصيب)
-                const isManuallyStopped = cfg.status === 'stopped' || cfg.status === 'banned' || cfg.status === 'loggedOut';
+                const isManuallyStopped = cfg.status === 'stopped' || cfg.status === 'banned';
                 if (!isManuallyStopped) {
-                    const delayMs = statusCode === 515 ? 1500 : 4000;
+                    const delayMs = statusCode === 515 ? 1500 : 5000;
                     console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي تلقائياً (+${cleanPhone}) بعد ${delayMs / 1000} ثوانٍ...`);
                     setTimeout(() => {
                         const reg = loadSubBotsRegistry() || {};
                         const latestCfg = reg[cleanPhone] || cfg;
-                        if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned' && latestCfg.status !== 'loggedOut') {
+                        if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned') {
                             bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
                         }
                     }, delayMs);
@@ -1536,10 +1535,13 @@ export function startSubBotWatchdog(mainConn) {
             const registry = loadSubBotsRegistry() || {};
             for (const [phone, cfg] of Object.entries(registry)) {
                 const clean = cleanPhoneNumber(phone);
-                if (!clean || cfg?.status === 'stopped' || cfg?.status === 'banned' || cfg?.status === 'loggedOut') continue;
+                if (!clean || cfg?.status === 'stopped' || cfg?.status === 'banned') continue;
+
+                const sessionCreds = path.join(SUB_BOTS_DIR, clean, 'creds.json');
+                if (!fs.existsSync(sessionCreds)) continue;
 
                 const activeItem = activeSubBots.get(clean);
-                const isSocketAlive = activeItem?.sock?.ws?.isOpen;
+                const isSocketAlive = Boolean(activeItem?.sock?.user?.id && activeItem?.sock?.ws?.isOpen !== false);
 
                 if (!isSocketAlive) {
                     console.log(`🛡️ [Sub-Bot Watchdog] رصد انقطاع البوت الفرعي (+${clean})، جاري إعادة تشغيله تلقائياً...`);
