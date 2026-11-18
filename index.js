@@ -3,7 +3,7 @@ import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
-import { handleAllMessages, cacheIncomingMedia } from './handler.js';
+import { handleAllMessages } from './handler.js';
 // ⏰ استيراد دالة الأذكار التلقائية والترحيب من ملف الـ plugins
 import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
@@ -475,10 +475,7 @@ export async function startShadowBot() {
                         const firstKey = mainMsgStore.keys().next().value;
                         mainMsgStore.delete(firstKey);
                     }
-                    const isVO = !!(m.message.viewOnceMessage || m.message.viewOnceMessageV2 || m.message.viewOnceMessageV2Extension || m.message.imageMessage?.viewOnce || m.message.videoMessage?.viewOnce || m.message.audioMessage?.viewOnce);
-                    if (isVO) {
-                        cacheIncomingMedia(m);
-                    }
+
                 }
             }
 

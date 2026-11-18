@@ -2,7 +2,7 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaile
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
-import { handleAllMessages, cacheIncomingMedia } from '../handler.js';
+import { handleAllMessages } from '../handler.js';
 import { getMsgTimestamp } from './points.js';
 
 const REGISTRY_FILE = path.join(process.cwd(), 'sub_bots.json');
@@ -565,10 +565,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                             global.mainMsgStore.delete(firstK);
                         }
                     }
-                    const isVO = !!(m.message.viewOnceMessage || m.message.viewOnceMessageV2 || m.message.viewOnceMessageV2Extension || m.message.imageMessage?.viewOnce || m.message.videoMessage?.viewOnce || m.message.audioMessage?.viewOnce);
-                    if (isVO) {
-                        cacheIncomingMedia(m);
-                    }
+
                 }
             }
 
@@ -1373,10 +1370,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                 global.mainMsgStore.delete(firstK);
                             }
                         }
-                        const isVO = !!(m.message.viewOnceMessage || m.message.viewOnceMessageV2 || m.message.viewOnceMessageV2Extension || m.message.imageMessage?.viewOnce || m.message.videoMessage?.viewOnce || m.message.audioMessage?.viewOnce);
-                        if (isVO) {
-                            cacheIncomingMedia(m);
-                        }
+
                     }
                 }
 
