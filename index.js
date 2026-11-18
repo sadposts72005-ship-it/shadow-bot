@@ -3,7 +3,17 @@ import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import v8 from 'v8';
+import vm from 'vm';
 import { handleAllMessages } from './handler.js';
+
+// ⚡ تفعيل واستدعاء Garbage Collector لتحرير الذاكرة وتخفيف استهلاك الرام
+try {
+    v8.setFlagsFromString('--expose_gc');
+    if (!global.gc) {
+        global.gc = vm.runInNewContext('gc');
+    }
+} catch (_) {}
 
 // 🧹 كتم سجلات Baileys / libsignal الضخمة الخاصة بالجلسات لمنع امتلاء الرام
 const _origInfo = console.info;
@@ -12,11 +22,11 @@ console.info = function (...args) {
     _origInfo.apply(console, args);
 };
 
-// ⚡ تحرير الذاكرة دورياً لضمان بقاء استهلاك الرام خفيفاً جداً
-if (global.gc) {
+// ⚡ تحرير الذاكرة دورياً كل 45 ثانية لضمان بقاء استهلاك الرام خفيفاً جداً
+if (typeof global.gc === 'function') {
     setInterval(() => {
         try { global.gc(); } catch (_) {}
-    }, 60000);
+    }, 45000);
 }
 // ⏰ استيراد دالة الأذكار التلقائية والترحيب من ملف الـ plugins
 import { startAutoReminders } from './plugins/datels.js';

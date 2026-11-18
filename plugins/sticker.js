@@ -22,7 +22,7 @@ function normalizeArabic(text) {
 /**
  * إضافة حقوق الستيكر (Pack Name & Author) عبر EXIF WebP
  */
-export async function addExif(webpBuffer, packname = 'Shado Bot', author = 'Shado Bot') {
+export async function addExif(webpBuffer, packname = 'Shadow Bot', author = 'Shadow Bot') {
     try {
         const json = {
             'sticker-pack-id': crypto.randomBytes(16).toString('hex'),
@@ -164,11 +164,11 @@ export function convertVideoToWebp(vidBuffer) {
 async function downloadMedia(mediaMessage, type) {
     try {
         const stream = await downloadContentFromMessage(mediaMessage, type);
-        let buffer = Buffer.from([]);
+        const chunks = [];
         for await (const chunk of stream) {
-            buffer = Buffer.concat([buffer, chunk]);
+            chunks.push(chunk);
         }
-        return buffer;
+        return Buffer.concat(chunks);
     } catch (e) {
         console.error(`⚠️ Error downloading media (${type}):`, e.message);
         return null;
@@ -253,8 +253,8 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
             }
         }
 
-        const packname = 'Shado Bot';
-        const author = customAuthor ? customAuthor : 'Shado Bot';
+        const packname = 'Shadow Bot';
+        const author = customAuthor ? customAuthor : 'Shadow Bot';
 
         // محاولة استخراج الميديا
         const mediaObj = await extractMediaFromMessageOrQuoted(mek);
@@ -304,6 +304,13 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
         // إرسال الستيكر
         await currentConn.sendMessage(from, { sticker: stampedSticker }, { quoted: mek });
         await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
+
+        // 🧹 تحرير وتفريغ الذاكرة فوراً لمنع تراكم الرام
+        webpBuf = null;
+        if (mediaObj) mediaObj.buffer = null;
+        if (typeof global.gc === 'function') {
+            try { global.gc(); } catch (_) {}
+        }
 
         return true;
     } catch (err) {
