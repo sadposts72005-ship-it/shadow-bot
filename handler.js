@@ -1698,23 +1698,22 @@ export async function handleAllMessages(mek, currentConn) {
                         currentInstall.botName = saved.botName;
                         currentInstall.callName = saved.callName || saved.botName;
                         currentInstall.gender = saved.gender || 'male';
-                        currentInstall.personality = saved.personality || 'respectful';
-                        currentInstall.step = 4; // الانتقال مباشرة لإدخال رقم هاتف البوت!
+                        currentInstall.step = 4; // الانتقال لاختيار الشخصية
                         delete currentInstall.savedProfile;
                         setInstallState(cleanSender, currentInstall, currentConn, from);
 
-                        const askPhoneText = 
-                            `✅ *تم استرجاع إعدادات وتسمية بوتك بنجاح!* 🌸\n` +
-                            `🏷️ *الاسم:* « ${saved.botName} »\n` +
-                            `👤 *الجنس:* ${saved.gender === 'female' ? 'أنثى 👧' : 'ذكر 👦'}\n` +
-                            `🎭 *الشخصية:* ${saved.personality === 'bad' ? 'قليل الأدب 😈🔥' : 'محترم 😇✨'}\n\n` +
-                            `4️⃣ *اكتب الآن رقم الهاتف (الشريحة) الذي تريد تشغيل البوت عليه:*\n` +
-                            `• اكتب الرقم بالأرقام الإنجليزية بدون مسافات أو فواصل.\n` +
-                            `• مثال: *01012345678* أو *201012345678* أو بأي كود دولة.\n\n` +
+                        const askPersonalityText = 
+                            `✅ *تم استرجاع بيانات وتسمية بوتك القديم بنجاح!* 🌸\n` +
+                            `🏷️ *الاسم الرسمي:* « ${saved.botName} »\n` +
+                            `🗣️ *اسم النداء:* « ${saved.callName || saved.botName} »\n` +
+                            `👤 *الجنس:* ${saved.gender === 'female' ? 'أنثى 👧' : 'ذكر 👦'}\n\n` +
+                            `🎭 *اختار شخصية وأسلوب البوت:*\n` +
+                            `• أرسل رقم *(1)* أو اكتب *(محترم)*: بوت مهذب وراقي، بفلتر شتائم ورقابة صارمة ومبيقولش أي ألفاظ 😇✨\n` +
+                            `• أرسل رقم *(2)* أو اكتب *(قليل الادب)*: بوت سرسجي ومسخرة، مفيهوش أي فلتر شتائم، بيرد ويشتم ومفتوح على البحري! 😈🔥\n\n` +
                             `❌ للإلغاء في أي وقت اكتب: (الغاء)`;
 
-                        await respondWithStrictTiming('📱', async () => {
-                            await currentConn.sendMessage(from, { text: askPhoneText }, { quoted: mek });
+                        await respondWithStrictTiming('🎭', async () => {
+                            await currentConn.sendMessage(from, { text: askPersonalityText }, { quoted: mek });
                         });
                         return;
                     } else if (isNew) {
