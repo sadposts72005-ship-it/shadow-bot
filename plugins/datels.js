@@ -55,6 +55,9 @@ function convertArabicNumbers(text) {
 const groupMetaCache = new Map();
 const GROUP_META_CACHE_TTL = 300000; // 5 دقائق
 
+// ⏳ تأكيدات أمر الإضافة (.ضيفف) لحماية الأرقام من الحظر
+const pendingAddConfirmations = new Map();
+
 async function getCachedGroupMetadata(conn, gid) {
     if (!conn || !gid || !gid.endsWith('@g.us')) return null;
     const now = Date.now();
@@ -592,26 +595,50 @@ async function getParticipatingGroupIds(conn, localDB) {
     if (!conn) return [];
     const groupsSet = new Set();
 
-    // 1. تجميع شامل وفوري لكافة المجموعات المسجلة في قاعدة البيانات (knownGroups + warns + warnAdmins + controls + protection)
-    const dbSources = [
-        localDB?.knownGroups,
-        localDB?.warns ? Object.keys(localDB.warns) : [],
-        localDB?.warnAdmins ? Object.keys(localDB.warnAdmins) : [],
-        localDB?.timedGroupControls ? Object.keys(localDB.timedGroupControls) : [],
-        localDB?.groupProtection ? Object.keys(localDB.groupProtection) : []
-    ];
-
-    for (const source of dbSources) {
-        if (Array.isArray(source)) {
-            for (const gid of source) {
+    // 1. تجميع المجموعات الخاصة بهذا السوكيت (الأساسي أو الفرعي)
+    if (conn.isSubBot) {
+        if (conn.subBotConfig?.knownGroups && Array.isArray(conn.subBotConfig.knownGroups)) {
+            for (const gid of conn.subBotConfig.knownGroups) {
                 if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
                     groupsSet.add(gid);
                 }
             }
         }
+        try {
+            const cleanBot = cleanPhoneNumber(conn.subBotConfig?.phone || conn.user?.id);
+            if (cleanBot) {
+                const reg = loadSubBotsRegistry();
+                const subReg = reg[cleanBot];
+                if (subReg?.knownGroups && Array.isArray(subReg.knownGroups)) {
+                    for (const gid of subReg.knownGroups) {
+                        if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                            groupsSet.add(gid);
+                        }
+                    }
+                }
+            }
+        } catch (_) {}
+    } else {
+        const dbSources = [
+            localDB?.knownGroups,
+            localDB?.warns ? Object.keys(localDB.warns) : [],
+            localDB?.warnAdmins ? Object.keys(localDB.warnAdmins) : [],
+            localDB?.timedGroupControls ? Object.keys(localDB.timedGroupControls) : [],
+            localDB?.groupProtection ? Object.keys(localDB.groupProtection) : []
+        ];
+
+        for (const source of dbSources) {
+            if (Array.isArray(source)) {
+                for (const gid of source) {
+                    if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                        groupsSet.add(gid);
+                    }
+                }
+            }
+        }
     }
 
-    // مزامنة المجموعات المكتشفة مع knownGroups فوراً
+    // مزامنة المجموعات المكتشفة مع knownGroups فوراً للبوت الأساسي
     if (!conn.isSubBot && localDB) {
         let dbChanged = false;
         if (!localDB.knownGroups) localDB.knownGroups = [];
@@ -624,16 +651,7 @@ async function getParticipatingGroupIds(conn, localDB) {
         if (dbChanged) saveLocalDB(localDB);
     }
 
-    // 2. فحص سجل الجروبات الخاص بالبوت الفرعي إن وجد
-    if (conn.isSubBot && conn.subBotConfig?.knownGroups && Array.isArray(conn.subBotConfig.knownGroups)) {
-        for (const gid of conn.subBotConfig.knownGroups) {
-            if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
-                groupsSet.add(gid);
-            }
-        }
-    }
-
-    // 3. جلب المجموعات الحية من السوكيت بمهلة سريعة 5 ثوانٍ
+    // 2. جلب المجموعات الحية من السوكيت بمهلة سريعة 5 ثوانٍ
     try {
         if (typeof conn.groupFetchAllParticipating === 'function') {
             const groupsPromise = conn.groupFetchAllParticipating();
@@ -664,17 +682,21 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
         if (!conn || !conn.user?.id) break;
 
         try {
-            sentGids.add(gid);
             // 👥 منشن خفي لجميع أعضاء الجروب دون كتابة أي يوزرات في نص الرسالة
             const meta = await getCachedGroupMetadata(conn, gid);
             const mentions = (meta?.participants && Array.isArray(meta.participants))
                 ? meta.participants.map(p => p.id).filter(Boolean)
                 : [];
 
-            await conn.sendMessage(gid, { 
+            const sentRes = await conn.sendMessage(gid, { 
                 text: messageToSend,
                 mentions
-            }).catch(() => {});
+            }).catch(() => null);
+
+            // لا نسجل الجروب إلا إذا تم الإرسال بنجاح فقط لمنع حرمان البوتات الأخرى من الإرسال
+            if (sentRes) {
+                sentGids.add(gid);
+            }
         } catch (_) {}
         await delay(1200); // ⏱️ تأخير سريع وآمن لمنع الحظر
     }
@@ -1012,6 +1034,16 @@ const datelsHandler = {
                         if (!currentConn.subBotConfig.knownGroups) currentConn.subBotConfig.knownGroups = [];
                         if (!currentConn.subBotConfig.knownGroups.includes(from)) {
                             currentConn.subBotConfig.knownGroups.push(from);
+                            try {
+                                const cleanBot = cleanPhoneNumber(currentConn.subBotConfig.phone || currentConn.user?.id);
+                                if (cleanBot) {
+                                    const reg = loadSubBotsRegistry();
+                                    if (reg[cleanBot]) {
+                                        reg[cleanBot].knownGroups = currentConn.subBotConfig.knownGroups;
+                                        saveSubBotsRegistry(reg);
+                                    }
+                                }
+                            } catch (_) {}
                         }
                     }
                 } catch (_) {}
@@ -1194,6 +1226,63 @@ const datelsHandler = {
                 let cleanK = getCleanNumber(k);
                 return cleanK === cleanSenderNum || (localDB.lidMap?.[cleanSenderNum] && cleanK === localDB.lidMap[cleanSenderNum]);
             });
+
+            // 🛡️ فحص تأكيد أمر الإضافة (.ضيفف)
+            const confirmAddKey = `${from}_${cleanSenderNum}`;
+            if (isGroup && pendingAddConfirmations.has(confirmAddKey)) {
+                const conf = pendingAddConfirmations.get(confirmAddKey);
+                const isAccept = /^(نعم|موافق|ايوه|أيوة|تمام|تاكيد|تأكيد|اضف|أضف|ضيف)$/i.test(normalizedBody);
+                const isReject = /^(لا|الغاء|إلغاء|تراجع|رفض|ارفض)$/i.test(normalizedBody);
+
+                if (isAccept || isReject) {
+                    clearTimeout(conf.timer);
+                    pendingAddConfirmations.delete(confirmAddKey);
+
+                    if (isReject) {
+                        await handleCommandTiming('🚫');
+                        await currentConn.sendMessage(from, { text: '🚫 *تم إلغاء عملية الإضافة بنجاح!* حفاظاً على أمان الرقم.' }, { quoted: mek });
+                        return true;
+                    }
+
+                    // إذا وافق: نقوم بتنفيذ الإضافة فوراً!
+                    await handleCommandTiming('➕');
+                    const targetJid = conf.targetJid;
+                    const targetNum = conf.targetNum;
+                    try {
+                        const res = await currentConn.groupParticipantsUpdate(from, [targetJid], 'add');
+                        const status = res?.[0]?.status;
+                        if (status === '200' || status === 200) {
+                            groupMetaCache.delete(from);
+                            await currentConn.sendMessage(from, { text: `✅ *تم إضافة العضو بنجاح!* 🎉\nأهلاً بك يا @${targetNum} في المجموعة! ✨`, mentions: [targetJid] }, { quoted: mek });
+                        } else if (status === '409' || status === 409) {
+                            await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} موجود بالفعل داخل المجموعة!`, mentions: [targetJid] }, { quoted: mek });
+                        } else {
+                            throw new Error('privacy_or_failed');
+                        }
+                    } catch (err) {
+                        try {
+                            const inviteCode = await currentConn.groupInviteCode(from);
+                            const inviteUrl = `https://chat.whatsapp.com/${inviteCode}`;
+                            const groupMeta = await getCachedGroupMetadata(currentConn, from);
+                            const groupSubject = groupMeta?.subject || 'المجموعة';
+
+                            const pvMsg = `👋 *مرحباً بك!*\n\nقام أحد مشرفي مجموعة *[ ${groupSubject} ]* بطلب إضافتك، ولكن نظراً لإعدادات الخصوصية في حسابك، تعذرت الإضافة المباشرة.\n\n🔗 *رابط الانضمام للمجموعة:*\n${inviteUrl}\n\nنتشرف بوجودك معنا! ✨`;
+                            await currentConn.sendMessage(targetJid, { text: pvMsg });
+
+                            await currentConn.sendMessage(from, {
+                                text: `⚠️ تعذر إضافة العضو @${targetNum} مباشرة بسبب إعدادات الخصوصية لديه.\n📩 *تم إرسال رابط دعوة الجروب له في الخاص بنجاح!* ✨`,
+                                mentions: [targetJid]
+                            }, { quoted: mek });
+                        } catch (invErr) {
+                            await currentConn.sendMessage(from, {
+                                text: `❌ تعذر إضافة العضو @${targetNum} أو إرسال رابط الدعوة له. تأكد من صحة الرقم ومن إمكانية مراسلته!`,
+                                mentions: [targetJid]
+                            }, { quoted: mek });
+                        }
+                    }
+                    return true;
+                }
+            }
 
             // 🔇 0️⃣ [حذف رسائل الأعضاء المكتومين بالجروب فوراً بدون تعطيل البوت]
             if (isGroup && isUserMuted(sender, from, localDB)) {
@@ -2152,39 +2241,31 @@ const datelsHandler = {
                             ? (localDB.lidMap?.[targetNum] ? `${localDB.lidMap[targetNum]}@s.whatsapp.net` : `${targetNum}@s.whatsapp.net`) 
                             : `${targetNum}@s.whatsapp.net`);
 
-                    await handleCommandTiming('➕');
-                    try {
-                        const res = await currentConn.groupParticipantsUpdate(from, [targetJid], 'add');
-                        const status = res?.[0]?.status;
-                        if (status === '200' || status === 200) {
-                            groupMetaCache.delete(from);
-                            await currentConn.sendMessage(from, { text: `✅ *تم إضافة العضو بنجاح!* 🎉\nأهلاً بك يا @${targetNum} في المجموعة! ✨`, mentions: [targetJid] }, { quoted: mek });
-                        } else if (status === '409' || status === 409) {
-                            await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} موجود بالفعل داخل المجموعة!`, mentions: [targetJid] }, { quoted: mek });
-                        } else {
-                            throw new Error('privacy_or_failed');
-                        }
-                    } catch (err) {
-                        try {
-                            const inviteCode = await currentConn.groupInviteCode(from);
-                            const inviteUrl = `https://chat.whatsapp.com/${inviteCode}`;
-                            const groupMeta = await getCachedGroupMetadata(currentConn, from);
-                            const groupSubject = groupMeta?.subject || 'المجموعة';
-
-                            const pvMsg = `👋 *مرحباً بك!*\n\nقام أحد مشرفي مجموعة *[ ${groupSubject} ]* بطلب إضافتك، ولكن نظراً لإعدادات الخصوصية في حسابك، تعذرت الإضافة المباشرة.\n\n🔗 *رابط الانضمام للمجموعة:*\n${inviteUrl}\n\nنتشرف بوجودك معنا! ✨`;
-                            await currentConn.sendMessage(targetJid, { text: pvMsg });
-
-                            await currentConn.sendMessage(from, {
-                                text: `⚠️ تعذر إضافة العضو @${targetNum} مباشرة بسبب إعدادات الخصوصية لديه.\n📩 *تم إرسال رابط دعوة الجروب له في الخاص بنجاح!* ✨`,
-                                mentions: [targetJid]
-                            }, { quoted: mek });
-                        } catch (invErr) {
-                            await currentConn.sendMessage(from, {
-                                text: `❌ تعذر إضافة العضو @${targetNum} أو إرسال رابط الدعوة له. تأكد من صحة الرقم ومن إمكانية مراسلته!`,
-                                mentions: [targetJid]
-                            }, { quoted: mek });
-                        }
+                    // تخزين طلب التأكيد مع تايمر 60 ثانية لحماية الأرقام من الحظر
+                    const confirmAddKey = `${from}_${cleanSenderNum}`;
+                    if (pendingAddConfirmations.has(confirmAddKey)) {
+                        clearTimeout(pendingAddConfirmations.get(confirmAddKey).timer);
                     }
+                    const timer = setTimeout(() => {
+                        pendingAddConfirmations.delete(confirmAddKey);
+                    }, 60000);
+
+                    pendingAddConfirmations.set(confirmAddKey, {
+                        targetJid,
+                        targetNum,
+                        timer
+                    });
+
+                    await handleCommandTiming('⚠️');
+                    const warningMsg = 
+                        `⚠️ *تحذير أمني هام قبل الإضافة!* 🚨\n\n` +
+                        `هل أنت متأكد من رغبتك في استخدام أمر الإضافة للعضو: @${targetNum}؟\n\n` +
+                        `💡 *تنبيه:* إضافة الأعضاء مباشرة عبر البوت قد تعرض رقم البوت أو رقمك للحظر إذا كان الرقم ضعيفاً أو جديداً!\n\n` +
+                        `👉 رد بكلمة: *(نعم)* أو *(موافق)* للمتابعة وإضافته فوراً.\n` +
+                        `👉 رد بكلمة: *(لا)* أو *(الغاء)* للتراجع وإلغاء العملية.\n` +
+                        `⏱️ _ينتهي هذا الطلب تلقائياً خلال 60 ثانية._`;
+
+                    await currentConn.sendMessage(from, { text: warningMsg, mentions: [targetJid] }, { quoted: mek });
                     return true;
                 }
 

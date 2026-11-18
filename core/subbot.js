@@ -693,6 +693,30 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
                 activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
 
+                // 📡 مزامنة مجموعات البوت الفرعي فور اتصاله لضمان إرسال الأذان والأذكار بها
+                if (typeof sock.groupFetchAllParticipating === 'function') {
+                    sock.groupFetchAllParticipating().then(participatingGroups => {
+                        if (participatingGroups && typeof participatingGroups === 'object') {
+                            const gids = Object.keys(participatingGroups).filter(g => g.endsWith('@g.us'));
+                            if (!sock.subBotConfig) sock.subBotConfig = cfg || {};
+                            sock.subBotConfig.knownGroups = gids;
+                            if (cfg) cfg.knownGroups = gids;
+                            try {
+                                const registry = loadSubBotsRegistry();
+                                if (registry[cleanPhone]) {
+                                    registry[cleanPhone].knownGroups = gids;
+                                    saveSubBotsRegistry(registry);
+                                }
+                                const cfgPath = path.join(sessionDir, 'config.json');
+                                if (fs.existsSync(cfgPath)) {
+                                    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+                                }
+                            } catch (_) {}
+                            console.log(`📡 [Sub-Bot Sync] تم مزامنة ${gids.length} مجموعة للبوت الفرعي (+${cleanPhone}) بنجاح.`);
+                        }
+                    }).catch(() => {});
+                }
+
                 // تشغيل الأذكار والأذان تلقائياً على هذا البوت الفرعي فور اتصاله
                 try {
                     const datelsModule = await import('../plugins/datels.js');
@@ -1278,6 +1302,30 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         }
 
                         activeSubBots.set(cleanPhone, { sock, cfg: cfgData, startTime: subBotStartTime });
+
+                        // 📡 مزامنة مجموعات البوت الفرعي فور اتصاله لضمان إرسال الأذان والأذكار بها
+                        if (typeof sock.groupFetchAllParticipating === 'function') {
+                            sock.groupFetchAllParticipating().then(participatingGroups => {
+                                if (participatingGroups && typeof participatingGroups === 'object') {
+                                    const gids = Object.keys(participatingGroups).filter(g => g.endsWith('@g.us'));
+                                    if (!sock.subBotConfig) sock.subBotConfig = cfgData || {};
+                                    sock.subBotConfig.knownGroups = gids;
+                                    if (cfgData) cfgData.knownGroups = gids;
+                                    try {
+                                        const registry = loadSubBotsRegistry();
+                                        if (registry[cleanPhone]) {
+                                            registry[cleanPhone].knownGroups = gids;
+                                            saveSubBotsRegistry(registry);
+                                        }
+                                        const cfgPath = path.join(sessionDir, 'config.json');
+                                        if (fs.existsSync(cfgPath)) {
+                                            fs.writeFileSync(cfgPath, JSON.stringify(cfgData, null, 2), 'utf8');
+                                        }
+                                    } catch (_) {}
+                                    console.log(`📡 [Sub-Bot Sync] تم مزامنة ${gids.length} مجموعة للبوت الفرعي (+${cleanPhone}) بنجاح.`);
+                                }
+                            }).catch(() => {});
+                        }
 
                         // تشغيل الأذكار والأذان تلقائياً على هذا البوت الفرعي
                         try {

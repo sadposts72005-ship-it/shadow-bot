@@ -192,6 +192,18 @@ const dynamicState = {};
 const installState = new Map();
 const installTimers = new Map();
 
+// 🪪 جلسات تسجيل وتحديث البطاقة الشخصية التفاعلية خطوة بخطوة
+const registerSessions = new Map();
+const registerTimers = new Map();
+
+function clearRegisterSession(key) {
+    if (key && registerTimers.has(key)) {
+        clearTimeout(registerTimers.get(key));
+        registerTimers.delete(key);
+    }
+    if (key) registerSessions.delete(key);
+}
+
 function clearInstallTimer(key) {
     if (key && installTimers.has(key)) {
         clearTimeout(installTimers.get(key));
@@ -2032,6 +2044,150 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
+        // 🪪 متابعة خطوات تسجيل وتحديث البطاقة الشخصية التفاعلية خطوة بخطوة
+        if (registerSessions.has(cleanSender)) {
+            const regSession = registerSessions.get(cleanSender);
+            if (regSession && (!regSession.chat || regSession.chat === from)) {
+                if (['الغاء', 'إلغاء', 'cancel', 'خروج', 'stop'].includes(normalizedBody)) {
+                    clearRegisterSession(cleanSender);
+                    await respondWithStrictTiming('🚫', async () => {
+                        await currentConn.sendMessage(from, { text: '🚫 *تم إلغاء عملية التسجيل بنجاح!*' }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // تجديد التايمر لدقيقتين إضافيتين
+                if (registerTimers.has(cleanSender)) {
+                    clearTimeout(registerTimers.get(cleanSender));
+                    const t = setTimeout(() => { clearRegisterSession(cleanSender); }, 2 * 60 * 1000);
+                    registerTimers.set(cleanSender, t);
+                }
+
+                // الخطوة 1: استلام الاسم والسؤال عن السن / العمر
+                if (regSession.step === 1) {
+                    const chosenName = body.trim();
+                    if (!chosenName || chosenName.length > 50) {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { text: '⚠️ يرجى كتابة اسم مناسب (أقل من 50 حرف):' }, { quoted: mek });
+                        });
+                        return;
+                    }
+                    regSession.name = chosenName;
+                    regSession.step = 2;
+                    await respondWithStrictTiming('🎂', async () => {
+                        const askAgeMsg = 
+                            `✅ عاش يا *${chosenName}*! 👤✨\n\n` +
+                            `━━━━━━━━━━━━━━━━━━━━\n` +
+                            `🎂 *[ الخطوة 2 من 4 ]*\n` +
+                            `عندك كام سنة؟ (اكتب عمرك، مثال: *20*)`;
+                        await currentConn.sendMessage(from, { text: askAgeMsg }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // الخطوة 2: استلام السن والسؤال عن الحالة الاجتماعية
+                if (regSession.step === 2) {
+                    const chosenAge = body.trim();
+                    regSession.age = chosenAge;
+                    regSession.step = 3;
+                    await respondWithStrictTiming('💍', async () => {
+                        const askStatusMsg = 
+                            `✅ تمام! 🎂\n\n` +
+                            `━━━━━━━━━━━━━━━━━━━━\n` +
+                            `💍 *[ الخطوة 3 من 4 ]*\n` +
+                            `ما هي حالتك الاجتماعية؟ (مثال: *أعزب* | *مرتبط* | *متزوج* | *خاطب*)`;
+                        await currentConn.sendMessage(from, { text: askStatusMsg }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // الخطوة 3: استلام الحالة والسؤال عن البايو / النبذة
+                if (regSession.step === 3) {
+                    const chosenStatus = body.trim();
+                    regSession.status = chosenStatus;
+                    regSession.step = 4;
+                    await respondWithStrictTiming('✍️', async () => {
+                        const askBioMsg = 
+                            `✅ زي الفل! 💍\n\n` +
+                            `━━━━━━━━━━━━━━━━━━━━\n` +
+                            `✍️ *[ الخطوة 4 من 4 والأخيرة ]*\n` +
+                            `اكتب نبذة أو بايو يعبر عنك وعن شخصيتك:`;
+                        await currentConn.sendMessage(from, { text: askBioMsg }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // الخطوة 4: استلام البايو وإتمام التسجيل وتحديث البروفايل
+                if (regSession.step === 4) {
+                    const chosenBio = body.trim();
+                    regSession.bio = chosenBio;
+
+                    let userProf = findUserData(sender, localDB);
+                    if (!userProf) {
+                        userProf = {
+                            name: regSession.name, age: regSession.age, status: regSession.status, bio: chosenBio,
+                            points: 1000, level: 1, joinedAt: getArabicDateTime(), hasRegistered: true, isInfinite: false
+                        };
+                    } else {
+                        if (!isAbsoluteOwner && !isMainHajj && !userProf.isInfinite) {
+                            if (userProf.hasRegistered) {
+                                userProf.points = Math.max(0, (userProf.points || 0) - 20);
+                            }
+                        }
+                        userProf.name = regSession.name;
+                        userProf.age = regSession.age;
+                        userProf.status = regSession.status;
+                        userProf.bio = chosenBio;
+                        userProf.joinedAt = userProf.joinedAt || getArabicDateTime();
+                        userProf.hasRegistered = true;
+                    }
+
+                    if (isAbsoluteOwner || isMainHajj) {
+                        userProf.isInfinite = true;
+                        userProf.points = 999999999999;
+                        userProf.level = 999;
+                    }
+
+                    localDB.users[standardSenderJid] = { ...userProf };
+                    localDB.users[`${cleanSender}@lid`] = { ...userProf };
+                    localDB.users[sender] = { ...userProf };
+                    let mappedSender = localDB.lidMap?.[cleanSender];
+                    if (mappedSender) {
+                        localDB.users[`${mappedSender}@s.whatsapp.net`] = { ...userProf };
+                        localDB.users[`${mappedSender}@lid`] = { ...userProf };
+                    }
+                    for (const key of Object.keys(localDB.users)) {
+                        let cleanKey = getCleanNumber(key);
+                        if (cleanKey === cleanSender || (mappedSender && cleanKey === mappedSender)) {
+                            localDB.users[key] = { ...userProf };
+                        }
+                    }
+                    if (isAbsoluteOwner) {
+                        localDB.users['194961618301016@s.whatsapp.net'] = { ...userProf };
+                        localDB.users['201129249396@s.whatsapp.net'] = { ...userProf };
+                        localDB.users['194961618301016@lid'] = { ...userProf };
+                        localDB.users['201229409956@s.whatsapp.net'] = { ...userProf };
+                    }
+                    saveLocalDB(localDB);
+
+                    clearRegisterSession(cleanSender);
+
+                    await respondWithStrictTiming('🎉', async () => {
+                        let successText = 
+                            `🎉 *تم تسجيل بطاقتك وتحديث بروفايلك بنجاح!* 🪪✨\n\n` +
+                            `• 👤 *الاسم:* ${userProf.name}\n` +
+                            `• 🎂 *السن:* ${userProf.age}\n` +
+                            `• 💍 *الحالة:* ${userProf.status}\n` +
+                            `• ✍️ *البايو:* ${userProf.bio}\n` +
+                            `• 🪙 *رصيد النقاط:* [ ${userProf.isInfinite ? '♾️ لا نهائي' : userProf.points} ] نقطة\n\n` +
+                            `💡 _اكتب *(بروفايل)* أو *(بطاقتي)* في أي وقت لعرض بطاقتك الشخصية._`;
+                        await currentConn.sendMessage(from, { text: successText }, { quoted: mek });
+                    });
+                    return;
+                }
+            }
+        }
+
         // 2. أمر بدء التنصيب
         if (['تنصيب', '.تنصيب', 'تنصيب بوت', 'بوت فرعي', 'جديد بوت', 'jadibot'].includes(normalizedBody)) {
             // توجيه مستخدمي البوتات الفرعية للبوت الأساسي فوراً
@@ -3413,9 +3569,28 @@ export async function handleAllMessages(mek, currentConn) {
                 const spaceParts = registrationData.split(/\s+/).filter(Boolean);
                 if (spaceParts.length >= 2) parts = spaceParts;
             }
-            if (!registrationData || parts.length < 1) {
-                await respondWithStrictTiming('⚠️', async () => {
-                    await currentConn.sendMessage(from, { text: `*⚠️ طريقة التسجيل الصحيحة:*\n\nاكتب: سجل الاسم | السن | الحالة الاجتماعية | نبذة عنك\n(يمكنك استخدام أي فاصل مثل | أو - أو / أو مسافة)\n\n*💡 ملحوظة:* كل تعديل بيكلفك خصم 20 نقطة من رصيدك (مجاناً للحج).` }, { quoted: mek });
+            // إذا كتب (سجل) فقط أو بيانات غير مكتملة، نبدأ التسجيل التفاعلي خطوة بخطوة
+            if (!registrationData || parts.length < 2) {
+                if (!isAbsoluteOwner && !isMainHajj && !userProfileData.isInfinite) {
+                    if (userProfileData.hasRegistered && (userProfileData.points || 0) < 20) {
+                        await respondWithStrictTiming('❌', async () => {
+                            await currentConn.sendMessage(from, { text: `❌ رصيد نقاطك الحالي [ ${userProfileData.points || 0} ] غير كافي لتعديل البروفايل! تحتاج على الأقل 20 نقطة.` }, { quoted: mek });
+                        });
+                        return;
+                    }
+                }
+
+                clearRegisterSession(cleanSender);
+                const timer = setTimeout(() => { clearRegisterSession(cleanSender); }, 2 * 60 * 1000);
+                registerTimers.set(cleanSender, timer);
+                registerSessions.set(cleanSender, { step: 1, chat: from });
+
+                await respondWithStrictTiming('🪪', async () => {
+                    const startRegMsg = 
+                        `🪪 *[ نظام تسجيل البطاقة الشخصية - الخطوة 1 من 4 ]* 📝\n\n` +
+                        `عايز تحط اسم إيه في بطاقتك؟ 👤\n\n` +
+                        `💡 _اكتب اسمك الذي تريده، أو اكتب *(الغاء)* للتراجع في أي وقت._`;
+                    await currentConn.sendMessage(from, { text: startRegMsg }, { quoted: mek });
                 });
                 return;
             }
