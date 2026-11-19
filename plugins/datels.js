@@ -7,6 +7,7 @@ import { loadSubBotsRegistry, saveSubBotsRegistry, updateSubBotHajj, activeSubBo
 import { loadLocalDB, saveLocalDB } from '../core/database.js';
 import handleStickerCommand from './sticker.js';
 import handleImageCommand from './image.js';
+import { handleQuranCommand } from './quran.js';
 
 const dbPath = path.join(process.cwd(), 'scramble_db.json');
 
@@ -1451,6 +1452,13 @@ const datelsHandler = {
                     await currentConn.sendMessage(from, { text: '🕌 «الله أكبر، الله أكبر.. أشهد أن لا إله إلا الله، وأشهد أن محمداً رسول الله» 🕋\n(حان الآن وقت الصلاة، تقبل الله منا ومنكم صالح الأعمال) ❤️' }, { quoted: mek });
                 }
                 return true;
+            }
+
+            // 📖 أمر القرآن الكريم (نص السورة كتابة + فويس تلاوة الشيخ المنشاوي)
+            const isQuranCmd = /^(?:\.|\/|!)?(?:قران|قرآن|سورة|سوره)(?:\s|$)/i.test(normalizedBody);
+            if (isQuranCmd) {
+                const handled = await handleQuranCommand(normalizedBody, body, currentConn, from, mek, handleCommandTiming);
+                if (handled) return true;
             }
 
             const isAdhanTimesCmd = /^(?:\.|\/|!)?(?:مواقيت\s*الصلاة|مواعيد\s*الصلاة|مواقيت\s*الصلاه|مواعيد\s*الصلاه|الاذان|الأذان|اذان|أذان|الصلوات)$/i.test(normalizedBody);
