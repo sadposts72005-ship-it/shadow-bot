@@ -5,8 +5,9 @@ import { modifyUserPoints, getUserPoints } from '../core/points.js';
 
 // 📂 إعداد ملف التخزين المحلي الخاص بلعبة احزر لضمان عدم ضياع النقاط
 const dbPath = path.join(process.cwd(), 'guess_db.json');
+const charactersFilePath = path.join(process.cwd(), 'assets', 'guess_characters.json');
 
-// دالة للتأخير
+// دالة للتأخير ومحاكاة الكتابة البشرية
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function loadLocalDB() {
@@ -28,6 +29,66 @@ function saveLocalDB(data) {
     }
 }
 
+// 🗃️ تحميل قائمة الشخصيات المحلية الشاملة والمحدثة
+function loadCharactersList() {
+    try {
+        if (fs.existsSync(charactersFilePath)) {
+            const data = JSON.parse(fs.readFileSync(charactersFilePath, 'utf8'));
+            if (Array.isArray(data) && data.length > 0) {
+                return data;
+            }
+        }
+    } catch (e) {
+        console.error("Error loading guess_characters.json:", e);
+    }
+
+    // احتياطي فوري إذا لم يوجد الملف لضمان استمرار اللعبة 100%
+    return [
+        { name: "لوفي", anime: "ون بيس", aliases: ["لوفي", "مونكي دي لوفي", "قبعة القش"], img: "https://s4.anilist.co/file/anilistcdn/character/large/b40-MNypXsxSRb1R.png" },
+        { name: "غوكو", anime: "دراجون بول", aliases: ["غوكو", "جوكو", "سون غوكو", "كاكاروت"], img: "https://s4.anilist.co/file/anilistcdn/character/large/246-wsRRr6z1kii8.png" },
+        { name: "سايتاما", anime: "وان بنش مان", aliases: ["سايتاما", "الرجل ذو اللكمة الواحدة"], img: "https://s4.anilist.co/file/anilistcdn/character/large/b73935-1nmZz6x2gT0J.png" },
+        { name: "غوجو", anime: "جوجيتسو كايسن", aliases: ["غوجو", "جوجو", "غوجو ساتورو", "ساتورو غوجو"], img: "https://s4.anilist.co/file/anilistcdn/character/large/b127969-l124yYzyzXsl.png" },
+        { name: "ليفاي", anime: "هجوم العمالقة", aliases: ["ليفاي", "ليفاي اكرمان", "القائد ليفاي"], img: "https://s4.anilist.co/file/anilistcdn/character/large/b45627-cYZjYnsw3F6e.png" },
+        { name: "ايانوكوجي", anime: "فصل النخبة", aliases: ["ايانوكوجي", "كيوتاكا ايانوكوجي", "كيوتاكا"], img: "https://s4.anilist.co/file/anilistcdn/character/large/b123212-ewZgUQr9vvEM.png" },
+        { name: "استا", anime: "بلاك كلوفر", aliases: ["استا", "آستا"], img: "https://s4.anilist.co/file/anilistcdn/character/large/b122354-9E07g34sD6v1.png" }
+    ];
+}
+
+const charactersList = loadCharactersList();
+
+// 🧠 سجل لتتبع آخر أنمي تم اختياره في كل شات (لمنع تكرار شخصيتين من نفس الأنمي ورا بعض)
+const lastAnimePerChat = new Map();
+// 🔄 سجل لمنع تكرار نفس الشخصيات مؤخراً في نفس الشات
+const recentCharactersPerChat = new Map();
+
+/**
+ * اختيار شخصية عشوائية ذكية مع ضمان عدم تكرار الأنمي ورا بعض
+ */
+function pickSmartCharacter(chatId) {
+    const lastAnime = lastAnimePerChat.get(chatId);
+    let pool = charactersList;
+
+    // 1. استبعاد الأنمي الذي ظهر في الجولة السابقة مباشرة في هذا الشات
+    if (lastAnime && pool.some(c => c.anime !== lastAnime)) {
+        pool = pool.filter(c => c.anime !== lastAnime);
+    }
+
+    // 2. تجنب تكرار آخر 20 شخصية ظهرت في نفس الشات
+    const recent = recentCharactersPerChat.get(chatId) || [];
+    let candidates = pool.filter(c => !recent.includes(c.name));
+    if (candidates.length === 0) candidates = pool;
+
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+
+    // 3. تحديث السجل للشات
+    lastAnimePerChat.set(chatId, chosen.anime);
+    recent.push(chosen.name);
+    if (recent.length > 25) recent.shift();
+    recentCharactersPerChat.set(chatId, recent);
+
+    return chosen;
+}
+
 function normalizeArabic(text) {
     if (!text) return '';
     return text
@@ -36,6 +97,7 @@ function normalizeArabic(text) {
         .replace(/[أإآ]/g, 'ا')
         .replace(/ة/g, 'ه')
         .replace(/ى/g, 'ي')
+        .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '')
         .replace(/\s+/g, ' '); // توحيد المسافات لضمان دقة الإجابة
 }
 
@@ -46,6 +108,44 @@ function makeHint(word) {
     let end = clean.slice(-1);
     let middle = '*'.repeat(clean.length - 3);
     return `${start}${middle}${end}`;
+}
+
+/**
+ * فحص مرن ودقيق لإجابة اللاعب مع مطابقة الأسماء الأساسية والمرادفات
+ */
+function isGuessCorrect(playerInput, session) {
+    const normInput = normalizeArabic(playerInput);
+    if (!normInput) return false;
+
+    const primary = normalizeArabic(session.correctAnswer);
+    if (normInput === primary) return true;
+
+    const aliases = (session.aliases || []).map(normalizeArabic);
+    if (aliases.includes(normInput)) return true;
+
+    // مرونة إضافية: إذا كتب اللاعب الاسم كاملاً أو الجزء الأساسي منه
+    // مثلاً: الشخصية "لوفي"، اللاعب كتب "مونكي دي لوفي"
+    // أو الشخصية "غوجو"، اللاعب كتب "غوجو ساتورو"
+    // أو الشخصية "اللحية البيضاء"، اللاعب كتب "وايت بيرد" أو "ادوارد نيوجيت"
+    const allTargets = [primary, ...aliases].filter(Boolean);
+    const inputWords = normInput.split(/\s+/).filter(w => w.length >= 3);
+
+    for (const target of allTargets) {
+        if (target.length >= 3) {
+            // مطابقة مباشرة كاملة
+            if (normInput === target) return true;
+
+            // إذا كان المدخل أو الهدف يحتوي على الآخر بالكامل
+            if (normInput.includes(target) || target.includes(normInput)) {
+                // التأكد من أن الكلمة المشتركة ليست حرفاً أو مقطعاً صغيراً
+                const targetWords = target.split(/\s+/).filter(w => w.length >= 3);
+                const hasMatchingWord = inputWords.some(w => targetWords.includes(w) || target.startsWith(w) || target.endsWith(w));
+                if (hasMatchingWord) return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 const timeout = 60000;
@@ -77,18 +177,19 @@ const handler = async (m, conn) => {
         }
 
         try {
-            const response = await fetch('https://gist.githubusercontent.com/Kyutaka101/98d564d49cbf9b539fee19f744de7b26/raw/f2a3e68bbcdd2b06f9dbd5f30d70b9fda42fec14/guessflag');
-            const obitoData = await response.json();
-            const obitoItem = obitoData[Math.floor(Math.random() * obitoData.length)];
-            const { img, name } = obitoItem;
+            // اختيار شخصية عشوائية ذكية مع استبعاد نفس أنمي الجولة السابقة
+            const character = pickSmartCharacter(cleanId);
+            const { img, name, anime, aliases } = character;
 
             conn.obito[cleanId] = {
                 correctAnswer: name,
+                anime: anime,
+                aliases: aliases || [name],
                 creator: sender,
                 timer: setTimeout(async () => {
                     if (conn.obito[cleanId]) {
                         await delay(2500);
-                        await conn.sendMessage(id, { text: `⏰ *انتهى الوقت* ⏰\n\nمحدش عرف الشخصية! 😴\n\n💡 الشخصية الصحيحة كانت: *${name}*\n\nاكتب *"احزر"* لتجربة جولة جديدة 🎮` });
+                        await conn.sendMessage(id, { text: `⏰ *انتهى الوقت* ⏰\n\nمحدش عرف الشخصية! 😴\n\n💡 الشخصية الصحيحة كانت: *${name}* من أنمي *( ${anime} )*\n\nاكتب *"احزر"* لتجربة جولة جديدة 🎮` });
                         delete conn.obito[cleanId];
                     }
                 }, timeout)
@@ -97,11 +198,17 @@ const handler = async (m, conn) => {
             await triggerEffects();
             await conn.sendMessage(id, {
                 image: { url: img },
-                caption: `🎭 *لـعـبـة احـزر الـشـخـصـيـة* 🎭\n\nاحزر صاحب الصورة الي قدامك دي واكتب اسمه فوراً!\n\n❌ _لإلغاء السؤال اكتب: *الغاء احزر* (لمنشئ الجولة)_\n⏱️ الوقت: *60 ثانية* | 🎁 الجائزة: *500 نقطة*\n💡 لطلب تلميح اكتب: *تلميح احزر*\n🛑 للاستسلام اكتب: *انسحاب احزر*`
+                caption: `🎭 *لـعـبـة احـزر الـشـخـصـيـة* 🎭\n\n` +
+                         `احزر صاحب الصورة الي قدامك دي واكتب اسمه فوراً!\n\n` +
+                         `🎬 *الأنمي:* ${anime}\n` +
+                         `⏱️ الوقت: *60 ثانية* | 🎁 الجائزة: *500 نقطة*\n` +
+                         `💡 لطلب تلميح اكتب: *تلميح احزر*\n` +
+                         `🛑 للاستسلام اكتب: *انسحاب احزر*\n` +
+                         `❌ _لإلغاء السؤال اكتب: *الغاء احزر* (لمنشئ الجولة)_`
             }, { quoted: m });
 
         } catch (e) {
-            console.error(e);
+            console.error('Error in game-guess:', e);
             await triggerEffects();
             await conn.sendMessage(id, { text: '❌ حدث خطأ في جلب صورة اللعبة، جرب ثانية' }, { quoted: m });
         }
@@ -209,7 +316,8 @@ handler.before = async (m, conn) => {
         }
 
         let hintWord = makeHint(conn.obito[cleanId].correctAnswer);
-        let hintSuccessText = `💡 *تـلـمـيـح ذكـي* 💡\n\nقربنا المسافة شوية, فكر يالا!\n\n📋 *شكل اسم الشخصية:* ${hintWord}\n🔄 تلميحاتك المتبقية للساعة الحالية: *${6 - userGameData.hintsCountGuess}*`;
+        let currentAnime = conn.obito[cleanId].anime;
+        let hintSuccessText = `💡 *تـلـمـيـح ذكـي* 💡\n\nقربنا المسافة شوية, فكر يالا!\n\n🎬 *الأنمي:* ${currentAnime}\n📋 *شكل الاسم:* ${hintWord}\n🔄 تلميحاتك المتبقية للساعة الحالية: *${6 - userGameData.hintsCountGuess}*`;
         
         await conn.sendMessage(id, { text: hintSuccessText }, { quoted: m });
         saveLocalDB(localDB);
@@ -232,8 +340,9 @@ handler.before = async (m, conn) => {
     // 5️⃣ انسحاب
     if (normalizedBody === 'انسحاب احزر') {
         let name = conn.obito[cleanId].correctAnswer;
+        let anime = conn.obito[cleanId].anime;
         clearTimeout(conn.obito[cleanId].timer);
-        let forfeitText = `🤣 *اسـتـسـلـمـت ؟* 🤣\n\nالذاكرة خانتك والشخصية طارت من دماغك! 🧠💀\n\n💡 الشخصية الصحيحة كانت: *${name}*\n\nيالا مش مهم.. اكتب "احزر" وجرب حظك تاني! 🔁`;
+        let forfeitText = `🤣 *اسـتـسـلـمـت ؟* 🤣\n\nالذاكرة خانتك والشخصية طارت من دماغك! 🧠💀\n\n💡 الشخصية الصحيحة كانت: *${name}* من أنمي *( ${anime} )*\n\nيالا مش مهم.. اكتب "احزر" وجرب حظك تاني! 🔁`;
         
         await triggerEffects();
         await conn.sendMessage(id, { text: forfeitText }, { quoted: m });
@@ -242,15 +351,20 @@ handler.before = async (m, conn) => {
     }
 
     // 6️⃣ التحقق من الإجابة الصحيحة
-    let playerAnswer = normalizedBody;
-    let botAnswer = normalizeArabic(conn.obito[cleanId].correctAnswer);
-
-    if (playerAnswer === botAnswer) {
+    if (isGuessCorrect(normalizedBody, conn.obito[cleanId])) {
         const res = modifyUserPoints(sender, 500, m.pushName);
         const totalPts = res.total ?? res.points ?? 500;
         clearTimeout(conn.obito[cleanId].timer);
 
-        let successText = `✅ *إجـابـة صـحـيـحـة* ✅\n\nكفو يا أسطورة! حزرت الشخصية صح 🎉\n\n🎭 *الشخصية:* ${conn.obito[cleanId].correctAnswer}\n🎁 *جائزتك:* +500 نقطة\n📊 *إجمالي نقاطك:* ${totalPts} نقطة`;
+        const correctName = conn.obito[cleanId].correctAnswer;
+        const correctAnime = conn.obito[cleanId].anime;
+
+        let successText = `✅ *إجـابـة صـحـيـحـة* ✅\n\n` +
+                          `كفو يا أسطورة! حزرت الشخصية صح 🎉\n\n` +
+                          `🎭 *الشخصية:* ${correctName}\n` +
+                          `🎬 *الأنمي:* ${correctAnime}\n` +
+                          `🎁 *جائزتك:* +500 نقطة\n` +
+                          `📊 *إجمالي نقاطك:* ${totalPts} نقطة`;
         
         await triggerEffects();
         await conn.sendMessage(id, { text: successText }, { quoted: m });
@@ -265,4 +379,3 @@ handler.before = async (m, conn) => {
 
 handler.command = /^(احزر)$/i;
 export default handler;
-
