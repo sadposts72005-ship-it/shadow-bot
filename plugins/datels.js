@@ -1069,7 +1069,9 @@ const datelsHandler = {
 
 
             const isGroup = from.endsWith('@g.us');
-            let sender = isGroup ? (mek.key.participant || mek.participant || '') : from;
+            let sender = isGroup 
+                ? (mek.key.participant || mek.participant || (mek.key?.fromMe ? currentConn.user?.id : '')) 
+                : (mek.key?.fromMe ? (currentConn.user?.id || from) : from);
             if (!sender && mek.key?.fromMe) sender = currentConn.user?.id || '';
             if (!sender) return false;
 

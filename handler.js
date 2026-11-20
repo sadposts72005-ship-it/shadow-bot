@@ -575,7 +575,9 @@ export async function handleAllMessages(mek, currentConn) {
             isGroup = true;
         }
 
-        let sender = isRealGroup ? (mek.key.participant || '') : from;
+        let sender = isRealGroup 
+            ? (mek.key.participant || (mek.key?.fromMe ? currentConn.user?.id : '')) 
+            : (mek.key?.fromMe ? (currentConn.user?.id || from) : from);
         if (!sender && mek.key?.fromMe) sender = currentConn.user?.id || '';
         if (!sender) return;
 
@@ -953,23 +955,43 @@ export async function handleAllMessages(mek, currentConn) {
             ? (isAbsoluteOwner || isSubBotMainOwner || isSubBotHajj)
             : (isAbsoluteOwner || isMainHajj);
 
-        // 🤫 1. فحص هل الجروب في وضع الصمت التام (اسكت / اخرس 100%)
+        // 🤫 1. فحص هل الجروب أو الشات الخاص في وضع الصمت التام (اسكت / اخرس / اسكت خاص 100%)
         const isCurrentRoomMuted = botMuteMap.get(roomKey) || false;
         if (isCurrentRoomMuted) {
-            // البوت صامت 100% ولا يرد على أي شخص في هذا الجروب نهائياً (حتى للمالك وشادو)
-            // الاستثناء الحصري الوحيد: أمر فك الكتم (اتكلم أو اصحي) من المالك أو شادو
-            const isUnmute = isSleepOwner && (
+            // البوت صامت 100% ولا يرد على أي شخص في هذا الشات/الجروب نهائياً (حتى للمالك وشادو)
+            // الاستثناء الحصري الوحيد: أمر فك الكتم (اصحي خاص / اصحي / اتكلم) من المالك أو الحج
+            const isUnmute = (isSleepOwner || mek.key?.fromMe) && (
                 normalizedBody === 'اتكلم' ||
                 normalizedBody === 'اصحي' ||
+                normalizedBody === 'اصحى' ||
+                normalizedBody === 'اصحي خاص' ||
+                normalizedBody === 'اصحى خاص' ||
+                normalizedBody === 'اصحي في الخاص' ||
+                normalizedBody === 'اصحى في الخاص' ||
+                normalizedBody === 'اتكلم خاص' ||
                 normalizedBody === `اتكلم ${normalizedBotName}` ||
                 normalizedBody === `اتكلم يا ${normalizedBotName}` ||
                 normalizedBody === `اصحي ${normalizedBotName}` ||
                 normalizedBody === `اصحي يا ${normalizedBotName}` ||
+                normalizedBody === `اصحى ${normalizedBotName}` ||
+                normalizedBody === `اصحى يا ${normalizedBotName}` ||
+                normalizedBody === `اصحي خاص ${normalizedBotName}` ||
+                normalizedBody === `اصحي خاص يا ${normalizedBotName}` ||
+                normalizedBody === `اصحي يا ${normalizedBotName} خاص` ||
+                normalizedBody === `اصحى خاص ${normalizedBotName}` ||
+                normalizedBody === `اصحى خاص يا ${normalizedBotName}` ||
+                normalizedBody === `اصحى يا ${normalizedBotName} خاص` ||
                 (normalizedCallName && (
                     normalizedBody === `اتكلم ${normalizedCallName}` || 
                     normalizedBody === `اتكلم يا ${normalizedCallName}` ||
                     normalizedBody === `اصحي ${normalizedCallName}` ||
-                    normalizedBody === `اصحي يا ${normalizedCallName}`
+                    normalizedBody === `اصحي يا ${normalizedCallName}` ||
+                    normalizedBody === `اصحى ${normalizedCallName}` ||
+                    normalizedBody === `اصحى يا ${normalizedCallName}` ||
+                    normalizedBody === `اصحي خاص ${normalizedCallName}` ||
+                    normalizedBody === `اصحي يا ${normalizedCallName} خاص` ||
+                    normalizedBody === `اصحى خاص ${normalizedCallName}` ||
+                    normalizedBody === `اصحى يا ${normalizedCallName} خاص`
                 )) ||
                 (isAbsoluteOwner && (normalizedBody === 'اتكلم الكل' || normalizedBody === 'اتكلمو' || normalizedBody === 'اصحي الكل' || normalizedBody === 'اصحو'))
             );
@@ -990,7 +1012,8 @@ export async function handleAllMessages(mek, currentConn) {
                     clearRoomState(roomKey);
                 }
                 await respondWithStrictTiming('🗣️', async () => {
-                    await currentConn.sendMessage(from, { text: `🗣️ *أمرك يا حج! تم فك كتم الصوت عن (${botName}) في هذا الجروب. رجعت أرد وأشتغل بكامل طاقتي!* ⚡` }, { quoted: mek });
+                    const placeName = isRealGroup ? 'هذا الجروب' : 'هذه المحادثة الخاصة';
+                    await currentConn.sendMessage(from, { text: `🗣️ *أمرك يا حج! تم إلغاء كتم الصوت عن (${botName}) في ${placeName}. رجعت أرد وأشتغل بكامل طاقتي!* ⚡` }, { quoted: mek });
                 });
                 return;
             }
@@ -999,18 +1022,36 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // 🤫 2. أمر كتم الصوت التام في هذا الجروب (اسكت / اخرس / صمت)
+        // 🤫 2. أمر كتم الصوت التام في هذا الشات/الجروب/الخاص (اسكت / اخرس / صمت / اسكت خاص)
         if (normalizedBody.startsWith('اسكت') || normalizedBody.startsWith('اخرس') || normalizedBody.startsWith('صمت')) {
             const isMuteAll = isAbsoluteOwner && (normalizedBody === 'اسكت الكل' || normalizedBody === 'اسكتو' || normalizedBody === 'اخرسو');
-            const isNamedMute = normalizedBody === 'اسكت' || normalizedBody === 'اخرس' || normalizedBody === 'صمت' ||
-                                normalizedBody === `اسكت ${normalizedBotName}` || 
-                                normalizedBody === `اسكت يا ${normalizedBotName}` ||
-                                (normalizedCallName && (normalizedBody === `اسكت ${normalizedCallName}` || normalizedBody === `اسكت يا ${normalizedCallName}`));
+            const isPrivateMute = (
+                normalizedBody === 'اسكت خاص' ||
+                normalizedBody === 'اسكت خاصه' ||
+                normalizedBody === 'اسكت في الخاص' ||
+                normalizedBody === `اسكت خاص ${normalizedBotName}` ||
+                normalizedBody === `اسكت خاص يا ${normalizedBotName}` ||
+                normalizedBody === `اسكت يا ${normalizedBotName} خاص` ||
+                (normalizedCallName && (
+                    normalizedBody === `اسكت خاص ${normalizedCallName}` ||
+                    normalizedBody === `اسكت خاص يا ${normalizedCallName}` ||
+                    normalizedBody === `اسكت يا ${normalizedCallName} خاص`
+                ))
+            );
+            const isNamedMute = (
+                normalizedBody === 'اسكت' || 
+                normalizedBody === 'اخرس' || 
+                normalizedBody === 'صمت' ||
+                isPrivateMute ||
+                normalizedBody === `اسكت ${normalizedBotName}` || 
+                normalizedBody === `اسكت يا ${normalizedBotName}` ||
+                (normalizedCallName && (normalizedBody === `اسكت ${normalizedCallName}` || normalizedBody === `اسكت يا ${normalizedCallName}`))
+            );
 
             if (isMuteAll || isNamedMute) {
-                if (!isSleepOwner) {
+                if (!isSleepOwner && !mek.key?.fromMe) {
                     await respondWithStrictTiming('❌', async () => {
-                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج وأصحاب البوت فقط! 👑' }, { quoted: mek });
                     });
                     return;
                 }
@@ -1028,8 +1069,10 @@ export async function handleAllMessages(mek, currentConn) {
                     setRoomMute(roomKey);
                 }
                 await respondWithStrictTiming('🤫', async () => {
+                    const placeName = isRealGroup ? 'هذا الجروب' : 'هذه المحادثة الخاصة';
+                    const wakeHint = isPrivateMute ? '(اصحي خاص)' : (isRealGroup ? '(اتكلم) أو (اصحي)' : '(اصحي خاص) أو (اصحي)');
                     await currentConn.sendMessage(from, { 
-                        text: `🤫 *أمرك يا حج! تم كتم صوت بوت (${botName}) بالكامل في ${isRealGroup ? 'هذا الجروب' : 'هذه المحادثة'} فقط.* 🤐\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: (اتكلم) أو (اصحي) هنا.\n✨ _البوت ما زال يعمل بكامل طاقته في باقي المحادثات!_` 
+                        text: `🤫 *أمرك يا حج! تم كتم صوت بوت (${botName}) بالكامل في ${placeName} فقط.* 🤐\nلن يستجيب لأي شخص أو أي رسالة نهائياً (حتى لك شخصياً) حتى ترسل: *${wakeHint}* هنا.\n✨ _البوت ما زال يعمل بكامل طاقته في باقي المحادثات!_` 
                     }, { quoted: mek });
                 });
                 return;
@@ -1090,7 +1133,7 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         // ⚡ 4. أمر استيقاظ البوت وعودته للعمل للجميع (اصحي / استيقظ / تشغيل)
-        const isGeneralWakeCmd = ['اصحي', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم', 'اتكلم'].includes(normalizedBody);
+        const isGeneralWakeCmd = ['اصحي', 'اصحى', 'استيقظ', 'تشغيل', 'الغاء الخمول', 'قوم', 'اتكلم', 'اصحي خاص', 'اصحى خاص', 'اصحي في الخاص', 'اصحى في الخاص', 'اتكلم خاص'].includes(normalizedBody);
         const isNamedWakeCmd = (
             normalizedBody === `اصحي ${normalizedBotName}` || 
             normalizedBody === `اصحي يا ${normalizedBotName}` ||
@@ -1110,13 +1153,13 @@ export async function handleAllMessages(mek, currentConn) {
         );
 
         if (isGeneralWakeCmd || isNamedWakeCmd) {
-            if (!isSleepOwner) {
+            if (!isSleepOwner && !mek.key?.fromMe) {
                 await respondWithStrictTiming('❌', async () => {
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج وأصحاب البوت فقط! 👑' }, { quoted: mek });
                 });
                 return;
             }
-            if (!isNamedWakeCmd && normalizedBody.startsWith('اصحي ') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
+            if (!isNamedWakeCmd && (normalizedBody.startsWith('اصحي ') || normalizedBody.startsWith('اصحى ')) && !normalizedBody.includes('خاص') && !normalizedBody.includes(normalizedBotName) && (!normalizedCallName || !normalizedBody.includes(normalizedCallName))) {
                 return;
             }
 
