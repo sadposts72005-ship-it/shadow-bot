@@ -13,6 +13,10 @@ const SUB_BOTS_DIR = path.join(process.cwd(), 'sessions', 'sub_bots');
 
 // حفظ السوكيتات النشطة في الذاكرة
 export const activeSubBots = new Map();
+// تتبع أرقام البوتات قيد الإقلاع والاتصال لمنع تكرار فتح السوكيتات وتوفير الرام
+const bootingPhones = new Set();
+const scheduledBootTimers = new Map();
+let lastInitSubBotsTime = 0;
 // تتبع إشعارات التفعيل المرسلة لمنع تكرار رسالة النجاح نهائياً
 const sentSubBotActivationPhones = new Set();
 // تتبع الرسائل المرسلة من البوتات الفرعية لتجنب اللوب
@@ -495,10 +499,17 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
     const cleanPhone = cleanPhoneNumber(phone);
     if (!cleanPhone) return false;
 
-    // إذا كان شغالاً بالفعل نتخطى
-    if (activeSubBots.has(cleanPhone)) {
+    // إذا كان شغالاً ومتصلاً بالفعل نتخطى
+    const active = activeSubBots.get(cleanPhone);
+    if (active && (active.sock?.ws?.isOpen || active.sock?.user?.id)) {
         return true;
     }
+
+    // إذا كان البوت قيد بدء التشغيل بالفعل، نتخطى لمنع تكرار فتح السوكيت ومضاعفة استهلاك الرام
+    if (bootingPhones.has(cleanPhone)) {
+        return true;
+    }
+    bootingPhones.add(cleanPhone);
 
     const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
     const credsPath = path.join(sessionDir, 'creds.json');
@@ -652,9 +663,14 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
             const { connection, lastDisconnect } = update;
 
             if (connection === 'open') {
+                bootingPhones.delete(cleanPhone);
                 subBotStartTime = Math.floor(Date.now() / 1000);
                 sock.subBotStartTime = subBotStartTime;
                 console.log(`🤖 [Sub-Bot] البوت الفرعي (${cfg.botName || cleanPhone}) متصل وشغال الآن! (+${cleanPhone})`);
+
+                if (typeof global.gc === 'function') {
+                    try { global.gc(); } catch (_) {}
+                }
 
                 // اكتشاف وتوثيق LID الحج الأساسي تلقائياً عند بدء التشغيل
                 if (!cfg.adminLid && cfg.adminPhone && cfg.adminPhone.length <= 13) {
@@ -731,12 +747,16 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                bootingPhones.delete(cleanPhone);
                 activeSubBots.delete(cleanPhone);
                 try {
                     sock.ws?.removeAllListeners();
                     sock.ws?.close();
                     sock.ev?.removeAllListeners();
                 } catch (_) {}
+                if (typeof global.gc === 'function') {
+                    try { global.gc(); } catch (_) {}
+                }
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
 
@@ -778,6 +798,10 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
         activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
         return true;
     } catch (err) {
+        bootingPhones.delete(cleanPhone);
+        if (typeof global.gc === 'function') {
+            try { global.gc(); } catch (_) {}
+        }
         console.error(`❌ فشل تشغيل البوت الفرعي (+${cleanPhone}):`, err?.message || err);
         return false;
     }
@@ -1537,6 +1561,9 @@ export function startSubBotWatchdog(mainConn) {
                 const clean = cleanPhoneNumber(phone);
                 if (!clean || cfg?.status === 'stopped' || cfg?.status === 'banned') continue;
 
+                // نتخطى إذا كان البوت قيد التشغيل بالفعل أو مجدولاً للإقلاع
+                if (bootingPhones.has(clean) || scheduledBootTimers.has(clean)) continue;
+
                 const sessionCreds = path.join(SUB_BOTS_DIR, clean, 'creds.json');
                 if (!fs.existsSync(sessionCreds)) continue;
 
@@ -1559,6 +1586,13 @@ export function startSubBotWatchdog(mainConn) {
  */
 export async function initAllSubBots(mainConn) {
     startSubBotWatchdog(mainConn || global.conn);
+
+    const now = Date.now();
+    // 🛡️ حماية صارمة: منع تكرار استدعاء الدالة في غضون 20 ثانية لمنع فتح سوكيتات مكررة وكراش الرام
+    if (now - lastInitSubBotsTime < 20000) {
+        return;
+    }
+    lastInitSubBotsTime = now;
 
     const registry = loadSubBotsRegistry() || {};
     const deletedList = loadDeletedSubBots();
@@ -1627,9 +1661,15 @@ export async function initAllSubBots(mainConn) {
 
     console.log(`🔄 [Sub-Bots] جاري استرجاع وتشغيل ${phones.length} بوت فرعي مسجل ومحفوظ...`);
 
-    let delaySec = 3;
+    let delaySec = 2;
     let bootModified = false;
     for (const phone of phones) {
+        const clean = cleanPhoneNumber(phone);
+        // تخطي أي بوت شغال أو قيد التشغيل بالفعل
+        if (activeSubBots.has(clean) || bootingPhones.has(clean)) {
+            continue;
+        }
+
         const cfg = registry[phone];
         const sessionCreds = path.join(process.cwd(), 'sessions', 'sub_bots', phone, 'creds.json');
         const hasCreds = fs.existsSync(sessionCreds);
@@ -1639,14 +1679,21 @@ export async function initAllSubBots(mainConn) {
                     cfg.status = 'active';
                     bootModified = true;
                 }
-                setTimeout(async () => {
+                // إلغاء أي تايمر سابق إن وُجد لنفس الرقم
+                if (scheduledBootTimers.has(clean)) {
+                    clearTimeout(scheduledBootTimers.get(clean));
+                    scheduledBootTimers.delete(clean);
+                }
+                const timer = setTimeout(async () => {
+                    scheduledBootTimers.delete(clean);
                     try {
                         await bootSubBot(phone, cfg, mainConn || global.conn);
                     } catch (err) {
                         console.error(`❌ تعذر تشغيل البوت الفرعي (+${phone}):`, err?.message || err);
                     }
                 }, delaySec * 1000);
-                delaySec += 4; // تأخير 4 ثوانٍ بين كل بوت فرعي والآخر للأمان التام
+                scheduledBootTimers.set(clean, timer);
+                delaySec += 5; // فاصل 5 ثوانٍ متباعد بين كل بوت لتوزيع استهلاك الرام ومنع أي ضغط
             }
         }
     }

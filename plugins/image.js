@@ -28,7 +28,7 @@ async function getFfmpegBin() {
  * يمنع نهائياً إرسال أي ملفات تالفة أو نصوص أخطاء HTML إلى واتساب
  */
 function isValidImage(buf) {
-    if (!buf || !Buffer.isBuffer(buf) || buf.length < 1000) return false;
+    if (!buf || !Buffer.isBuffer(buf) || buf.length < 3000) return false;
     // JPEG magic bytes: FF D8
     if (buf[0] === 0xFF && buf[1] === 0xD8) return true;
     // PNG magic bytes: 89 50 4E 47
@@ -54,20 +54,122 @@ function normalizeArabic(text) {
 }
 
 /**
- * ترجمة النص العربي إلى الإنجليزية بدقة فائقة عبر Google Chrome Dict API
- * يدعم فهم اللهجة المصرية والمصطلحات الدارجة بنسبة 100%
+ * قاموس ذكي لتصحيح وتوجيه أشهر الشخصيات والكيانات لضمان دقة البحث بنسبة 100%
+ */
+const SMART_ENTITIES = {
+    // أنمي
+    'لوفي': 'Luffy One Piece',
+    'زورو': 'Roronoa Zoro One Piece',
+    'سانجي': 'Sanji One Piece',
+    'ايس': 'Portgas D. Ace One Piece',
+    'شانكس': 'Shanks One Piece',
+    'غوكو': 'Son Goku Dragon Ball',
+    'جوكو': 'Son Goku Dragon Ball',
+    'فيجيتا': 'Vegeta Dragon Ball',
+    'ناروتو': 'Naruto Uzumaki',
+    'ساسكي': 'Sasuke Uchiha',
+    'ايتاشي': 'Itachi Uchiha',
+    'مادارا': 'Madara Uchiha',
+    'كاكاشي': 'Kakashi Hatake',
+    'ليفاي': 'Levi Ackerman Attack on Titan',
+    'ايرين': 'Eren Yeager Attack on Titan',
+    'ميكاسا': 'Mikasa Ackerman Attack on Titan',
+    'غوجو': 'Gojo Satoru Jujutsu Kaisen',
+    'جوجو': 'Gojo Satoru Jujutsu Kaisen',
+    'سوكونا': 'Ryomen Sukuna Jujutsu Kaisen',
+    'ميغومي': 'Megumi Fushiguro Jujutsu Kaisen',
+    'ايانوكوجي': 'Kiyotaka Ayanokoji Classroom of the Elite',
+    'سايتاما': 'Saitama One Punch Man',
+    'غاروو': 'Garou One Punch Man',
+    'تانجيرو': 'Tanjiro Kamado Demon Slayer',
+    'نيزوكو': 'Nezuko Kamado Demon Slayer',
+    'استا': 'Asta Black Clover',
+    'يونو': 'Yuno Black Clover',
+    'يامي': 'Yami Sukehiro Black Clover',
+    'كانيكي': 'Ken Kaneki Tokyo Ghoul',
+
+    // كرة قدم ومشاهير رياضيون
+    'ميسي': 'Lionel Messi HD',
+    'ليونيل ميسي': 'Lionel Messi HD',
+    'كريستيانو': 'Cristiano Ronaldo HD',
+    'رونالدو': 'Cristiano Ronaldo HD',
+    'الدون': 'Cristiano Ronaldo HD',
+    'صلاح': 'Mohamed Salah HD',
+    'محمد صلاح': 'Mohamed Salah HD',
+    'فخر العرب': 'Mohamed Salah Liverpool',
+    'هالاند': 'Erling Haaland',
+    'مبابي': 'Kylian Mbappe',
+    'نيمار': 'Neymar Jr',
+    'بيلينجهام': 'Jude Bellingham Real Madrid',
+    'فينيسيوس': 'Vinicius Junior Real Madrid',
+    'مودريتش': 'Luka Modric',
+    'بنزيما': 'Karim Benzema',
+    'شيكابالا': 'محمود شيكابالا الزمالك',
+    'زيزو': 'أحمد سيد زيزو',
+    'افشه': 'محمد مجدي قفشة الأهلي',
+    'الشناوي': 'محمد الشناوي الأهلي',
+    'الاهلي': 'النادي الاهلي المصري شعار خلفيات',
+    'الزمالك': 'نادي الزمالك شعار خلفيات',
+    'ريال مدريد': 'Real Madrid wallpaper HD',
+    'برشلونة': 'FC Barcelona wallpaper HD',
+
+    // مشاهير مصريون وعرب
+    'عادل امام': 'عادل إمام الزعيم',
+    'احمد زكي': 'أحمد زكي فنان',
+    'محمود عبد العزيز': 'محمود عبد العزيز فنان',
+    'عمرو دياب': 'عمرو دياب الهضبة',
+    'تامر حسني': 'تامر حسني',
+    'محمد منير': 'محمد منير الكينج',
+
+    // أماكن مقدسة ومعالم
+    'الكعبة': 'الكعبة المشرفة مكة المكرمة HD',
+    'الكعبه': 'الكعبة المشرفة مكة المكرمة HD',
+    'الحرم': 'المسجد الحرام مكة HD',
+    'المسجد النبوي': 'المسجد النبوي الشريف المدينة HD',
+    'القدس': 'المسجد الأقصى قبة الصخرة HD',
+    'الاقصى': 'المسجد الأقصى المبارك HD',
+    'الاهرامات': 'أهرامات الجيزة مصر HD',
+
+    // سيارات
+    'مرسيدس': 'Mercedes-Benz AMG wallpaper 4k',
+    'بي ام دبليو': 'BMW M Power wallpaper 4k',
+    'بورش': 'Porsche 911 GT3 wallpaper 4k',
+    'لامبورجيني': 'Lamborghini Aventador 4k',
+    'فيراري': 'Ferrari supercar 4k'
+};
+
+/**
+ * تنظيف العبارة واستخراج الكلمات المفتاحية الحقيقية للبحث
+ */
+function cleanImageQuery(rawText) {
+    if (!rawText) return '';
+    let q = rawText.trim();
+
+    // إزالة بادئات الأوامر
+    q = q.replace(/^(\.|\/)?(صوره|صورة|صور|img|image|pic)\s*/i, '');
+
+    // إزالة كلمات الطلب العامية المصرية والعربية
+    q = q.replace(/^(عايز|عاوز|عاوزين|ابعتلي|ابعت|هات|ممكن|وريني|نزل|طلعلي|جيب|اعملي)\s+(صوره|صورة|صور|خلفيه|خلفية|صوره لـ|صورة لـ|صور لـ)?\s*/i, '');
+    q = q.replace(/^(صوره\s+لـ|صورة\s+لـ|صور\s+لـ|صوره\s+عن|صورة\s+عن|صور\s+عن|لـ)\s*/i, '');
+
+    // إزالة كلمات التحية أو المجاملة في النهاية
+    q = q.replace(/\s+(لو\s+سمحت|بالله\s+عليك|من\s+فضلك|سريعا|يا\s+شادو|يا\s+بوت|يا\s+عم)\s*$/i, '');
+
+    return q.trim();
+}
+
+/**
+ * ترجمة النص العربي إلى الإنجليزية بدقة فائقة عبر سيرفرات جوجل المفتوحة
  */
 async function translateToEnglish(text) {
     if (!text || !/[\u0600-\u06FF]/.test(text)) return text;
     
-    // المحاولة 1: سيرفر Google clients5 (الأسرع والأدق للهجة المصرية وبدون ليميت)
+    // المحاولة 1: سيرفر Google Chrome Dict API
     try {
         const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=en&q=${encodeURIComponent(text)}`;
         const res = await axios.get(url, { 
-            timeout: 7000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            timeout: 6000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         });
         if (Array.isArray(res.data) && res.data[0] && res.data[0][0]) {
             return String(res.data[0][0]).trim();
@@ -77,18 +179,9 @@ async function translateToEnglish(text) {
     // المحاولة 2: سيرفر Google Translate المفتوح
     try {
         const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`;
-        const res = await axios.get(url, { timeout: 6000 });
+        const res = await axios.get(url, { timeout: 5000 });
         if (Array.isArray(res.data) && res.data[0] && res.data[0][0] && res.data[0][0][0]) {
             return String(res.data[0][0][0]).trim();
-        }
-    } catch (_) {}
-
-    // المحاولة 3: MyMemory الاحتياطي
-    try {
-        const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ar|en`;
-        const res = await axios.get(url, { timeout: 6000 });
-        if (res.data?.responseData?.translatedText) {
-            return res.data.responseData.translatedText.trim();
         }
     } catch (_) {}
 
@@ -96,54 +189,196 @@ async function translateToEnglish(text) {
 }
 
 /**
- * البحث عن صور حقيقية عالية الدقة عبر محرك بينج
+ * محرك 1: البحث عبر Bing Images بدقة عالية
  */
 async function searchBingImages(query) {
     try {
         const bUrl = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&FORM=HDRSC2&first=1`;
         const res = await axios.get(bUrl, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
             },
-            timeout: 9000
+            timeout: 7000
         });
 
         const mRegex = /murl&quot;:&quot;(https?:\/\/[^&]+)&quot;/g;
         const matches = [...res.data.matchAll(mRegex)].map(m => m[1]);
 
-        const validUrls = matches.filter(url => {
+        return matches.filter(url => {
             if (!url.startsWith('http')) return false;
             if (url.includes('.svg') || url.includes('.ico')) return false;
             return true;
         });
-
-        return validUrls;
-    } catch (e) {
-        console.error('⚠️ [Image Search Error]:', e?.message || e);
+    } catch (_) {
         return [];
     }
 }
 
 /**
- * تحميل بافر الصورة من الرابط والتأكد من أنها صورة صالحة 100%
+ * محرك 2: البحث عبر DuckDuckGo Images
+ */
+async function searchDuckDuckGoImages(query) {
+    try {
+        const tokenRes = await axios.get(`https://duckduckgo.com/?q=${encodeURIComponent(query)}&iax=images&ia=images`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept-Language': 'ar,en-US;q=0.8,en;q=0.6'
+            },
+            timeout: 6000
+        });
+        const vqdMatch = tokenRes.data.match(/vqd=["']?([^"'&]+)/i);
+        if (!vqdMatch) return [];
+        const vqd = vqdMatch[1];
+
+        const imgRes = await axios.get(`https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${vqd}&f=,,,`, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Referer': 'https://duckduckgo.com/'
+            },
+            timeout: 7000
+        });
+
+        if (imgRes.data?.results && Array.isArray(imgRes.data.results)) {
+            return imgRes.data.results
+                .map(r => r.image)
+                .filter(u => u && u.startsWith('http') && !u.endsWith('.svg'));
+        }
+    } catch (_) {}
+    return [];
+}
+
+/**
+ * محرك 3: البحث عبر Google Images Scraping
+ */
+async function searchGoogleImages(query) {
+    try {
+        const url = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}&hl=ar&gl=eg`;
+        const res = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept-Language': 'ar,en-US;q=0.8,en;q=0.6'
+            },
+            timeout: 6000
+        });
+
+        const urls = [];
+        const regex = /\["(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp))",\s*(\d+),\s*(\d+)\]/g;
+        let match;
+        while ((match = regex.exec(res.data)) !== null) {
+            const imgUrl = match[1];
+            const w = parseInt(match[2], 10);
+            const h = parseInt(match[3], 10);
+            if (w > 250 && h > 250 && !imgUrl.includes('gstatic.com') && !imgUrl.includes('google.com')) {
+                urls.push(imgUrl);
+            }
+        }
+
+        if (urls.length === 0) {
+            const thumbRegex = /"(https?:\/\/encrypted-tbn0\.gstatic\.com\/images\?q=[^"]+)"/g;
+            let thumbMatch;
+            while ((thumbMatch = thumbRegex.exec(res.data)) !== null) {
+                urls.push(thumbMatch[1].replace(/\\u003d/g, '=').replace(/\\u0026/g, '&'));
+            }
+        }
+
+        return urls;
+    } catch (_) {}
+    return [];
+}
+
+/**
+ * محرك 4: البحث عبر Unsplash للمناظر الطبيعية والسيارات والخلفيات
+ */
+async function searchUnsplashImages(query) {
+    try {
+        const url = `https://unsplash.com/napi/search/photos?query=${encodeURIComponent(query)}&per_page=12`;
+        const res = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+            timeout: 5000
+        });
+        if (res.data?.results && Array.isArray(res.data.results)) {
+            return res.data.results.map(r => r.urls?.regular || r.urls?.full).filter(Boolean);
+        }
+    } catch (_) {}
+    return [];
+}
+
+/**
+ * تحميل بافر الصورة والتحقق من صحتها وحجمها
  */
 async function downloadImageBuffer(url) {
     try {
         const res = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 10000,
+            timeout: 8000,
+            maxContentLength: 15 * 1024 * 1024,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+                'Referer': 'https://www.google.com/'
             }
         });
 
         if (res.status === 200 && res.data) {
             const buf = Buffer.from(res.data);
-            if (isValidImage(buf)) return buf;
+            if (isValidImage(buf) && buf.length > 5000) return buf;
         }
     } catch (_) {}
     return null;
+}
+
+/**
+ * محرك البحث الموحد والذكي: يبحث باللغة العربية والإنجليزية عبر جميع المحركات ويجمع النتائج
+ */
+async function smartSearchImages(cleanQueryText) {
+    const norm = normalizeArabic(cleanQueryText);
+    
+    // 1. فحص الكيانات المشهورة أولاً
+    let entityMatch = null;
+    for (const [key, val] of Object.entries(SMART_ENTITIES)) {
+        if (norm === key || norm.includes(key)) {
+            entityMatch = val;
+            break;
+        }
+    }
+
+    const queriesToRun = [];
+
+    // عبارة البحث الأصلية
+    queriesToRun.push(cleanQueryText);
+
+    // إن وجد تطابق كيان مشهور
+    if (entityMatch) {
+        queriesToRun.push(entityMatch);
+    }
+
+    // ترجمة إلى الإنجليزية للبحث العالمي
+    const englishQuery = await translateToEnglish(cleanQueryText);
+    if (englishQuery && englishQuery.toLowerCase() !== cleanQueryText.toLowerCase()) {
+        queriesToRun.push(englishQuery);
+        if (/wallpaper|car|anime|nature|cat|dog|galaxy|city/i.test(englishQuery)) {
+            queriesToRun.push(`${englishQuery} 4k hd`);
+        }
+    }
+
+    // تجميع الروابط من كل المحركات بالتوازي
+    const urlSet = new Set();
+    for (const q of queriesToRun) {
+        const [bingUrls, ddgUrls, googleUrls, unsplashUrls] = await Promise.all([
+            searchBingImages(q),
+            searchDuckDuckGoImages(q),
+            searchGoogleImages(q),
+            searchUnsplashImages(q)
+        ]);
+
+        for (const u of [...bingUrls, ...ddgUrls, ...googleUrls, ...unsplashUrls]) {
+            if (u && !urlSet.has(u)) urlSet.add(u);
+        }
+
+        if (urlSet.size >= 25) break;
+    }
+
+    return Array.from(urlSet);
 }
 
 /**
@@ -153,7 +388,6 @@ async function generateAiImage(rawPrompt) {
     const englishPrompt = await translateToEnglish(rawPrompt);
     console.log(`🎨 [AI Image Engine] الأصل: "${rawPrompt}" -> الإنجليزية: "${englishPrompt}"`);
 
-    // تعزيز الوصف باللغة الإنجليزية لضمان خروج تفاصيل فنية دقيقة وجمالية عالية
     const visualEnhancers = 'highly detailed, photorealistic, cinematic lighting, masterpiece, 8k resolution, sharp focus';
     const enhancedPrompt = `${englishPrompt}, ${visualEnhancers}`;
 
@@ -163,7 +397,7 @@ async function generateAiImage(rawPrompt) {
         const pUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?seed=${seed}`;
         const res = await axios.get(pUrl, {
             responseType: 'arraybuffer',
-            timeout: 30000,
+            timeout: 25000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
@@ -177,13 +411,13 @@ async function generateAiImage(rawPrompt) {
         console.log('⚠️ [Primary AI Engine Error]:', e?.message || e);
     }
 
-    // 2. محاولة احتياطية بالوصف الإنجليزي الخام بدون إضافات
+    // 2. محاولة احتياطية بالوصف الإنجليزي الخام
     try {
         const seed = Math.floor(Math.random() * 1000000);
         const pUrlRaw = `https://image.pollinations.ai/prompt/${encodeURIComponent(englishPrompt)}?seed=${seed}`;
         const resRaw = await axios.get(pUrlRaw, {
             responseType: 'arraybuffer',
-            timeout: 25000,
+            timeout: 20000,
             headers: {
                 'User-Agent': 'Mozilla/5.0'
             }
@@ -195,29 +429,11 @@ async function generateAiImage(rawPrompt) {
         }
     } catch (_) {}
 
-    // 3. المحاولة البديلة عبر رسم المفاهيم الفنية العالية (Digital Concept Art)
-    try {
-        const bUrl = `https://www.bing.com/images/search?q=${encodeURIComponent('digital art ' + englishPrompt)}&FORM=HDRSC2&first=1`;
-        const bRes = await axios.get(bUrl, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            timeout: 8000
-        });
-        const mRegex = /murl&quot;:&quot;(https?:\/\/[^&]+)&quot;/g;
-        const matches = [...bRes.data.matchAll(mRegex)].map(m => m[1]);
-        for (const u of matches.slice(0, 5)) {
-            const dlBuf = await downloadImageBuffer(u);
-            if (dlBuf && isValidImage(dlBuf)) return dlBuf;
-        }
-    } catch (e) {
-        console.log('⚠️ [Fallback Art Engine Error]:', e?.message || e);
-    }
-
     return null;
 }
 
 /**
  * وضع علامة مائية (Watermark) باسم البوت في الزاوية السفلية اليمنى عبر FFmpeg
- * مع إضافة معيار -strict -1 لضمان خروج JPEG قياسي متوافق 100% مع واتساب
  */
 async function applyWatermark(imgBuffer, isAi = false) {
     if (!isValidImage(imgBuffer)) return imgBuffer;
@@ -265,21 +481,23 @@ async function applyWatermark(imgBuffer, isAi = false) {
                 resolve(imgBuffer);
             });
         } catch (_) {
+            try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
+            try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
             resolve(imgBuffer);
         }
     });
 }
 
 /**
- * معالج أمر الصور الموحد (صوره)
+ * معالج أمر الصور الموحد (صوره / صورة / صور)
  */
 export async function handleImageCommand(mek, currentConn, rawBody) {
     try {
         const body = (rawBody || '').trim();
         const normalized = normalizeArabic(body.toLowerCase());
 
-        // التحقق من أن الرسالة تبدأ بأمر صوره / صورة
-        const isImageCmd = /^(\.|\/)?(صوره|صورة|img|image|pic)(\s|$)/i.test(normalized);
+        // التحقق من أن الرسالة تبدأ بأمر صوره / صورة / صور
+        const isImageCmd = /^(\.|\/)?(صوره|صورة|صور|img|image|pic)(\s|$)/i.test(normalized);
         if (!isImageCmd) return false;
 
         const from = mek.key?.remoteJid || mek.chat;
@@ -290,24 +508,24 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
 
         const botName = mek.botName || currentConn.botName || 'شادو بوت';
 
-        // استخراج نص البحث أو الوصف
-        let query = body.replace(/^(\.|\/)?(صوره|صورة|img|image|pic)\s*/i, '').trim();
+        // تنظيف نص البحث
+        let query = cleanImageQuery(body);
 
-        // إذا كتب المستخدم الأمر بدون نص
+        // إذا كتب المستخدم الأمر بدون نص، عرض الدليل الإرشادي
         if (!query) {
             const guideText = 
                 `📸 *طريقة طلب الصور من البوت:* 🖼️\n\n` +
-                `1️⃣ *بحث عن أي صورة في العالم:* \n` +
-                `• اكتب: *صوره [اسم أي شخص أو حاجة]*\n` +
+                `1️⃣ *بحث فوري عن أي صورة:* \n` +
+                `• اكتب: *صوره [اسم الشخص أو الحاجة]*\n` +
                 `مثال: *صوره كريستيانو رونالدو* | *صوره خلفيات انمي 4k*\n` +
-                `مثال: *صوره سيارات بورش سوداء*\n\n` +
+                `مثال: *صوره سيارة مرسيدس سوداء* | *صوره عادل امام*\n\n` +
                 `2️⃣ *توليد صورة بالذكاء الاصطناعي (AI):* \n` +
                 `• اكتب: *صوره ai [وصف الصورة اللي في خيالك]*\n` +
                 `مثال: *صوره ai قطة في الفضاء بتلبس نظارة شمس*\n` +
                 `مثال: *صوره تخيل قلعة عائمة في السحاب وسط الغروب*\n\n` +
-                `⚡ كل الصور بتجيلك بجودة عالية مع توقيع البوت الرسمي في الأسفل! 👑`;
+                `⚡ البوت يبحث في جوجل وبينج وبأعلى دقة مع توقيع البوت الرسمي! 👑`;
 
-            await delay(1200);
+            await delay(1000);
             await currentConn.sendMessage(from, { text: guideText }, { quoted: mek });
             return true;
         }
@@ -317,7 +535,6 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
                      /\b(ai|ذكاء اصطناعي|بالذكاء الاصطناعي)\b/i.test(query);
 
         if (isAi) {
-            // تنظيف وصف الصورة لإرساله لمحرك الرسم
             let cleanPrompt = query
                 .replace(/^(ai|اي|ذكاء اصطناعي|بالذكاء الاصطناعي|تخيل|ارسم|رسم)\s*/i, '')
                 .replace(/\b(ai|ذكاء اصطناعي|بالذكاء الاصطناعي)\b/gi, '')
@@ -325,8 +542,7 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
 
             if (!cleanPrompt) cleanPrompt = query;
 
-            // تفاعل مع الرسالة
-            await delay(800);
+            await delay(600);
             try { await currentConn.sendMessage(from, { react: { text: '🎨', key: mek.key } }); } catch (_) {}
 
             const aiBuffer = await generateAiImage(cleanPrompt);
@@ -337,7 +553,6 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
                 return true;
             }
 
-            // تطبيق توقيع وعلامة البوت المائية في الأسفل يمين عبر FFmpeg
             const finalImage = await applyWatermark(aiBuffer, true);
             const imageToSend = isValidImage(finalImage) ? finalImage : aiBuffer;
 
@@ -347,44 +562,51 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
                 `👤 *طلب:* @${userNumber}\n` +
                 `👑 *تم الرسم بواسطة:* ${botName}`;
 
-            await delay(1200);
+            await delay(1000);
             await currentConn.sendMessage(from, { 
                 image: imageToSend,
                 caption: caption,
                 mentions: [sender]
             }, { quoted: mek });
 
+            // تحرير الذاكرة
+            if (typeof global.gc === 'function') {
+                try { global.gc(); } catch (_) {}
+            }
             return true;
         }
 
-        // بحث عن صورة عادية
-        await delay(800);
+        // بحث عن صورة عادية عبر محرك البحث الذكي متعدد المصادر
+        await delay(600);
         try { await currentConn.sendMessage(from, { react: { text: '🔍', key: mek.key } }); } catch (_) {}
 
-        const urls = await searchBingImages(query);
-        if (!urls || urls.length === 0) {
-            await currentConn.sendMessage(from, { 
-                text: `❌ تعذر العثور على صورة لـ « ${query} » حالياً.\n💡 يمكنك تجربة رسمها بالذكاء الاصطناعي عبر:\n*(صوره ai ${query})*` 
-            }, { quoted: mek });
-            return true;
-        }
-
-        // اختيار عشوائي من بين أفضل النتائج لضمان التنوع عند تكرار البحث
-        const topPool = urls.slice(0, Math.min(8, urls.length));
-        for (let i = topPool.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [topPool[i], topPool[j]] = [topPool[j], topPool[i]];
-        }
+        const urls = await smartSearchImages(query);
 
         let downloadedBuffer = null;
-        for (const u of topPool) {
-            downloadedBuffer = await downloadImageBuffer(u);
-            if (downloadedBuffer && isValidImage(downloadedBuffer)) break;
+
+        if (urls && urls.length > 0) {
+            // اختيار عشوائي من بين أفضل النتائج لضمان التنوع عند تكرار البحث
+            const topPool = urls.slice(0, Math.min(10, urls.length));
+            for (let i = topPool.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [topPool[i], topPool[j]] = [topPool[j], topPool[i]];
+            }
+
+            for (const u of topPool) {
+                downloadedBuffer = await downloadImageBuffer(u);
+                if (downloadedBuffer && isValidImage(downloadedBuffer)) break;
+            }
+        }
+
+        // إذا تعذر العثور على صورة من الويب، نولدها له بالذكاء الاصطناعي كبديل ذكي تلقائي
+        if (!downloadedBuffer || !isValidImage(downloadedBuffer)) {
+            console.log(`💡 [Image Fallback] لم يتم العثور على صورة ويب صالحة لـ "${query}"، جاري التوليد بالذكاء الاصطناعي...`);
+            downloadedBuffer = await generateAiImage(query);
         }
 
         if (!downloadedBuffer || !isValidImage(downloadedBuffer)) {
             await currentConn.sendMessage(from, { 
-                text: `❌ تعذر تحميل صورة صالحة لـ « ${query} ».. يرجى المحاولة بكلمات بحث أخرى.` 
+                text: `❌ تعذر العثور على صورة لـ « ${query} » حالياً.. يرجى تجربة كلمات بحث أخرى أو وصف أدق.` 
             }, { quoted: mek });
             return true;
         }
@@ -398,12 +620,17 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             `👤 *طلب:* @${userNumber}\n` +
             `👑 *بواسطة:* ${botName}`;
 
-        await delay(1200);
+        await delay(1000);
         await currentConn.sendMessage(from, { 
             image: imageToSend,
             caption: caption,
             mentions: [sender]
         }, { quoted: mek });
+
+        // تحرير الذاكرة وتفريغ الرام
+        if (typeof global.gc === 'function') {
+            try { global.gc(); } catch (_) {}
+        }
 
         return true;
 

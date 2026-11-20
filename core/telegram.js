@@ -1653,7 +1653,7 @@ async function handleTelegramMessage(token, msg) {
     if (['المطور', 'مطور', 'المالك', 'صاحب البوت'].includes(normalizedBody)) {
         const devMsg = 
             `╭━━━〔 👑 *معلومات مطور ومالك شادو بوت* 〕━━━╮\n` +
-            `┃ 👤 *الاسم:* الحج شادو (Shado)\n` +
+            `┃ 👤 *الاسم:* الحج شادو (Shadow)\n` +
             `┃ 📱 *رقم المطور:* +201129249396\n` +
             `┃ 🌐 *يوزر تليجرام المباشر:* @Shadwwmy\n` +
             `┃ 📢 *قناة وبوت شادو الرسمية:* http://t.me/Shadowcom_bot\n` +
