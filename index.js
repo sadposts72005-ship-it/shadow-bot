@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, Browsers } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
@@ -78,6 +78,48 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // حفظ وتعيين رقم البوت الأساسي الجديد وطلب كود اقتران
+    if (req.method === 'POST' && req.url === '/set-bot-number') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+            try {
+                const params = new URLSearchParams(body);
+                const rawPhone = params.get('phone')?.trim();
+                const cleanPhone = rawPhone?.replace(/[^0-9]/g, '');
+                if (cleanPhone && cleanPhone.length >= 8) {
+                    const numFile = path.join(process.cwd(), 'bot_number.json');
+                    fs.writeFileSync(numFile, JSON.stringify({ phone: cleanPhone }, null, 2), 'utf8');
+
+                    // تصفير الجلسة القديمة لربط الرقم الجديد بنظافة تامة
+                    const sessionDir = path.join(process.cwd(), 'session_data');
+                    if (fs.existsSync(sessionDir)) {
+                        const files = fs.readdirSync(sessionDir);
+                        for (const file of files) {
+                            if (file !== 'scramble_db_backup.json') {
+                                try { fs.rmSync(path.join(sessionDir, file), { recursive: true, force: true }); } catch (_) {}
+                            }
+                        }
+                    }
+
+                    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                    res.end(`
+                        <body style="font-family: Arial; text-align: center; padding: 50px; background: #0f172a; color: #fff;">
+                            <h2 style="color: #4ade80;">✅ تم حفظ رقم البوت الأساسي الجديد: +${cleanPhone}</h2>
+                            <p>جاري إعادة تشغيل السيرفر وتوليد كود الاقتران الجديد الآن...<br>انتظر 5 ثوانٍ ثم اضغط على الزر أدناه لرؤية الكود.</p>
+                            <br><a href="/" style="display:inline-block; padding:10px 20px; background:#38bdf8; color:#000; text-decoration:none; border-radius:8px; font-weight:bold;">العودة لرؤية كود الاقتران 🔑</a>
+                        </body>
+                    `);
+                    setTimeout(() => { process.exit(0); }, 1500);
+                    return;
+                }
+            } catch (_) {}
+            res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`<body style="font-family: Arial; text-align: center; padding: 50px; background: #0f172a; color: #fff;"><h2 style="color: #ef4444;">❌ يرجى إدخال رقم هاتف صحيح!</h2><br><a href="/" style="color: #38bdf8;">العودة</a></body>`);
+        });
+        return;
+    }
+
     // تصفير جلسة البوت الأساسي لربط رقم جديد من الصفر
     if (req.url === '/reset-main-bot' && (req.method === 'POST' || req.method === 'GET')) {
         try {
@@ -126,6 +168,11 @@ const server = http.createServer((req, res) => {
 
     // عرض واجهة ويب خفيفة وسهلة لإدارة البوت وربط تليجرام مباشرة بدون واتساب
     const tg = getTelegramStatus();
+    const isWaConnected = Boolean(global.conn?.user?.id && global.conn?.ws?.isOpen !== false);
+    const waUserNum = global.conn?.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
+    const pairCode = global.latestPairingCode || '';
+    const pairPhone = global.latestPairingPhone || '';
+
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(`
         <!DOCTYPE html>
@@ -136,23 +183,47 @@ const server = http.createServer((req, res) => {
             <title>لوحة تحكم شادو بوت | Shadow Bot</title>
             <style>
                 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 25px; text-align: center; }
-                .card { max-width: 520px; margin: 30px auto; background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); border: 1px solid #334155; }
+                .card { max-width: 540px; margin: 20px auto; background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.4); border: 1px solid #334155; }
                 h1 { color: #38bdf8; margin-top: 0; }
-                .status-badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-weight: bold; margin: 10px 0; font-size: 14px; }
+                .status-badge { display: inline-block; padding: 6px 14px; border-radius: 20px; font-weight: bold; margin: 8px 0; font-size: 14px; }
                 .online { background: #065f46; color: #34d399; }
-                .input-box { width: 100%; box-sizing: border-box; padding: 12px; margin: 15px 0; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 14px; text-align: left; direction: ltr; }
+                .waiting { background: #854d0e; color: #facc15; }
+                .input-box { width: 100%; box-sizing: border-box; padding: 12px; margin: 12px 0; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 14px; text-align: left; direction: ltr; }
                 .btn { background: #2563eb; color: #fff; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; width: 100%; transition: 0.2s; }
                 .btn:hover { background: #1d4ed8; }
-                .hint { color: #94a3b8; font-size: 13px; line-height: 1.6; text-align: right; margin-top: 20px; background: #0f172a; padding: 12px; border-radius: 8px; }
+                .hint { color: #94a3b8; font-size: 13px; line-height: 1.6; text-align: right; margin-top: 15px; background: #0f172a; padding: 12px; border-radius: 8px; }
+                .code-box { background: #0284c7; color: #fff; font-size: 26px; font-weight: bold; letter-spacing: 4px; padding: 12px; border-radius: 10px; margin: 15px 0; user-select: all; }
             </style>
         </head>
         <body>
             <div class="card">
                 <h1>🤖 شادو بوت | Shadow Bot</h1>
                 <div class="status-badge online">🟢 السيرفر يعمل بكفاءة 24/7</div>
+                <br>
+                <div class="status-badge ${isWaConnected ? 'online' : 'waiting'}">
+                    ${isWaConnected ? '🟢 واتساب الأساسي: متصل ومحمي (+ ' + waUserNum + ')' : (pairCode ? '🔑 كود ربط واتساب جاهز للاستخدام' : '⏳ واتساب الأساسي: جاري إعداد الاتصال')}
+                </div>
                 <p>الحالة على تليجرام: <b>${tg.isActive ? '⚡ متصل (@' + tg.username + ')' : '🛑 غير مربوط حالياً'}</b></p>
+
+                ${pairCode ? `
+                    <div style="background: #0f172a; border: 2px dashed #38bdf8; padding: 15px; border-radius: 12px; margin: 20px 0;">
+                        <h3 style="color: #38bdf8; margin: 0 0 5px 0;">🔑 كود اقتران واتساب لرقم (+${pairPhone}):</h3>
+                        <div class="code-box">${pairCode}</div>
+                        <p style="font-size: 13px; color: #cbd5e1; margin: 0; line-height: 1.6;">
+                            📱 افتح واتساب في هاتفك ➔ الأجهزة المرتبطة ➔ ربط جهاز ➔ ربط باستخدام رقم الهاتف ➔ واكتب الكود أعلاه!
+                        </p>
+                    </div>
+                ` : ''}
                 
-                <hr style="border: 0; border-top: 1px solid #334155; margin: 25px 0;">
+                <hr style="border: 0; border-top: 1px solid #334155; margin: 20px 0;">
+
+                <h3>📱 ربط أو تغيير رقم البوت الأساسي (واتساب)</h3>
+                <form action="/set-bot-number" method="POST">
+                    <input class="input-box" type="text" name="phone" placeholder="أدخل رقم البوت الجديد مع كود الدولة (مثال: 2010... أو 1...)" required>
+                    <button class="btn" type="submit">طلب كود الاقتران للرقم الجديد 🚀</button>
+                </form>
+
+                <hr style="border: 0; border-top: 1px solid #334155; margin: 20px 0;">
 
                 <h3>✈️ ربط البوت بتليجرام مباشرة (بدون واتساب)</h3>
                 <form action="/set-telegram" method="POST">
@@ -168,7 +239,7 @@ const server = http.createServer((req, res) => {
                     4. انسخ التوكن (Token) وضعه في المربع بالأعلى واضغط ربط!
                 </div>
 
-                <hr style="border: 0; border-top: 1px solid #334155; margin: 25px 0;">
+                <hr style="border: 0; border-top: 1px solid #334155; margin: 20px 0;">
 
                 <h3>🔄 تصفير جلسة البوت الأساسي لربط رقم جديد</h3>
                 <p style="font-size: 13px; color: #94a3b8; line-height: 1.6;">إذا تم حظر رقم البوت الأساسي، يمكنك تصفير جلسته لربط رقم جديد من الصفر دون المساس بالبوتات الفرعية إطلاقاً.</p>
@@ -294,8 +365,8 @@ export async function startShadowBot() {
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent', enabled: false }))
         },
         version,
-        // 🌐 محاكاة متصفح ويندوز كروم حديث معتمد لتفادي كشف السكربتات التلقائية
-        browser: ['Windows', 'Chrome', '131.0.6778.86'],
+        // 🌐 محاكاة متصفح لينكس كروم معتمد رسمياً لمنع الحظر والتعرف التلقائي
+        browser: Browsers.ubuntu('Chrome'),
         // 🔥 قفل كلي وصارم لكل أنواع اللوجات والباينري لمنع التهنيج وسرعة الاستجابة
         logger: pino({ level: 'silent', enabled: false }),
         printQRInTerminal: false,
@@ -306,7 +377,7 @@ export async function startShadowBot() {
         retryRequestDelayMs: 2000,
         maxMsgRetryCount: 5,
         markOnlineOnConnect: true,
-        generateHighQualityLinkPreview: true,
+        generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         fireInitQueries: false,
         shouldSyncHistoryMessage: () => false, // تجاهل الرسائل القديمة تماماً لعدم تكرار الردود عند التشغيل
@@ -418,6 +489,9 @@ export async function startShadowBot() {
                     let code = await conn.requestPairingCode(phoneNumber);
                     code = code?.match(/.{1,4}/g)?.join('-') || code;
 
+                    global.latestPairingCode = code;
+                    global.latestPairingPhone = phoneNumber;
+
                     console.log('\n====================================');
                     console.log(`🤖 SHADOW BOT PAIRING CODE (+${phoneNumber}):`, code);
                     console.log('====================================\n');
@@ -444,6 +518,7 @@ export async function startShadowBot() {
 
         if (connection === 'open') {
             global.botStartTime = Math.floor(Date.now() / 1000);
+            global.latestPairingCode = null; // تم الاقتران بنجاح
             console.log('\n==================================================');
             console.log('✅ [Shadow Bot] متصل الآن وشغال بأعلى كفاءة خاص وجروبات! 🎉');
             console.log('🤖 تم تشغيل البوت بنجاح.. جاهز لاستقبال الأوامر.');
@@ -456,10 +531,11 @@ export async function startShadowBot() {
                 console.error('❌ خطأ في تشغيل عداد الأذكار التلقائي:', err);
             }
 
-            // 👥 مزامنة وتسجيل جميع المجموعات التي يتواجد بها البوت تلقائياً فور الاتصال
-            try {
-                if (typeof conn.groupFetchAllParticipating === 'function') {
-                    conn.groupFetchAllParticipating().then(async participatingGroups => {
+            // 👥 مزامنة وتسجيل جميع المجموعات التي يتواجد بها البوت تلقائياً فور الاتصال (مع مهلة استقرار للشبكة)
+            setTimeout(async () => {
+                try {
+                    if (conn?.user?.id && typeof conn.groupFetchAllParticipating === 'function') {
+                        const participatingGroups = await conn.groupFetchAllParticipating();
                         if (participatingGroups && typeof participatingGroups === 'object') {
                             const { loadLocalDB, saveLocalDB } = await import('./core/database.js');
                             const db = loadLocalDB();
@@ -476,9 +552,9 @@ export async function startShadowBot() {
                                 console.log(`📡 [Groups Sync] تم تحديث وتسجيل ${added} مجموعة جديدة تلقائياً.`);
                             }
                         }
-                    }).catch(() => {});
-                }
-            } catch (_) {}
+                    }
+                } catch (_) {}
+            }, 5000);
 
             // 🤖 تشغيل واسترجاع جميع البوتات الفرعية (Sub-Bots) المسجلة
             try {
@@ -503,32 +579,25 @@ export async function startShadowBot() {
 
         if (connection === 'close') {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            const isTerminal = reason === DisconnectReason.loggedOut || reason === 403 || reason === 401;
+            const isRegistered = Boolean(conn.authState?.creds?.registered);
+            console.log(`⚠️ [Main-Bot] انقطع الاتصال! الكود: ${reason} (مسجل: ${isRegistered})`);
 
-            if (!isTerminal) {
-                console.log(`⚠️ انفصل البوت الرئيسي! الكود: ${reason}. جاري إعادة الاتصال التلقائي النظيف...`);
-                if (!isReconnecting) {
-                    isReconnecting = true;
-                    const delayMs = reason === 515 ? 1000 : 3000;
-                    setTimeout(() => {
-                        isReconnecting = false;
-                        startShadowBot();
-                    }, delayMs);
-                }
-            } else {
-                console.log(`❌ [Shadow Bot] تم حظر رقم البوت الأساسي أو تسجيل الخروج من واتساب (الكود: ${reason}).`);
-                console.log('🛑 تم إيقاف محاولات الاتصال التلقائي لمنع الحظر والسبام.');
-                console.log('🧹 جاري حذف بيانات الجلسة القديمة المحظورة لتتمكن من ربط رقم جديد بنظافة...');
-                try {
-                    const sessionDir = path.join(process.cwd(), 'session_data');
-                    if (fs.existsSync(sessionDir)) {
-                        fs.rmSync(sessionDir, { recursive: true, force: true });
-                        console.log('✅ تم مسح مجلد session_data القديم بنجاح. يمكنك الآن تشغيل البوت برقم جديد.');
-                    }
-                } catch (cleanErr) {
-                    console.error('❌ خطأ أثناء مسح بيانات الجلسة:', cleanErr?.message || cleanErr);
-                }
-                console.log('🤖 السيرفر والبوتات الفرعية وتليجرام مستمرة في العمل بكامل كفاءتها واستقلاليتها 24/7 دون توقف!');
+            // 🛑 الحظر الصريح من واتساب فقط هو كود 403
+            const isBanned = reason === 403;
+            if (isBanned) {
+                console.log(`❌ [Shadow Bot] تم حظر رقم البوت الأساسي من واتساب (403).`);
+                return;
+            }
+
+            // لا نقوم بمسح الجلسة أبداً تلقائياً، بل نعيد الاتصال دائماً للحفاظ على استقرار البوت ورقمك
+            if (!isReconnecting) {
+                isReconnecting = true;
+                const delayMs = (reason === 515 || reason === DisconnectReason.restartRequired) ? 1500 : 3500;
+                console.log(`🔄 [Main-Bot] جاري إعادة الاتصال التلقائي النظيف بعد ${delayMs / 1000} ثوانٍ...`);
+                setTimeout(() => {
+                    isReconnecting = false;
+                    startShadowBot();
+                }, delayMs);
             }
         }
     });
@@ -594,6 +663,13 @@ export async function startShadowBot() {
                     } catch (_) {}
                 }
 
+                // 🛡️ وضع علامة مقروء فوراً على رسائل الخاص لمحاكاة السلوك البشري الطبيعي
+                if (!from.endsWith('@g.us')) {
+                    try {
+                        await conn.readMessages([m.key]);
+                    } catch (_) {}
+                }
+
                 // 🚀 تمرير الرسالة فوراً للمفسر (Handler)
                 await handleAllMessages(m, conn);
             }
@@ -647,3 +723,14 @@ export async function startShadowBot() {
 
 // تشغيل البوت الأساسي لشادو
 startShadowBot();
+
+// 💓 [Watchdog & Heartbeat] نبض حماية البوت الأساسي لمنع واتساب من اعتبار الجلسة خاملة وقطعها (24/7)
+if (!global.mainBotWatchdogInterval) {
+    global.mainBotWatchdogInterval = setInterval(async () => {
+        try {
+            if (global.conn?.ws?.isOpen && global.conn?.user?.id) {
+                await global.conn.sendPresenceUpdate('available');
+            }
+        } catch (_) {}
+    }, 2 * 60 * 1000);
+}

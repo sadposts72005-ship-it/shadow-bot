@@ -1251,7 +1251,9 @@
   },
   "sentRemindersLog": {
     "date": "2026-11-21",
-    "list": []
+    "list": [
+      "salawat_2026-11-21_0"
+    ]
   },
   "mainHajjUsers": [
     "7306393723101@lid",
@@ -1278,7 +1280,7 @@
     "01129249396",
     "194961618301016"
   ],
-  "lastSavedAt": 1795212011991,
+  "lastSavedAt": 1795218623877,
   "knownGroups": [
     "120363410622948934@g.us",
     "120363428308152695@g.us",
@@ -1298,5 +1300,5 @@
   "disabledMuslim": [],
   "mutedUsers": {},
   "antiBan": {},
-  "lastSalawatBroadcastTime": 1795211384512
+  "lastSalawatBroadcastTime": 1795218584966
 }
