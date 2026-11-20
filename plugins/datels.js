@@ -1908,7 +1908,7 @@ const datelsHandler = {
                     `تابع كافة التحديثات، الإعلانات، والمميزات الجديدة والشروحات الحصرية عبر قنواتنا:\n\n` +
                     `🟢 *قناة الواتساب الرسمية:*\nhttps://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
                     `💬 *رابط شات وتواصل المطور واتساب:*\nhttps://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n\n` +
-                    `🔵 *بوت وقناة تليجرام الرسمية:*\nhttp://t.me/Shadowcom_bot\n\n` +
+                    `🔵 *بوت وقناة تليجرام الرسمية:*\nhttps://t.me/Shadowcomm_bot\n\n` +
                     `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy)\n\n` +
                     `✨ شرفنا بانضمامك يا غالي! ❤️`;
                 await currentConn.sendMessage(from, { text: channelMsg }, { quoted: mek });

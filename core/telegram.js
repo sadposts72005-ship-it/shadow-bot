@@ -536,7 +536,7 @@ async function handleTelegramMessage(token, msg) {
                 `💎 *الرصيد والمستوى:* نقاط لا نهائية ولفل 999 👑\n\n` +
                 `📜 اكتب *(الاوامر)* أو *(منيو)* لعرض كافة الأقسام.\n` +
                 `📊 اكتب *(كام تنصيب)* لمتابعة حالة وتحكم جميع البوتات الفرعية عن بُعد!\n` +
-                `📢 *رابط البوت والقناة:* http://t.me/Shadowcom_bot`;
+                `📢 *رابط البوت والقناة:* https://t.me/Shadowcomm_bot`;
         } else {
             welcome = 
                 `👑 *أهلاً بك يا ${username} في شادو بوت (Shadow Bot)!* 🤖✨\n` +
@@ -547,7 +547,7 @@ async function handleTelegramMessage(token, msg) {
                 `🎮 اكتب *(صراحه)* أو *(عين)* أو *(كورة)* لبدء الألعاب.\n` +
                 `🕌 اكتب *(مواقيت الصلاة)* لمعرفة مواعيد الصلاة والأذان.\n` +
                 `🎁 هدية تسجيلك: تم إضافة *1000* نقطة مجانية في رصيدك!\n` +
-                `📢 *رابط البوت:* http://t.me/Shadowcom_bot`;
+                `📢 *رابط البوت:* https://t.me/Shadowcomm_bot`;
         }
         await sendTelegramMessage(token, chatId, welcome, { replyTo: msg.message_id });
         return;
@@ -1656,7 +1656,7 @@ async function handleTelegramMessage(token, msg) {
             `┃ 👤 *الاسم:* الحج شادو (Shadow)\n` +
             `┃ 📱 *رقم المطور:* +201129249396\n` +
             `┃ 🌐 *يوزر تليجرام المباشر:* @Shadwwmy\n` +
-            `┃ 📢 *قناة وبوت شادو الرسمية:* http://t.me/Shadowcom_bot\n` +
+            `┃ 📢 *قناة وبوت شادو الرسمية:* https://t.me/Shadowcomm_bot\n` +
             `┃ 🟢 *قناة الواتساب الرسمية:* https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
             `╰━━━━━━━━━━━━━━━━━━━━╯\n\n` +
             `✨ للتنصيب أو الاستفسار تواصل مباشرة مع الحج شادو! ⚡`;
@@ -1883,7 +1883,7 @@ async function handleTelegramMessage(token, msg) {
             `┃ 🤖 *البوتات الفرعية المسجلة:* ${rep.total} بوت\n` +
             `┃ ⏱️ *وقت التشغيل المستمر:* ${hours} س و ${mins} د و ${secs} ث\n` +
             `┃ 🛡️ *حالة الأمان:* درع عكس الحظر مفعّل 24/7 ⚡\n` +
-            `┃ 📢 *رابط البوت:* http://t.me/Shadowcom_bot\n` +
+            `┃ 📢 *رابط البوت:* https://t.me/Shadowcomm_bot\n` +
             `╰━━━━━━━━━━━━━━━━━━━━╯`;
         await sendTelegramMessage(token, chatId, infoMsg, { replyTo: msg.message_id });
         return;
@@ -1947,7 +1947,7 @@ export async function startTelegramBot(token = null) {
             id: 9240074974,
             is_bot: true,
             first_name: 'Shadow Bot',
-            username: 'Shadowcom_bot'
+            username: 'Shadowcomm_bot'
         };
     }
 

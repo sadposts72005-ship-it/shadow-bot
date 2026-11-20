@@ -24,7 +24,7 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                    `↩️ *للرجوع للقائمة الرئيسية:* أرسل (منيو)\n` +
                    `💡 *للتنقل المباشر:* أرسل رقم القسم (1 - 9)\n` +
                    `📢 *قناة الواتساب:* https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
-                   `🌐 *تليجرام البوت والقناة:* http://t.me/Shadowcom_bot`;
+                   `🌐 *تليجرام البوت والقناة:* https://t.me/Shadowcomm_bot`;
 
     // القائمة الرئيسية المرقمة بالأقسام
     if (!section || section === 0 || section === 'main') {
@@ -245,7 +245,7 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                `💬 *رابط شات وتواصل المطور واتساب:*\n` +
                `https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n\n` +
                `🔵 *بوت وقناة تليجرام الرسمية:*\n` +
-               `http://t.me/Shadowcom_bot\n\n` +
+               `https://t.me/Shadowcomm_bot\n\n` +
                `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy)\n\n` +
                `✨ نتشرف بوجودكم معنا دائماً! ❤️` +
                footer;
@@ -273,7 +273,7 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                `📢 *[ قناة المطور الرسمية وتليجرام ]* ➔ أرسل *9*\n` +
                `• واتساب: https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
                `• شات المطور: https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n` +
-               `• تليجرام: http://t.me/Shadowcom_bot\n` +
+               `• تليجرام: https://t.me/Shadowcomm_bot\n` +
                footer;
     }
 
