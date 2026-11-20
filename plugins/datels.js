@@ -2541,10 +2541,39 @@ const datelsHandler = {
                         return true;
                     }
 
+                    // 🤖 عزل الكتم بالاسم: التحقق هل أمر الكتم موجه لبوت آخر
+                    let specifiedBotForMute = null;
+                    for (const other of otherNames) {
+                        const rx = new RegExp(`(?:^|\\s)(?:يا\\s+)?${other}(?:\\s|$)`, 'i');
+                        if (rx.test(normalizedBody)) {
+                            specifiedBotForMute = other;
+                            break;
+                        }
+                    }
+                    if (specifiedBotForMute) {
+                        // الأمر موجه لبوت آخر بالاسم، هذا البوت لا يتدخل
+                        return false;
+                    }
+
+                    // فحص هل تم توجيه الأمر لهذا البوت تحديداً
+                    let isMuteDirectedToMe = false;
+                    for (const my of cleanMyNames) {
+                        const rx = new RegExp(`(?:^|\\s)(?:يا\\s+)?${my}(?:\\s|$)`, 'i');
+                        if (rx.test(normalizedBody)) {
+                            isMuteDirectedToMe = true;
+                            break;
+                        }
+                    }
+
+                    // إذا وجد أكثر من بوت في الروم ولم يحدد اسم، وكان البوت فرعياً، يترك الأمر للبوت الأساسي
+                    if (!isMuteDirectedToMe && currentConn.isSubBot && otherBotNames.length > 0) {
+                        return false;
+                    }
+
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو بكلمة (كتم) أو اعمله منشن لكتمه ومنعه من التحدث بالجروب!\n(مثال: كتم @العضو أو ريبلاي على رسالته)' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو بكلمة (كتم) أو اعمله منشن لكتمه ومنعه من التحدث بالجروب!\n(مثال: كتم @العضو أو كتم شادو @العضو)' }, { quoted: mek });
                         return true;
                     }
 
@@ -2599,7 +2628,7 @@ const datelsHandler = {
                     if (!localDB.mutedUsers[from]) localDB.mutedUsers[from] = [];
 
                     const alreadyMuted = localDB.mutedUsers[from].some(u => {
-                        const cu = getCleanNumber(u);
+                        const cu = typeof u === 'object' ? (u.user || u.phone || u.lid) : getCleanNumber(u);
                         return cu === targetNum || 
                                (mappedTarget && cu === mappedTarget) || 
                                (phoneClean && cu === phoneClean) || 
@@ -2615,18 +2644,26 @@ const datelsHandler = {
                         return true;
                     }
 
-                    // تخزين أرقام نقية فريدة فقط في قاعدة البيانات لمنع أي تكرار
-                    const currentMuted = new Set((localDB.mutedUsers[from] || []).map(u => getCleanNumber(u)).filter(Boolean));
-                    if (targetNum) currentMuted.add(targetNum);
-                    if (phoneClean) currentMuted.add(phoneClean);
-                    if (lidClean) currentMuted.add(lidClean);
-                    if (mappedTarget) currentMuted.add(mappedTarget);
-                    localDB.mutedUsers[from] = Array.from(currentMuted);
+                    // تنظيف أي كتم سابق لنفس العضو في هذا الجروب
+                    localDB.mutedUsers[from] = localDB.mutedUsers[from].filter(u => {
+                        let cu = typeof u === 'object' ? (u.user || u.phone || u.lid) : getCleanNumber(u);
+                        return cu !== targetNum && (!phoneClean || cu !== phoneClean) && (!lidClean || cu !== lidClean);
+                    });
+
+                    // 🔇 حفظ الكتم مع بيانات البوت المسؤول تحديداً عن مسح رسائله
+                    localDB.mutedUsers[from].push({
+                        user: targetNum,
+                        phone: phoneClean || targetNum,
+                        lid: lidClean || '',
+                        bot: myBotNum,
+                        botName: botName || 'شادو',
+                        time: Date.now()
+                    });
                     saveLocalDB(localDB);
 
                     await handleCommandTiming('🔇');
                     await currentConn.sendMessage(from, {
-                        text: `🔇 *تم كتم العضو @${displayTarget} بنجاح!* 🛑\n\nلن يستطيع التحدث في المجموعة، وأي رسالة سيرسلها هنا سيقوم البوت بحذفها فوراً وتلقائياً.`,
+                        text: `🔇 *تم كتم العضو @${displayTarget} بنجاح!* 🛑\n\n📌 *البوت المسؤول عن الحذف:* 🤖 *(${botName})*\nلن يستطيع التحدث في المجموعة، وأي رسالة سيرسلها سيقوم بوت (${botName}) بحذفها فوراً وتلقائياً.`,
                         mentions: [displayTarget.length > 13 ? `${displayTarget}@lid` : `${displayTarget}@s.whatsapp.net`, target]
                     }, { quoted: mek });
                     return true;
@@ -2646,10 +2683,37 @@ const datelsHandler = {
                         return true;
                     }
 
+                    // 🤖 عزل فك الكتم بالاسم: التحقق هل الأمر موجه لبوت آخر
+                    let specifiedBotForUnmute = null;
+                    for (const other of otherNames) {
+                        const rx = new RegExp(`(?:^|\\s)(?:يا\\s+)?${other}(?:\\s|$)`, 'i');
+                        if (rx.test(normalizedBody)) {
+                            specifiedBotForUnmute = other;
+                            break;
+                        }
+                    }
+                    if (specifiedBotForUnmute) {
+                        return false;
+                    }
+
+                    // فحص هل تم توجيه الأمر لهذا البوت تحديداً
+                    let isUnmuteDirectedToMe = false;
+                    for (const my of cleanMyNames) {
+                        const rx = new RegExp(`(?:^|\\s)(?:يا\\s+)?${my}(?:\\s|$)`, 'i');
+                        if (rx.test(normalizedBody)) {
+                            isUnmuteDirectedToMe = true;
+                            break;
+                        }
+                    }
+
+                    if (!isUnmuteDirectedToMe && currentConn.isSubBot && otherBotNames.length > 0) {
+                        return false;
+                    }
+
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو بكلمة (فك كتم) أو اعمله منشن لفك الكتم عنه!' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: '⚠️ رد على رسالة العضو بكلمة (فك كتم) أو اعمله منشن لفك الكتم عنه!\n(مثال: فك كتم @العضو أو فك كتم شادو @العضو)' }, { quoted: mek });
                         return true;
                     }
 
@@ -2688,27 +2752,30 @@ const datelsHandler = {
                     if (localDB.lidMap?.[targetNum]) targetsToRemove.add(localDB.lidMap[targetNum]);
 
                     const isMutedNow = localDB.mutedUsers[from].some(u => {
-                        const cu = getCleanNumber(u);
+                        const cu = typeof u === 'object' ? (u.user || u.phone || u.lid) : getCleanNumber(u);
                         return targetsToRemove.has(cu) || targetsToRemove.has(u);
                     });
 
+                    const displayTarget = (phoneClean && phoneClean.length <= 13) ? phoneClean : targetNum;
+
                     if (!isMutedNow) {
                         await handleCommandTiming('ℹ️');
-                        await currentConn.sendMessage(from, { text: `ℹ️ العضو @${targetNum} ليس مكتوماً في هذا الجروب!`, mentions: [target] }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `ℹ️ العضو @${displayTarget} ليس مكتوماً في هذا الجروب!`, mentions: [target] }, { quoted: mek });
                         return true;
                     }
 
-                    localDB.mutedUsers[from] = (localDB.mutedUsers[from] || []).filter(u => {
-                        const cu = getCleanNumber(u);
-                        return !targetsToRemove.has(cu) && !targetsToRemove.has(u);
+                    localDB.mutedUsers[from] = localDB.mutedUsers[from].filter(u => {
+                        let cu = typeof u === 'object' ? (u.user || u.phone || u.lid) : getCleanNumber(u);
+                        let uPhone = typeof u === 'object' ? u.phone : '';
+                        let uLid = typeof u === 'object' ? u.lid : '';
+                        return !targetsToRemove.has(cu) && (!uPhone || !targetsToRemove.has(uPhone)) && (!uLid || !targetsToRemove.has(uLid));
                     });
                     saveLocalDB(localDB);
 
                     await handleCommandTiming('🔊');
-                    const displayNum = (phoneClean && phoneClean.length <= 13) ? phoneClean : targetNum;
                     await currentConn.sendMessage(from, {
-                        text: `🔊 *تم فك الكتم عن @${displayNum} بنجاح!* ✨\nأصبح بإمكانه المشاركة وإرسال الرسائل في المجموعة الآن.`,
-                        mentions: [displayNum.length > 13 ? `${displayNum}@lid` : `${displayNum}@s.whatsapp.net`, target]
+                        text: `🔊 *تم فك الكتم عن العضو @${displayTarget} بنجاح!* ✅\n\nيمكنه الآن التحدث وإرسال الرسائل في المجموعة بحرية.`,
+                        mentions: [displayTarget.length > 13 ? `${displayTarget}@lid` : `${displayTarget}@s.whatsapp.net`, target]
                     }, { quoted: mek });
                     return true;
                 }
@@ -2726,9 +2793,10 @@ const datelsHandler = {
                     const displayList = [];
 
                     for (const item of rawList) {
-                        const clean = getCleanNumber(item);
+                        const clean = typeof item === 'object' ? (item.phone || item.user || item.lid) : getCleanNumber(item);
                         if (!clean) continue;
                         const mappedPhone = localDB.lidMap?.[clean] || '';
+                        const bName = typeof item === 'object' ? (item.botName || 'شادو') : 'شادو';
                         // تفضيل رقم الهاتف على معرف الـ LID للعرض
                         const canonicalNum = (clean.length > 13 && mappedPhone && mappedPhone.length <= 13) ? mappedPhone : clean;
 
@@ -2738,7 +2806,7 @@ const datelsHandler = {
 
                         uniquePeople.add(canonicalNum);
                         if (mappedPhone) uniquePeople.add(mappedPhone);
-                        displayList.push(canonicalNum);
+                        displayList.push({ num: canonicalNum, botName: bName });
                     }
 
                     if (displayList.length === 0) {
@@ -2749,10 +2817,11 @@ const datelsHandler = {
                     let listText = `🔇 *قائمة الأعضاء المكتومين في الجروب (${displayList.length}):*\n\n`;
                     const mentions = [];
                     for (let i = 0; i < displayList.length; i++) {
-                        const num = displayList[i];
+                        const entry = displayList[i];
+                        const num = entry.num;
                         const jid = num.length > 13 ? `${num}@lid` : `${num}@s.whatsapp.net`;
                         mentions.push(jid);
-                        listText += `${i + 1}️⃣ @${num}\n`;
+                        listText += `${i + 1}️⃣ @${num} ➔ 🤖 *(${entry.botName})*\n`;
                     }
                     listText += `\n💡 لفك كتم أي عضو اكتب: *(فك كتم @العضو)*`;
                     await currentConn.sendMessage(from, { text: listText, mentions }, { quoted: mek });

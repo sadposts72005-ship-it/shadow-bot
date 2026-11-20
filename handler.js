@@ -26,6 +26,8 @@ import {
     removeSavedBotProfile,
     updateSubBotName,
     updateSubBotCallName,
+    updateSubBotPersonality,
+    updateSubBotGender,
     updateSubBotHajj,
     updateSubBotMainOwner,
     formatGenderText,
@@ -204,6 +206,18 @@ function clearRegisterSession(key) {
     if (key) registerSessions.delete(key);
 }
 
+// ⚙️ جلسات تعديل البوت الفرعي التفاعلية خطوة بخطوة (الاسم، اسم النداء، الشخصية، النوع)
+const editBotSessions = new Map();
+const editBotTimers = new Map();
+
+function clearEditBotSession(key) {
+    if (key && editBotTimers.has(key)) {
+        clearTimeout(editBotTimers.get(key));
+        editBotTimers.delete(key);
+    }
+    if (key) editBotSessions.delete(key);
+}
+
 function clearInstallTimer(key) {
     if (key && installTimers.has(key)) {
         clearTimeout(installTimers.get(key));
@@ -348,7 +362,7 @@ function getCleanNumber(jid) {
     return jid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
 }
 
-function isUserMuted(senderJid, fromGid, localDB) {
+function isUserMuted(senderJid, fromGid, localDB, currentBotNum = '', currentBotName = '') {
     if (!fromGid || !localDB?.mutedUsers?.[fromGid]) return false;
     const mutedList = localDB.mutedUsers[fromGid];
     if (!Array.isArray(mutedList) || mutedList.length === 0) return false;
@@ -359,12 +373,39 @@ function isUserMuted(senderJid, fromGid, localDB) {
     const mappedPhone = localDB.lidMap?.[senderClean] || '';
 
     for (let i = 0; i < mutedList.length; i++) {
-        const u = mutedList[i];
-        const cleanU = typeof u === 'string' ? (u.includes('@') ? getCleanNumber(u) : u) : String(u);
-        if (cleanU === senderClean) return true;
-        if (mappedPhone && cleanU === mappedPhone) return true;
-        if (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) return true;
-        if (u === senderJid) return true;
+        const item = mutedList[i];
+        let cleanU = '';
+        let targetBot = null;
+        let targetBotName = null;
+
+        if (typeof item === 'object' && item !== null) {
+            cleanU = item.user || item.phone || item.lid || '';
+            targetBot = item.bot || null;
+            targetBotName = item.botName || null;
+        } else {
+            cleanU = typeof item === 'string' ? (item.includes('@') ? getCleanNumber(item) : item) : String(item);
+        }
+
+        const isMatch = (
+            cleanU === senderClean ||
+            (mappedPhone && cleanU === mappedPhone) ||
+            (localDB.lidMap?.[cleanU] && localDB.lidMap[cleanU] === senderClean) ||
+            (typeof item === 'string' && item === senderJid) ||
+            (typeof item === 'object' && (item.phone === senderClean || item.lid === senderClean || item.user === senderClean))
+        );
+
+        if (isMatch) {
+            // إذا كان الكتم مخصصاً لبوت معين، نتأكد أن هذا البوت فقط هو الذي يحذف الرسائل
+            if (targetBot || targetBotName) {
+                const normCurrentBotName = (currentBotName || '').toLowerCase().trim();
+                const normTargetBotName = (targetBotName || '').toLowerCase().trim();
+                const matchesBot = (targetBot && currentBotNum && targetBot === currentBotNum) ||
+                                  (normTargetBotName && normCurrentBotName && (normTargetBotName === normCurrentBotName || (normTargetBotName === 'شادو' && normCurrentBotName === '')));
+                if (matchesBot) return true;
+                continue; // إذا كان الكتم لبوت آخر، هذا البوت لا يحذف
+            }
+            return true; // إذا كان كتماً قديماً بدون تحديد بوت، يُحذف كالمعتاد
+        }
     }
     return false;
 }
@@ -583,8 +624,10 @@ export async function handleAllMessages(mek, currentConn) {
 
         // 🔇 فحص كتم المستخدم في هذا الجروب فوراً وبلا انتظار (حذف فوري لأي رسالة حرفياً: كلام، ملصقات، صور، فيديوهات، ريكوردات، ملفات)
         if (isRealGroup) {
+            const myBotNum = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
+            const myBotName = currentConn.botName || currentConn.subBotConfig?.botName || 'شادو';
             const localDB = loadLocalDB();
-            if (isUserMuted(sender, from, localDB)) {
+            if (isUserMuted(sender, from, localDB, myBotNum, myBotName)) {
                 const cleanSender = getCleanNumber(sender);
                 const ownerPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
                 const isOwner = ownerPhoneList.includes(cleanSender) || ownerPhoneList.includes(localDB.lidMap?.[cleanSender]) || mek.key.fromMe;
@@ -1273,9 +1316,13 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         // 🔇 فحص كتم المستخدم في هذا الجروب (حذف فوري لرسائل المكتوم بدون تجميد البوت)
-        if (isRealGroup && isUserMuted(sender, from, localDB)) {
-            currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
-            return;
+        if (isRealGroup) {
+            const myBotNum = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
+            const myBotName = currentConn.botName || currentConn.subBotConfig?.botName || 'شادو';
+            if (isUserMuted(sender, from, localDB, myBotNum, myBotName)) {
+                currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
+                return;
+            }
         }
 
         // 🛡️ مكافحة نصوص الكراش والفيروسات ومسح جهات الاتصال في الجروبات المحمية
@@ -2123,6 +2170,187 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
+        // ⚙️ متابعة خطوات تعديل البوت الفرعي التفاعلية خطوة بخطوة
+        if (editBotSessions.has(cleanSender)) {
+            const editSession = editBotSessions.get(cleanSender);
+            if (editSession && (!editSession.chat || editSession.chat === from)) {
+                if (['الغاء', 'إلغاء', 'cancel', 'خروج', 'stop'].includes(normalizedBody)) {
+                    clearEditBotSession(cleanSender);
+                    await respondWithStrictTiming('🚫', async () => {
+                        await currentConn.sendMessage(from, { text: '🚫 *تم إلغاء عملية تعديل البوت بنجاح!*' }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // تجديد التايمر لدقيقتين إضافيتين
+                if (editBotTimers.has(cleanSender)) {
+                    clearTimeout(editBotTimers.get(cleanSender));
+                    const t = setTimeout(() => { clearEditBotSession(cleanSender); }, 2 * 60 * 1000);
+                    editBotTimers.set(cleanSender, t);
+                }
+
+                const botPhone = editSession.botPhone;
+
+                // الخطوة 1: اختيار الإعداد المراد تعديله
+                if (editSession.step === 'CHOOSE_FIELD') {
+                    // فحص محاولة تعديل الرقم ومنعها فوراً
+                    if (normalizedBody.includes('رقم') || normalizedBody.includes('الرقم') || normalizedBody === '5') {
+                        await respondWithStrictTiming('🚫', async () => {
+                            await currentConn.sendMessage(from, {
+                                text: '🚫 *غير مسموح بتعديل رقم البوت!* 🔒\nرقم البوت مرتبط بالجلسة ومحمي ولا يمكن تغييره.\n\n💡 يمكنك فقط تعديل:\n1️⃣ الاسم\n2️⃣ اسم النداء\n3️⃣ الشخصية\n4️⃣ النوع\n\n✍️ اختر رقم أو اسم الإعداد المراد تعديله:'
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
+
+                    // 1. تعديل الاسم
+                    if (normalizedBody === '1' || normalizedBody === 'الاسم' || normalizedBody === 'اسم') {
+                        editSession.step = 'SET_NAME';
+                        await respondWithStrictTiming('✍️', async () => {
+                            await currentConn.sendMessage(from, {
+                                text: '👤 *[ تعديل اسم البوت ]*\n\n✍️ أرسل الآن الاسم الجديد الذي تريده لبوتك:\n_(مثال: رعد / الزعيم / شادو)_'
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
+
+                    // 2. تعديل اسم النداء
+                    if (normalizedBody === '2' || normalizedBody === 'اسم النداء' || normalizedBody === 'النداء' || normalizedBody === 'نداء') {
+                        editSession.step = 'SET_CALL_NAME';
+                        await respondWithStrictTiming('🏷️', async () => {
+                            await currentConn.sendMessage(from, {
+                                text: '🏷️ *[ تعديل اسم النداء ]*\n\n✍️ أرسل الآن اسم النداء الجديد للبوت:\n_(مثال: شادو / سيدي / معلم)_'
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
+
+                    // 3. تعديل الشخصية
+                    if (normalizedBody === '3' || normalizedBody === 'الشخصية' || normalizedBody === 'الشخصيه' || normalizedBody === 'شخصية') {
+                        editSession.step = 'SET_PERSONALITY';
+                        await respondWithStrictTiming('🎭', async () => {
+                            await currentConn.sendMessage(from, {
+                                text: '🎭 *[ تعديل شخصية البوت ]*\n━━━━━━━━━━━━━━━━━━━━\n1️⃣ - *محترمة* (😇 مؤدب وذوق ولبق)\n2️⃣ - *شريرة* (😈 مرح وجريء وتلقيح)\n\n✍️ _اكتب (محترمة) أو (شريرة) أو الرقم (1 أو 2):_'
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
+
+                    // 4. تعديل النوع
+                    if (normalizedBody === '4' || normalizedBody === 'النوع' || normalizedBody === 'نوع') {
+                        editSession.step = 'SET_GENDER';
+                        await respondWithStrictTiming('⚧️', async () => {
+                            await currentConn.sendMessage(from, {
+                                text: '⚧️ *[ تعديل نوع البوت ]*\n━━━━━━━━━━━━━━━━━━━━\n1️⃣ - *ذكر* (👦 صيغة مذكر: معاك، أقدر، جاهز)\n2️⃣ - *أنثى* (👧 صيغة مؤنث: معاكي، أقدر أساعدك، جاهزة)\n\n✍️ _اكتب (ذكر) أو (أنثى) أو الرقم (1 أو 2):_'
+                            }, { quoted: mek });
+                        });
+                        return;
+                    }
+
+                    await respondWithStrictTiming('⚠️', async () => {
+                        await currentConn.sendMessage(from, {
+                            text: '⚠️ *اختيار غير معروف!*\nيرجى كتابة رقم أو اسم الإعداد المراد تعديله:\n1️⃣ الاسم\n2️⃣ اسم النداء\n3️⃣ الشخصية\n4️⃣ النوع\n_(أو اكتب "إلغاء" للخروج)_'
+                        }, { quoted: mek });
+                    });
+                    return;
+                }
+
+                // تطبيق تعديل الاسم
+                if (editSession.step === 'SET_NAME') {
+                    const newName = body.trim();
+                    if (!newName || newName.length > 30) {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { text: '⚠️ يرجى إرسال اسم مناسب لا يتجاوز 30 حرفاً:' }, { quoted: mek });
+                        });
+                        return;
+                    }
+                    const ok = updateSubBotName(botPhone, newName);
+                    clearEditBotSession(cleanSender);
+                    await respondWithStrictTiming('✅', async () => {
+                        if (ok) {
+                            await currentConn.sendMessage(from, { text: `✅ *تم تحديث اسم البوت بنجاح!* 🎉\n\n👤 *الاسم الجديد:* ${newName}` }, { quoted: mek });
+                        } else {
+                            await currentConn.sendMessage(from, { text: '❌ تعذر تحديث الاسم، يرجى المحاولة مرة أخرى لاحقاً.' }, { quoted: mek });
+                        }
+                    });
+                    return;
+                }
+
+                // تطبيق تعديل اسم النداء
+                if (editSession.step === 'SET_CALL_NAME') {
+                    const newCallName = body.trim();
+                    if (!newCallName || newCallName.length > 30) {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { text: '⚠️ يرجى إرسال اسم نداء مناسب لا يتجاوز 30 حرفاً:' }, { quoted: mek });
+                        });
+                        return;
+                    }
+                    const ok = updateSubBotCallName(botPhone, newCallName);
+                    clearEditBotSession(cleanSender);
+                    await respondWithStrictTiming('✅', async () => {
+                        if (ok) {
+                            await currentConn.sendMessage(from, { text: `✅ *تم تحديث اسم النداء بنجاح!* 🎉\n\n🏷️ *اسم النداء الجديد:* ${newCallName}` }, { quoted: mek });
+                        } else {
+                            await currentConn.sendMessage(from, { text: '❌ تعذر تحديث اسم النداء، يرجى المحاولة مرة أخرى لاحقاً.' }, { quoted: mek });
+                        }
+                    });
+                    return;
+                }
+
+                // تطبيق تعديل الشخصية
+                if (editSession.step === 'SET_PERSONALITY') {
+                    let newPersonality = '';
+                    if (normalizedBody.includes('شرير') || normalizedBody.includes('شريرة') || normalizedBody === '2') {
+                        newPersonality = 'evil';
+                    } else if (normalizedBody.includes('محترم') || normalizedBody.includes('محترمة') || normalizedBody === '1') {
+                        newPersonality = 'respectful';
+                    } else {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { text: '⚠️ يرجى اختيار (محترمة) أو (شريرة) أو كتابة 1 أو 2:' }, { quoted: mek });
+                        });
+                        return;
+                    }
+                    const ok = updateSubBotPersonality(botPhone, newPersonality);
+                    clearEditBotSession(cleanSender);
+                    await respondWithStrictTiming('✅', async () => {
+                        if (ok) {
+                            const pName = newPersonality === 'evil' ? 'شريرة 😈' : 'محترمة 😇';
+                            await currentConn.sendMessage(from, { text: `✅ *تم تحديث شخصية البوت بنجاح!* 🎉\n\n🎭 *الشخصية الجديدة:* ${pName}` }, { quoted: mek });
+                        } else {
+                            await currentConn.sendMessage(from, { text: '❌ تعذر تحديث الشخصية، يرجى المحاولة مرة أخرى لاحقاً.' }, { quoted: mek });
+                        }
+                    });
+                    return;
+                }
+
+                // تطبيق تعديل النوع
+                if (editSession.step === 'SET_GENDER') {
+                    let newGender = '';
+                    if (normalizedBody.includes('انثى') || normalizedBody.includes('أنثى') || normalizedBody.includes('بنت') || normalizedBody === '2') {
+                        newGender = 'female';
+                    } else if (normalizedBody.includes('ذكر') || normalizedBody.includes('ولد') || normalizedBody === '1') {
+                        newGender = 'male';
+                    } else {
+                        await respondWithStrictTiming('⚠️', async () => {
+                            await currentConn.sendMessage(from, { text: '⚠️ يرجى اختيار (ذكر) أو (أنثى) أو كتابة 1 أو 2:' }, { quoted: mek });
+                        });
+                        return;
+                    }
+                    const ok = updateSubBotGender(botPhone, newGender);
+                    clearEditBotSession(cleanSender);
+                    await respondWithStrictTiming('✅', async () => {
+                        if (ok) {
+                            const gName = newGender === 'female' ? 'أنثى 👧' : 'ذكر 👦';
+                            await currentConn.sendMessage(from, { text: `✅ *تم تحديث نوع البوت بنجاح!* 🎉\n\n⚧️ *النوع الجديد:* ${gName}` }, { quoted: mek });
+                        } else {
+                            await currentConn.sendMessage(from, { text: '❌ تعذر تحديث النوع، يرجى المحاولة مرة أخرى لاحقاً.' }, { quoted: mek });
+                        }
+                    });
+                    return;
+                }
+            }
+        }
+
         // 🪪 متابعة خطوات تسجيل وتحديث البطاقة الشخصية التفاعلية خطوة بخطوة
         if (registerSessions.has(cleanSender)) {
             const regSession = registerSessions.get(cleanSender);
@@ -2756,6 +2984,137 @@ export async function handleAllMessages(mek, currentConn) {
                     text: `✅ *تم تغيير اسم البوت بنجاح إلى:* « ${newChosenName} » 🏷️\nسيظهر هذا الاسم في القوائم والردود والألعاب من الآن! 🎉` 
                 }, { quoted: mek });
             });
+            return;
+        }
+
+        // =========================================================================
+        // ⚙️ [أمر تعديل البوت - لصاحب البوت الفرعي أو الحج شادو الأصلي]
+        // =========================================================================
+        const isEditBotCmd = (
+            normalizedBody === 'تعديل' ||
+            normalizedBody === 'تعديل البوت' ||
+            normalizedBody === '.تعديل' ||
+            normalizedBody === '.تعديل البوت' ||
+            normalizedBody === '!تعديل' ||
+            normalizedBody === '/تعديل'
+        );
+
+        if (isEditBotCmd) {
+            // البحث عن بوت هذا المستخدم
+            const registry = loadSubBotsRegistry();
+            let targetBotPhone = null;
+            let targetBotConfig = null;
+
+            // إذا أُرسل الأمر داخل البوت الفرعي نفسه
+            if (subBotConfig && (isSubBotAdmin || isAbsoluteOwner)) {
+                targetBotPhone = myNumber;
+                targetBotConfig = subBotConfig;
+            } else {
+                // البحث في السجل عن بوت يملكه هذا المرسل
+                for (const [phone, bConfig] of Object.entries(registry)) {
+                    const adminP = cleanPhoneNumber(bConfig.adminPhone);
+                    const adminL = cleanPhoneNumber(bConfig.adminLid);
+                    const adminNums = (bConfig.adminNumbers || []).map(p => cleanPhoneNumber(p));
+                    if (adminP === cleanSender || adminL === cleanSender || adminNums.includes(cleanSender) || phone === cleanSender || (isAbsoluteOwner && cleanSender === '201129249396')) {
+                        targetBotPhone = phone;
+                        targetBotConfig = bConfig;
+                        break;
+                    }
+                }
+            }
+
+            if (!targetBotPhone || !targetBotConfig) {
+                await respondWithStrictTiming('⚠️', async () => {
+                    await currentConn.sendMessage(from, {
+                        text: '⚠️ *عذراً! ليس لديك أي بوت فرعي مُنصّب حالياً لتعديله!* 🚫\n\n💡 _لو حابب تنصب بوت جديد لنفسك، اكتب أمر (تنصيب)._'
+                    }, { quoted: mek });
+                });
+                return;
+            }
+
+            // بدء جلسة التعديل التفاعلية
+            clearEditBotSession(cleanSender);
+            const timer = setTimeout(() => { clearEditBotSession(cleanSender); }, 2 * 60 * 1000);
+            editBotTimers.set(cleanSender, timer);
+            editBotSessions.set(cleanSender, {
+                step: 'CHOOSE_FIELD',
+                botPhone: targetBotPhone,
+                botConfig: targetBotConfig,
+                chat: from
+            });
+
+            await respondWithStrictTiming('⚙️', async () => {
+                const bName = targetBotConfig.botName || 'شادو';
+                const cName = targetBotConfig.callName || 'شادو';
+                const pName = targetBotConfig.personality === 'evil' ? 'شريرة 😈' : 'محترمة 😇';
+                const gName = targetBotConfig.gender === 'female' ? 'أنثى 👧' : 'ذكر 👦';
+
+                const editPrompt =
+                    `⚙️ *[ لوحة تعديل إعدادات بوتك الفرعي ]* 🤖\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `📌 *بيانات بوتك الحالية:*\n` +
+                    `👤 *1️⃣ الاسم:* ${bName}\n` +
+                    `🏷️ *2️⃣ اسم النداء:* ${cName}\n` +
+                    `🎭 *3️⃣ الشخصية:* ${pName}\n` +
+                    `⚧️ *4️⃣ النوع:* ${gName}\n` +
+                    `📱 *🔒 رقم البوت:* +${targetBotPhone} _(محمي وممنوع تغييره)_\n` +
+                    `━━━━━━━━━━━━━━━━━━━━\n` +
+                    `❓ *عايز تغير إيه؟ اكتب رقم أو اسم الإعداد:*\n\n` +
+                    `1️⃣ - *الاسم* (لتغيير اسم البوت)\n` +
+                    `2️⃣ - *اسم النداء* (لتغيير اسم النداء)\n` +
+                    `3️⃣ - *الشخصية* (لتغيير الشخصية: محترمة أو شريرة)\n` +
+                    `4️⃣ - *النوع* (لتغيير النوع: ذكر أو أنثى)\n\n` +
+                    `⚠️ _ملاحظة: رقم البوت ثابت وغير قابل للتعديل._\n` +
+                    `🚫 _للإلغاء في أي وقت اكتب: (إلغاء)_`;
+
+                await currentConn.sendMessage(from, { text: editPrompt }, { quoted: mek });
+            });
+            return;
+        }
+
+        // =========================================================================
+        // 🔄 [أمر ريست وحذف جلسة البوت الأساسي - للحج شادو الأصلي فقط]
+        // =========================================================================
+        const isResetMainBot = (
+            normalizedBody === 'ريست البوت الرئيسي' ||
+            normalizedBody === 'تصفير البوت الرئيسي' ||
+            normalizedBody === 'حذف جلسة البوت الرئيسي' ||
+            normalizedBody === '.ريست البوت الرئيسي'
+        );
+
+        if (isResetMainBot) {
+            if (!isAbsoluteOwner) {
+                await respondWithStrictTiming('👑', async () => {
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي فقط! 👑' }, { quoted: mek });
+                });
+                return;
+            }
+
+            await respondWithStrictTiming('🔄', async () => {
+                await currentConn.sendMessage(from, {
+                    text: '🔄 *جاري حذف جلسة البوت الأساسي وتصفيرها بالكامل...* ⏳\n\n✅ البوتات الفرعية ستبقى نشطة ولن تتأثر أبداً!\nسيتم طلب كود اقتران جديد للرقم الجديد خلال ثوانٍ.'
+                }, { quoted: mek });
+            });
+
+            setTimeout(() => {
+                try {
+                    const sessionDir = path.join(process.cwd(), 'session_data');
+                    if (fs.existsSync(sessionDir)) {
+                        const files = fs.readdirSync(sessionDir);
+                        for (const file of files) {
+                            if (file !== 'scramble_db_backup.json') {
+                                try {
+                                    fs.rmSync(path.join(sessionDir, file), { recursive: true, force: true });
+                                } catch (_) {}
+                            }
+                        }
+                    }
+                    console.log('🔄 [Main-Bot] تم تصفير جلسة البوت الأساسي بنجاح بناءً على طلب الحج.');
+                    process.exit(0);
+                } catch (err) {
+                    console.error('❌ خطأ في ريست البوت الأساسي:', err);
+                }
+            }, 2000);
             return;
         }
 

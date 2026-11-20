@@ -78,6 +78,39 @@ const server = http.createServer((req, res) => {
         return;
     }
 
+    // تصفير جلسة البوت الأساسي لربط رقم جديد من الصفر
+    if (req.url === '/reset-main-bot' && (req.method === 'POST' || req.method === 'GET')) {
+        try {
+            const sessionDir = path.join(process.cwd(), 'session_data');
+            if (fs.existsSync(sessionDir)) {
+                const files = fs.readdirSync(sessionDir);
+                for (const file of files) {
+                    if (file !== 'scramble_db_backup.json') {
+                        try {
+                            fs.rmSync(path.join(sessionDir, file), { recursive: true, force: true });
+                        } catch (_) {}
+                    }
+                }
+            }
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`
+                <body style="font-family: Arial; text-align: center; padding: 50px; background: #0f172a; color: #fff;">
+                    <h2 style="color: #4ade80;">✅ تم تصفير جلسة البوت الأساسي بنجاح!</h2>
+                    <p>سيتم إعادة تشغيل السيرفر وطلب كود اقتران جديد الآن.<br>البوتات الفرعية آمنة وشغالة بنسبة 100%.</p>
+                    <br><a href="/" style="color: #38bdf8;">العودة للوحة التحكم</a>
+                </body>
+            `);
+            setTimeout(() => {
+                process.exit(0);
+            }, 1000);
+            return;
+        } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('خطأ أثناء تصفير الجلسة: ' + (e?.message || e));
+            return;
+        }
+    }
+
     // إذا كان الطلب من تطبيق فحص (UptimeRobot / JSON Request)
     if (req.headers.accept && req.headers.accept.includes('application/json')) {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -134,6 +167,14 @@ const server = http.createServer((req, res) => {
                     3. اختر اسماً للبوت، ثم يوزراً ينتهي بكلمة bot.<br>
                     4. انسخ التوكن (Token) وضعه في المربع بالأعلى واضغط ربط!
                 </div>
+
+                <hr style="border: 0; border-top: 1px solid #334155; margin: 25px 0;">
+
+                <h3>🔄 تصفير جلسة البوت الأساسي لربط رقم جديد</h3>
+                <p style="font-size: 13px; color: #94a3b8; line-height: 1.6;">إذا تم حظر رقم البوت الأساسي، يمكنك تصفير جلسته لربط رقم جديد من الصفر دون المساس بالبوتات الفرعية إطلاقاً.</p>
+                <form action="/reset-main-bot" method="POST" onsubmit="return confirm('هل أنت متأكد من تصفير جلسة البوت الأساسي لربط رقم جديد؟ (البوتات الفرعية لن تتأثر)');">
+                    <button class="btn" type="submit" style="background: #dc2626;">تصفير الجلسة وطلب كود جديد 🔄</button>
+                </form>
             </div>
         </body>
         </html>

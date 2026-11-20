@@ -1910,6 +1910,74 @@ export function updateSubBotCallName(phone, newCallName) {
 }
 
 /**
+ * تحديث شخصية البوت الفرعي (محترم أو قليل الأدب)
+ */
+export function updateSubBotPersonality(phone, newPersonality) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    if (!cleanPhone || !newPersonality) return false;
+
+    const personalityValue = (newPersonality === 'bad' || newPersonality === 'قليل الأدب' || newPersonality === 'قليل ادب') ? 'bad' : 'respectful';
+
+    const registry = loadSubBotsRegistry();
+    if (registry[cleanPhone]) {
+        registry[cleanPhone].personality = personalityValue;
+        saveSubBotsRegistry(registry);
+    }
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    const cfgPath = path.join(sessionDir, 'config.json');
+    if (fs.existsSync(cfgPath)) {
+        try {
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            cfg.personality = personalityValue;
+            fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+        } catch (_) {}
+    }
+
+    const active = activeSubBots.get(cleanPhone);
+    if (active) {
+        active.cfg.personality = personalityValue;
+        if (active.sock) active.sock.personality = personalityValue;
+    }
+
+    return true;
+}
+
+/**
+ * تحديث نوع / جنس البوت الفرعي (ذكر أو أنثى)
+ */
+export function updateSubBotGender(phone, newGender) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    if (!cleanPhone || !newGender) return false;
+
+    const genderValue = (newGender === 'female' || newGender === 'أنثى' || newGender === 'انثى' || newGender === 'بنت') ? 'female' : 'male';
+
+    const registry = loadSubBotsRegistry();
+    if (registry[cleanPhone]) {
+        registry[cleanPhone].gender = genderValue;
+        saveSubBotsRegistry(registry);
+    }
+
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    const cfgPath = path.join(sessionDir, 'config.json');
+    if (fs.existsSync(cfgPath)) {
+        try {
+            const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+            cfg.gender = genderValue;
+            fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+        } catch (_) {}
+    }
+
+    const active = activeSubBots.get(cleanPhone);
+    if (active) {
+        active.cfg.gender = genderValue;
+        if (active.sock) active.sock.gender = genderValue;
+    }
+
+    return true;
+}
+
+/**
  * تحديث قائمة الحجاج للبوت الفرعي (إضافة أو إزالة)
  */
 export function updateSubBotHajj(phone, targetNum, action = 'add') {
