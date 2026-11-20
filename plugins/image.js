@@ -1,27 +1,8 @@
 // plugins/image.js
 import axios from 'axios';
-import { spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 
 // ⏱️ دالة تأخير بسيطة
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-let cachedFfmpegBin = null;
-
-async function getFfmpegBin() {
-    if (cachedFfmpegBin) return cachedFfmpegBin;
-    try {
-        const ffStatic = (await import('ffmpeg-static')).default;
-        if (ffStatic && fs.existsSync(ffStatic)) {
-            cachedFfmpegBin = ffStatic;
-            return cachedFfmpegBin;
-        }
-    } catch (_) {}
-    cachedFfmpegBin = 'ffmpeg';
-    return cachedFfmpegBin;
-}
 
 /**
  * فحص وتأكيد صحة بافر الصورة من الهيدر الثنائي (JPEG / PNG / WebP)
@@ -85,7 +66,7 @@ async function translateToEnglish(text) {
     try {
         const url = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=en&q=${encodeURIComponent(text)}`;
         const res = await axios.get(url, { 
-            timeout: 6000,
+            timeout: 5000,
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         });
         if (Array.isArray(res.data) && res.data[0] && res.data[0][0]) {
@@ -96,7 +77,7 @@ async function translateToEnglish(text) {
     // المحاولة 2: سيرفر Google Translate المفتوح
     try {
         const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`;
-        const res = await axios.get(url, { timeout: 5000 });
+        const res = await axios.get(url, { timeout: 4000 });
         if (Array.isArray(res.data) && res.data[0] && res.data[0][0] && res.data[0][0][0]) {
             return String(res.data[0][0][0]).trim();
         }
@@ -117,7 +98,7 @@ async function searchBingImages(query) {
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8'
             },
-            timeout: 8000
+            timeout: 6000
         });
 
         const regex = /murl&quot;:&quot;(https?:\/\/[^&]+)&quot;/g;
@@ -145,7 +126,7 @@ async function searchDuckDuckGoImages(query) {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8'
             },
-            timeout: 6000
+            timeout: 5000
         });
         const vqdMatch = tokenRes.data.match(/vqd=["']?([^"'&]+)/i);
         if (!vqdMatch) return [];
@@ -156,7 +137,7 @@ async function searchDuckDuckGoImages(query) {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Referer': 'https://duckduckgo.com/'
             },
-            timeout: 6000
+            timeout: 5000
         });
 
         if (imgRes.data?.results && Array.isArray(imgRes.data.results)) {
@@ -179,7 +160,7 @@ async function searchGoogleImages(query) {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8'
             },
-            timeout: 6000
+            timeout: 5000
         });
 
         const urls = [];
@@ -208,14 +189,14 @@ async function searchGoogleImages(query) {
 }
 
 /**
- * تحميل بافر الصورة والتحقق من صحتها وحجمها
+ * تحميل بافر الصورة والتحقق من صحتها - مع تحديد حد أقصى للحجم (3MB) لمنع استهلاك الرام
  */
 async function downloadImageBuffer(url) {
     try {
         const res = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 8000,
-            maxContentLength: 15 * 1024 * 1024,
+            timeout: 7000,
+            maxContentLength: 3 * 1024 * 1024, // 3MB كحد أقصى لحماية الذاكرة ومنع كراش الاستضافة
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
@@ -279,7 +260,8 @@ async function generateAiImage(rawPrompt) {
         const pUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?seed=${seed}`;
         const res = await axios.get(pUrl, {
             responseType: 'arraybuffer',
-            timeout: 25000,
+            timeout: 20000,
+            maxContentLength: 4 * 1024 * 1024,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
@@ -298,7 +280,8 @@ async function generateAiImage(rawPrompt) {
         const pUrlRaw = `https://image.pollinations.ai/prompt/${encodeURIComponent(englishPrompt)}?seed=${seed}`;
         const resRaw = await axios.get(pUrlRaw, {
             responseType: 'arraybuffer',
-            timeout: 20000,
+            timeout: 18000,
+            maxContentLength: 4 * 1024 * 1024,
             headers: {
                 'User-Agent': 'Mozilla/5.0'
             }
@@ -314,63 +297,8 @@ async function generateAiImage(rawPrompt) {
 }
 
 /**
- * وضع علامة مائية (Watermark) باسم البوت في الزاوية السفلية اليمنى عبر FFmpeg
- */
-async function applyWatermark(imgBuffer, isAi = false) {
-    if (!isValidImage(imgBuffer)) return imgBuffer;
-
-    return new Promise(async (resolve) => {
-        const randId = Math.random().toString(36).substring(2, 8);
-        const tmpInput = path.join(os.tmpdir(), `wm_in_${Date.now()}_${randId}.jpg`);
-        const tmpOutput = path.join(os.tmpdir(), `wm_out_${Date.now()}_${randId}.jpg`);
-        const wmPath = path.join(process.cwd(), 'assets', isAi ? 'watermark_ai.png' : 'watermark.png');
-
-        if (!fs.existsSync(wmPath)) return resolve(imgBuffer);
-
-        try {
-            fs.writeFileSync(tmpInput, imgBuffer);
-            const ffmpegBin = await getFfmpegBin();
-
-            const ff = spawn(ffmpegBin, [
-                '-y',
-                '-i', tmpInput,
-                '-i', wmPath,
-                '-filter_complex', '[0:v][1:v]overlay=W-w-18:H-h-18',
-                '-strict', '-1',
-                '-q:v', '2',
-                tmpOutput
-            ]);
-
-            ff.on('close', (code) => {
-                try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
-                if (code === 0 && fs.existsSync(tmpOutput)) {
-                    try {
-                        const outBuf = fs.readFileSync(tmpOutput);
-                        try { fs.unlinkSync(tmpOutput); } catch (_) {}
-                        if (isValidImage(outBuf)) {
-                            return resolve(outBuf);
-                        }
-                    } catch (_) {}
-                }
-                try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
-                resolve(imgBuffer);
-            });
-
-            ff.on('error', () => {
-                try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
-                try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
-                resolve(imgBuffer);
-            });
-        } catch (_) {
-            try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
-            try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
-            resolve(imgBuffer);
-        }
-    });
-}
-
-/**
  * معالج أمر الصور الموحد (صوره / صورة / صور)
+ * مصمم ليعمل بأقل استهلاك ذاكرة ورام ممكن (بدون استدعاء FFmpeg نهائياً لتوفير الرام 100%)
  */
 export async function handleImageCommand(mek, currentConn, rawBody) {
     try {
@@ -404,7 +332,7 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
                 `• اكتب: *صوره ai [وصف الصورة اللي في خيالك]*\n` +
                 `مثال: *صوره ai قطة في الفضاء بتلبس نظارة شمس*\n` +
                 `مثال: *صوره تخيل قلعة عائمة في السحاب وسط الغروب*\n\n` +
-                `⚡ البوت يبحث بأعلى دقة وتطابق مع توقيع البوت الرسمي! 👑`;
+                `⚡ البوت يبحث بأعلى دقة وسرعة فائقة وخفة تامة في الرام! 👑`;
 
             await delay(1000);
             await currentConn.sendMessage(from, { text: guideText }, { quoted: mek });
@@ -426,16 +354,13 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             await delay(600);
             try { await currentConn.sendMessage(from, { react: { text: '🎨', key: mek.key } }); } catch (_) {}
 
-            const aiBuffer = await generateAiImage(cleanPrompt);
+            let aiBuffer = await generateAiImage(cleanPrompt);
             if (!aiBuffer || !isValidImage(aiBuffer)) {
                 await currentConn.sendMessage(from, { 
                     text: `❌ عذراً! تعذر توليد الصورة بالذكاء الاصطناعي حالياً، برجاء المحاولة لاحقاً.` 
                 }, { quoted: mek });
                 return true;
             }
-
-            const finalImage = await applyWatermark(aiBuffer, true);
-            const imageToSend = isValidImage(finalImage) ? finalImage : aiBuffer;
 
             const caption = 
                 `🎨 *صورة بالذكاء الاصطناعي:* « ${cleanPrompt} »\n` +
@@ -445,12 +370,13 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
 
             await delay(1000);
             await currentConn.sendMessage(from, { 
-                image: imageToSend,
+                image: aiBuffer,
                 caption: caption,
                 mentions: [sender]
             }, { quoted: mek });
 
-            // تحرير الذاكرة
+            // تفريغ الذاكرة فوراً
+            aiBuffer = null;
             if (typeof global.gc === 'function') {
                 try { global.gc(); } catch (_) {}
             }
@@ -482,23 +408,21 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             return true;
         }
 
-        // تطبيق توقيع وعلامة البوت المائية في الأسفل يمين عبر FFmpeg
-        const finalImage = await applyWatermark(downloadedBuffer, false);
-        const imageToSend = isValidImage(finalImage) ? finalImage : downloadedBuffer;
-
         const caption = 
             `🖼️ *طلبك لصورة:* « ${query} »\n` +
             `👤 *طلب:* @${userNumber}\n` +
             `👑 *بواسطة:* ${botName}`;
 
         await delay(1000);
+        // إرسال الصورة الأصلية النقية مباشرةً دون استدعاء FFmpeg لتوفير الرام 100%
         await currentConn.sendMessage(from, { 
-            image: imageToSend,
+            image: downloadedBuffer,
             caption: caption,
             mentions: [sender]
         }, { quoted: mek });
 
-        // تحرير الذاكرة وتفريغ الرام
+        // تفريغ البافر والذاكرة فوراً
+        downloadedBuffer = null;
         if (typeof global.gc === 'function') {
             try { global.gc(); } catch (_) {}
         }

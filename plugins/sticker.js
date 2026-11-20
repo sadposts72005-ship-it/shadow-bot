@@ -64,6 +64,7 @@ export function convertImageToWebp(imgBuffer) {
             fs.writeFileSync(tmpInput, imgBuffer);
             const ff = spawn('ffmpeg', [
                 '-y',
+                '-threads', '1',
                 '-i', tmpInput,
                 '-vf', 'scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000',
                 '-c:v', 'libwebp',
@@ -116,6 +117,7 @@ export function convertVideoToWebp(vidBuffer) {
             fs.writeFileSync(tmpInput, vidBuffer);
             const ff = spawn('ffmpeg', [
                 '-y',
+                '-threads', '1',
                 '-i', tmpInput,
                 '-t', '10',
                 '-vf', 'scale=512:512:force_original_aspect_ratio=decrease,fps=15,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000',
