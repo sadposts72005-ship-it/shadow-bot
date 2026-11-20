@@ -9,7 +9,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
  * يمنع نهائياً إرسال أي ملفات تالفة أو نصوص أخطاء HTML إلى واتساب
  */
 function isValidImage(buf) {
-    if (!buf || !Buffer.isBuffer(buf) || buf.length < 3000) return false;
+    if (!buf || !Buffer.isBuffer(buf) || buf.length < 2500) return false;
     // JPEG magic bytes: FF D8
     if (buf[0] === 0xFF && buf[1] === 0xD8) return true;
     // PNG magic bytes: 89 50 4E 47
@@ -96,7 +96,8 @@ async function searchBingImages(query) {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8'
+                'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+                'Cookie': 'SRCHHPGUSR=ADLT=OFF; _EDGE_S=F=1'
             },
             timeout: 6000
         });
@@ -117,7 +118,49 @@ async function searchBingImages(query) {
 }
 
 /**
- * محرك 2: البحث عبر DuckDuckGo Images كبديل فوري في حال حظر بينج أو غياب النتائج
+ * محرك 2: البحث عبر Yahoo Images (قوي جداً على مستوى العالم ولا يحظر السيرفرات إطلاقاً)
+ */
+async function searchYahooImages(query) {
+    try {
+        const yUrl = `https://images.search.yahoo.com/search/images?p=${encodeURIComponent(query)}`;
+        const res = await axios.get(yUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8'
+            },
+            timeout: 6000
+        });
+
+        const urls = [];
+        const imgUrlRegex = /imgurl=(https?%3A%2F%2F[^&]+)/gi;
+        let m;
+        while ((m = imgUrlRegex.exec(res.data)) !== null) {
+            try {
+                const decoded = decodeURIComponent(m[1]);
+                if (decoded && !decoded.includes('.svg') && !decoded.includes('.ico')) {
+                    urls.push(decoded);
+                }
+            } catch (_) {}
+        }
+
+        const iurlRegex = /&quot;iurl&quot;:&quot;(https?:\/\/[^&"]+)&quot;/gi;
+        let m2;
+        while ((m2 = iurlRegex.exec(res.data)) !== null) {
+            const u = m2[1];
+            if (u && !u.includes('.svg') && !u.includes('.ico')) {
+                urls.push(u);
+            }
+        }
+
+        return urls;
+    } catch (_) {
+        return [];
+    }
+}
+
+/**
+ * محرك 3: البحث عبر DuckDuckGo Images كبديل فوري في حال غياب النتائج
  */
 async function searchDuckDuckGoImages(query) {
     try {
@@ -150,7 +193,7 @@ async function searchDuckDuckGoImages(query) {
 }
 
 /**
- * محرك 3: البحث عبر Google Images Scraping
+ * محرك 4: البحث عبر Google Images Scraping مع تجاوز صفحة الشروط والموافقة
  */
 async function searchGoogleImages(query) {
     try {
@@ -158,12 +201,15 @@ async function searchGoogleImages(query) {
         const res = await axios.get(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-                'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8'
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+                'Cookie': 'CONSENT=YES+cb.20210720-07-p0.en+FX+410; SOCS=CAISHAgBEhJnd3NfMjAyMzA4MTAtMF9SQzIaAmVuIAEaBgiA_LymBg'
             },
             timeout: 5000
         });
 
         const urls = [];
+        // صور بالحجم الكامل من JSON الخاص بجوجل
         const regex = /\["(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp))",\s*(\d+),\s*(\d+)\]/g;
         let match;
         while ((match = regex.exec(res.data)) !== null) {
@@ -175,6 +221,7 @@ async function searchGoogleImages(query) {
             }
         }
 
+        // في حال عدم العثور، روابط معاينة gstatic الفورية التي تفتح دائماً
         if (urls.length === 0) {
             const thumbRegex = /"(https?:\/\/encrypted-tbn0\.gstatic\.com\/images\?q=[^"]+)"/g;
             let thumbMatch;
@@ -189,14 +236,68 @@ async function searchGoogleImages(query) {
 }
 
 /**
- * تحميل بافر الصورة والتحقق من صحتها - مع تحديد حد أقصى للحجم (3MB) لمنع استهلاك الرام
+ * محرك 5: البحث عبر Yandex Images (أكبر محرك صور عالمي للشخصيات والأفلام والأنمي)
+ */
+async function searchYandexImages(query) {
+    try {
+        const url = `https://yandex.com/images/search?text=${encodeURIComponent(query)}`;
+        const res = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept-Language': 'ar,en;q=0.8'
+            },
+            timeout: 5000
+        });
+
+        const urls = [];
+        const regex = /img_url=([^&"]+)/gi;
+        let m;
+        while ((m = regex.exec(res.data)) !== null) {
+            try {
+                const dec = decodeURIComponent(m[1]);
+                if (dec && dec.startsWith('http') && !dec.includes('.svg')) {
+                    urls.push(dec);
+                }
+            } catch (_) {}
+        }
+        return urls;
+    } catch (_) {
+        return [];
+    }
+}
+
+/**
+ * محرك 6: البحث عبر Wikimedia Commons العالمي (معالم، دول، أعلام، شخصيات تاريخية ومشاهير)
+ */
+async function searchWikimediaImages(query) {
+    try {
+        const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrlimit=10&prop=imageinfo&iiprop=url&format=json`;
+        const res = await axios.get(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ShadowBot/1.0)' },
+            timeout: 4000
+        });
+        const pages = res.data?.query?.pages;
+        if (pages) {
+            const list = [];
+            for (const p of Object.values(pages)) {
+                const u = p.imageinfo?.[0]?.url;
+                if (u && !u.endsWith('.svg') && !u.endsWith('.ogg')) list.push(u);
+            }
+            return list;
+        }
+    } catch (_) {}
+    return [];
+}
+
+/**
+ * تحميل بافر الصورة والتحقق من صحتها - مع تحديد سقف 3MB لحماية الذاكرة وتوفير الرام
  */
 async function downloadImageBuffer(url) {
     try {
         const res = await axios.get(url, {
             responseType: 'arraybuffer',
             timeout: 7000,
-            maxContentLength: 3 * 1024 * 1024, // 3MB كحد أقصى لحماية الذاكرة ومنع كراش الاستضافة
+            maxContentLength: 3 * 1024 * 1024, // 3MB كحد أقصى لحماية الرام تماماً
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
@@ -205,41 +306,47 @@ async function downloadImageBuffer(url) {
 
         if (res.status === 200 && res.data) {
             const buf = Buffer.from(res.data);
-            if (isValidImage(buf) && buf.length > 3000) return buf;
+            if (isValidImage(buf) && buf.length > 2500) return buf;
         }
     } catch (_) {}
     return null;
 }
 
 /**
- * جلب روابط الصور بأعلى دقة وتطابق بالترتيب الواقعي المباشر لمحركات البحث
+ * جلب روابط الصور بأعلى دقة عالمية وتطابق تام عبر كافة المحركات العالمية بالتتابع
  */
-async function fetchAccurateImageUrls(cleanQuery) {
-    // 1. نبحث أولاً في بينج بالعبارة التي طلبها المستخدم بدقة
-    let urls = await searchBingImages(cleanQuery);
-    if (urls && urls.length > 0) return urls;
-
-    // 2. إذا لم يعثر بينج على نتائج، نبحث في DuckDuckGo بالعبارة الأصلية
-    urls = await searchDuckDuckGoImages(cleanQuery);
-    if (urls && urls.length > 0) return urls;
-
-    // 3. إذا لم نعثر، نجرب ترجمة العبارة للإنجليزية للبحث العالمي
+async function fetchWorldwideImageUrls(cleanQuery) {
     const englishQuery = await translateToEnglish(cleanQuery);
-    if (englishQuery && englishQuery.toLowerCase() !== cleanQuery.toLowerCase()) {
-        urls = await searchBingImages(englishQuery);
-        if (urls && urls.length > 0) return urls;
+    const hasEnglish = englishQuery && englishQuery.toLowerCase() !== cleanQuery.toLowerCase();
 
-        urls = await searchDuckDuckGoImages(englishQuery);
-        if (urls && urls.length > 0) return urls;
-    }
+    // قائمة الكلمات للبحث: العربية الأصلية، ثم الإنجليزية العالمية إن اختلفت
+    const queryList = [cleanQuery];
+    if (hasEnglish) queryList.push(englishQuery);
 
-    // 4. المحاولة الأخيرة: محرك صور جوجل
-    urls = await searchGoogleImages(cleanQuery);
-    if (urls && urls.length > 0) return urls;
+    for (const q of queryList) {
+        // الخطوة 1: البحث عبر Bing و Yahoo بالتوازي (الأعلى دقة وسرعة وجودة)
+        const [bingUrls, yahooUrls] = await Promise.all([
+            searchBingImages(q),
+            searchYahooImages(q)
+        ]);
+        const firstPool = [...bingUrls, ...yahooUrls];
+        if (firstPool.length > 0) return firstPool;
 
-    if (englishQuery && englishQuery.toLowerCase() !== cleanQuery.toLowerCase()) {
-        urls = await searchGoogleImages(englishQuery);
-        if (urls && urls.length > 0) return urls;
+        // الخطوة 2: البحث عبر DuckDuckGo و Google بالتوازي
+        const [ddgUrls, googleUrls] = await Promise.all([
+            searchDuckDuckGoImages(q),
+            searchGoogleImages(q)
+        ]);
+        const secondPool = [...ddgUrls, ...googleUrls];
+        if (secondPool.length > 0) return secondPool;
+
+        // الخطوة 3: المحاولة الأخيرة العالمية عبر Yandex و Wikimedia
+        const [yandexUrls, wikiUrls] = await Promise.all([
+            searchYandexImages(q),
+            searchWikimediaImages(q)
+        ]);
+        const thirdPool = [...yandexUrls, ...wikiUrls];
+        if (thirdPool.length > 0) return thirdPool;
     }
 
     return [];
@@ -298,7 +405,7 @@ async function generateAiImage(rawPrompt) {
 
 /**
  * معالج أمر الصور الموحد (صوره / صورة / صور)
- * مصمم ليعمل بأقل استهلاك ذاكرة ورام ممكن (بدون استدعاء FFmpeg نهائياً لتوفير الرام 100%)
+ * نظام بحث عالمي فائق التغطية والأمان وخفيف جداً على الرام
  */
 export async function handleImageCommand(mek, currentConn, rawBody) {
     try {
@@ -325,14 +432,14 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             const guideText = 
                 `📸 *طريقة طلب الصور من البوت:* 🖼️\n\n` +
                 `1️⃣ *بحث فوري عن أي صورة في العالم:* \n` +
-                `• اكتب: *صوره [اسم الشخص أو الحاجة]*\n` +
+                `• اكتب: *صوره [اسم أي شخص أو حاجة في العالم]*\n` +
                 `مثال: *صوره كريستيانو رونالدو* | *صوره خلفيات انمي 4k*\n` +
                 `مثال: *صوره سيارة مرسيدس سوداء* | *صوره عادل امام*\n\n` +
                 `2️⃣ *توليد صورة بالذكاء الاصطناعي (AI):* \n` +
                 `• اكتب: *صوره ai [وصف الصورة اللي في خيالك]*\n` +
                 `مثال: *صوره ai قطة في الفضاء بتلبس نظارة شمس*\n` +
                 `مثال: *صوره تخيل قلعة عائمة في السحاب وسط الغروب*\n\n` +
-                `⚡ البوت يبحث بأعلى دقة وسرعة فائقة وخفة تامة في الرام! 👑`;
+                `⚡ البوت يبحث عالمياً في بينج، ياهو، جوجل، ياندكس بأعلى دقة وخفة تامة! 👑`;
 
             await delay(1000);
             await currentConn.sendMessage(from, { text: guideText }, { quoted: mek });
@@ -375,7 +482,6 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
                 mentions: [sender]
             }, { quoted: mek });
 
-            // تفريغ الذاكرة فوراً
             aiBuffer = null;
             if (typeof global.gc === 'function') {
                 try { global.gc(); } catch (_) {}
@@ -383,17 +489,17 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             return true;
         }
 
-        // بحث عن صورة حقيقية مطابقة للطلب
+        // بحث عالمي متعدد المحركات عن صورة مطابقة للطلب
         await delay(600);
         try { await currentConn.sendMessage(from, { react: { text: '🔍', key: mek.key } }); } catch (_) {}
 
-        const urls = await fetchAccurateImageUrls(query);
+        const urls = await fetchWorldwideImageUrls(query);
 
         let downloadedBuffer = null;
 
         if (urls && urls.length > 0) {
-            // فحص وتحميل الصور بالترتيب الأصلي لأفضل النتائج تطابقاً (بدون خلط عشوائي)
-            for (let i = 0; i < Math.min(6, urls.length); i++) {
+            // فحص وتحميل الصور بالترتيب الأصلي لأعلى نتائج تطابقاً
+            for (let i = 0; i < Math.min(8, urls.length); i++) {
                 downloadedBuffer = await downloadImageBuffer(urls[i]);
                 if (downloadedBuffer && isValidImage(downloadedBuffer)) {
                     break;
@@ -401,9 +507,15 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             }
         }
 
+        // إذا تعذر العثور على صورة ويب، نستدعي الذكاء الاصطناعي فوراً كبديل ذكي لضمان جلب الصورة دائماً
+        if (!downloadedBuffer || !isValidImage(downloadedBuffer)) {
+            console.log(`💡 [Image Global Fallback] لم تتوفر صورة ويب صالحة لـ "${query}"، جاري التوليد بالذكاء الاصطناعي...`);
+            downloadedBuffer = await generateAiImage(query);
+        }
+
         if (!downloadedBuffer || !isValidImage(downloadedBuffer)) {
             await currentConn.sendMessage(from, { 
-                text: `❌ تعذر العثور على صورة لـ « ${query} » حالياً.. يرجى التأكد من الكلمات أو تجربة *(صوره ai ${query})* للرسم بالذكاء الاصطناعي.` 
+                text: `❌ تعذر العثور على صورة لـ « ${query} » حالياً.. يرجى التأكد من كتابة الكلمات بشكل صحيح.` 
             }, { quoted: mek });
             return true;
         }
@@ -414,14 +526,13 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             `👑 *بواسطة:* ${botName}`;
 
         await delay(1000);
-        // إرسال الصورة الأصلية النقية مباشرةً دون استدعاء FFmpeg لتوفير الرام 100%
         await currentConn.sendMessage(from, { 
             image: downloadedBuffer,
             caption: caption,
             mentions: [sender]
         }, { quoted: mek });
 
-        // تفريغ البافر والذاكرة فوراً
+        // تفريغ البافر والذاكرة فوراً لمنع أي تراكم في الرام
         downloadedBuffer = null;
         if (typeof global.gc === 'function') {
             try { global.gc(); } catch (_) {}
