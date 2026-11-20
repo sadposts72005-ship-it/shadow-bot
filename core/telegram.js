@@ -13,7 +13,7 @@ import {
 } from './subbot.js';
 import { getMenuSection } from '../plugins/menu.js';
 
-export const OFFICIAL_TELEGRAM_TOKEN = '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
+export const OFFICIAL_TELEGRAM_TOKEN = '9240074974:AAF80WaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
 
 let isPolling = false;
 let pollingAbortController = null;
@@ -1944,7 +1944,7 @@ export async function startTelegramBot(token = null) {
     if (!botInfo) {
         console.warn('⚠️ [Telegram] تعذر التحقق السريع من التوكن عبر getMe، جاري المتابعة بالبيانات الافتراضية لبدء الاستقبال...');
         botInfo = {
-            id: 9183897015,
+            id: 9240074974,
             is_bot: true,
             first_name: 'Shadow Bot',
             username: 'Shadowcom_bot'

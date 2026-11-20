@@ -2501,10 +2501,8 @@ export async function handleAllMessages(mek, currentConn) {
             if (currentConn.isSubBot) {
                 const subBotNotice = 
                     `⚠️ *عفواً يا فنان/ة! التنصيب متاح حصرياً من البوت الأساسي (شادو بوت)!* 👑🤖\n\n` +
-                    `📱 *رقم البوت الأساسي:*\n` +
-                    `+201229409956\n` +
                     `🔗 *رابط الشات المباشر مع البوت الأساسي:*\n` +
-                    `https://wa.me/201229409956?text=تنصيب\n\n` +
+                    `https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n\n` +
                     `✨ *طريقة التنصيب:*\n` +
                     `1️⃣ افتح الرابط واكتب للبوت الأساسي كلمة *(تنصيب)*.\n` +
                     `2️⃣ اتبع خطوات التنصيب (اسم البوت، ذكر أو أنثى، شخصية محترمة أو قليلة الأدب، ورقمك).\n` +
@@ -3948,12 +3946,11 @@ export async function handleAllMessages(mek, currentConn) {
         if (['المطور', '.المطور', 'مطور', '.مطور', 'المالك', 'صاحب البوت'].includes(normalizedBody)) {
             await respondWithStrictTiming('👑', async () => {
                 const devMsg = 
-                    `👑 *المطور الأساسي للبوتات:* 💻✨\n` +
-                    `🔗 https://wa.me/qr/P3CCDW4MYIZFL1\n\n` +
-                    `🤖 *للتنصيب كلم البوت:* \n` +
-                    `📱 رقم البوت: +201229409956\n` +
-                    `💬 رابط شات البوت: https://wa.me/201229409956\n\n` +
-                    `✨ افتح شات البوت واكتب له *(تنصيب)* وابدأ فوراً! 🚀`;
+                    `👑 *المطور الأساسي للبوتات (الحج شادو):* 💻✨\n` +
+                    `🔗 https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n\n` +
+                    `🤖 *للتنصيب كلم البوت الأساسي:*\n` +
+                    `💬 رابط الشات المباشر: https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n\n` +
+                    `✨ افتح الرابط واكتب له *(تنصيب)* وابدأ فوراً! 🚀`;
                 await currentConn.sendMessage(from, { text: devMsg }, { quoted: mek });
             });
             return;
@@ -3963,9 +3960,9 @@ export async function handleAllMessages(mek, currentConn) {
             await respondWithStrictTiming('🛠️', async () => {
                 const makerMsg = 
                     `👑 *الحج شادو هو المطور الأساسي للبوت!* 🛠️✨\n` +
-                    `🔗 https://wa.me/qr/P3CCDW4MYIZFL1\n` +
+                    `🔗 https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n` +
                     `📱 رقم الحج شادو: 01129249396\n\n` +
-                    `🤖 *للتنصيب كلم البوت الأساسي:* https://wa.me/201229409956`;
+                    `🤖 *للتنصيب كلم البوت الأساسي:* https://wa.me/message/6GYOJZ7NVOIGM1?src=qr`;
                 await currentConn.sendMessage(from, { text: makerMsg }, { quoted: mek });
             });
             return;

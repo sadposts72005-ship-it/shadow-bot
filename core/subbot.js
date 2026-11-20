@@ -862,9 +862,9 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
     try {
         const { loadLocalDB } = await import('./database.js');
         localDB = loadLocalDB();
-        tgToken = process.env.TELEGRAM_BOT_TOKEN || localDB?.telegramToken || '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
+        tgToken = process.env.TELEGRAM_BOT_TOKEN || localDB?.telegramToken || '9240074974:AAF80WaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
     } catch (_) {
-        tgToken = process.env.TELEGRAM_BOT_TOKEN || '9183897015:AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE';
+        tgToken = process.env.TELEGRAM_BOT_TOKEN || '9240074974:AAF80WaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
     }
 
     // 1. إرسال للشخص الذي نصب البوت عبر تليجرام إن كان التنصيب من تليجرام (مرة واحدة فقط)

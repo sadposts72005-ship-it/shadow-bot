@@ -242,6 +242,8 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                `تابع كافة التحديثات، المميزات الجديدة، الإعلانات وشروحات البوت الحصرية عبر قنواتنا الرسمية:\n\n` +
                `🟢 *قناة الواتساب الرسمية:*\n` +
                `https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
+               `💬 *رابط شات وتواصل المطور واتساب:*\n` +
+               `https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n\n` +
                `🔵 *بوت وقناة تليجرام الرسمية:*\n` +
                `http://t.me/Shadowcom_bot\n\n` +
                `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy)\n\n` +
@@ -270,6 +272,7 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                `• قول | ${botName} / بوت | ابوك مين | ردود الشتائم للبوت قليل الأدب | بموت | حصل | خلصانه | اتصل بمين\n\n` +
                `📢 *[ قناة المطور الرسمية وتليجرام ]* ➔ أرسل *9*\n` +
                `• واتساب: https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
+               `• شات المطور: https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n` +
                `• تليجرام: http://t.me/Shadowcom_bot\n` +
                footer;
     }
