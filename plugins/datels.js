@@ -597,22 +597,49 @@ function getLiveConnection() {
     return global.conn || activeRemindersConn || null;
 }
 
+// 🕌 فحص هل الأذان والأذكار معطلة لبوت محدد في جروب معين
+export function isMuslimDisabledForBot(gid, botKey, localDB) {
+    if (!gid || !localDB) return false;
+    if (localDB.disabledMuslimBots && localDB.disabledMuslimBots[gid]) {
+        if (localDB.disabledMuslimBots[gid].includes(botKey)) return true;
+    }
+    if ((!localDB.disabledMuslimBots || !localDB.disabledMuslimBots[gid]) && Array.isArray(localDB.disabledMuslim)) {
+        if (localDB.disabledMuslim.includes(gid)) return true;
+    }
+    return false;
+}
+
+// 👋 فحص هل الترحيبات معطلة لبوت محدد في جروب معين
+export function isWelcomeDisabledForBot(gid, botKey, localDB) {
+    if (!gid || !localDB) return false;
+    if (localDB.disabledWelcomesBots && localDB.disabledWelcomesBots[gid]) {
+        if (localDB.disabledWelcomesBots[gid].includes(botKey)) return true;
+    }
+    if ((!localDB.disabledWelcomesBots || !localDB.disabledWelcomesBots[gid]) && Array.isArray(localDB.disabledWelcomes)) {
+        if (localDB.disabledWelcomes.includes(gid)) return true;
+    }
+    return false;
+}
+
 async function getParticipatingGroupIds(conn, localDB) {
     if (!conn) return [];
     const groupsSet = new Set();
+    const botKey = conn.isSubBot 
+        ? (cleanPhoneNumber(conn.subBotConfig?.phone || conn.user?.id) || 'sub') 
+        : 'main_bot';
 
     // 1. تجميع المجموعات الخاصة بهذا السوكيت (الأساسي أو الفرعي)
     if (conn.isSubBot) {
         if (conn._knownGroupsCache && conn._knownGroupsCache instanceof Set) {
             for (const gid of conn._knownGroupsCache) {
-                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !isMuslimDisabledForBot(gid, botKey, localDB)) {
                     groupsSet.add(gid);
                 }
             }
         }
         if (conn.subBotConfig?.knownGroups && Array.isArray(conn.subBotConfig.knownGroups)) {
             for (const gid of conn.subBotConfig.knownGroups) {
-                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !isMuslimDisabledForBot(gid, botKey, localDB)) {
                     groupsSet.add(gid);
                 }
             }
@@ -624,7 +651,7 @@ async function getParticipatingGroupIds(conn, localDB) {
                 const subReg = reg[cleanBot];
                 if (subReg?.knownGroups && Array.isArray(subReg.knownGroups)) {
                     for (const gid of subReg.knownGroups) {
-                        if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                        if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !isMuslimDisabledForBot(gid, botKey, localDB)) {
                             groupsSet.add(gid);
                         }
                     }
@@ -634,7 +661,7 @@ async function getParticipatingGroupIds(conn, localDB) {
         // إضافة كافة المجموعات المسجلة بقاعدة البيانات ليتمكن البوت الفرعي من الإرسال لجميع مجموعاته
         if (localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
             for (const gid of localDB.knownGroups) {
-                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !isMuslimDisabledForBot(gid, botKey, localDB)) {
                     groupsSet.add(gid);
                 }
             }
@@ -651,7 +678,7 @@ async function getParticipatingGroupIds(conn, localDB) {
         for (const source of dbSources) {
             if (Array.isArray(source)) {
                 for (const gid of source) {
-                    if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                    if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !isMuslimDisabledForBot(gid, botKey, localDB)) {
                         groupsSet.add(gid);
                     }
                 }
@@ -680,7 +707,7 @@ async function getParticipatingGroupIds(conn, localDB) {
             const fetched = await Promise.race([groupsPromise, timeoutPromise]);
             if (fetched && typeof fetched === 'object') {
                 for (const gid of Object.keys(fetched)) {
-                    if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !localDB.disabledMuslim?.includes(gid)) {
+                    if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !isMuslimDisabledForBot(gid, botKey, localDB)) {
                         groupsSet.add(gid);
                         if (!conn.isSubBot && localDB && !localDB.knownGroups.includes(gid)) {
                             localDB.knownGroups.push(gid);
@@ -696,8 +723,12 @@ async function getParticipatingGroupIds(conn, localDB) {
 }
 
 async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, sentGids = new Set()) {
+    const botKey = conn?.isSubBot 
+        ? (cleanPhoneNumber(conn.subBotConfig?.phone || conn.user?.id) || 'sub') 
+        : 'main_bot';
+
     for (let gid of groupIds) {
-        if (!gid || !gid.endsWith('@g.us') || localDB.bannedGroups?.includes(gid) || localDB.disabledMuslim?.includes(gid)) continue;
+        if (!gid || !gid.endsWith('@g.us') || localDB.bannedGroups?.includes(gid) || isMuslimDisabledForBot(gid, botKey, localDB)) continue;
         if (sentGids.has(gid)) continue;
 
         if (!conn || !conn.user?.id) break;
@@ -956,7 +987,10 @@ const datelsHandler = {
         }
         if (action === 'add' && id.endsWith('@g.us')) {
             let localDB = loadLocalDB();
-            if (localDB.bannedGroups?.includes(id) || localDB.disabledWelcomes?.includes(id)) return;
+            const botKey = currentConn.isSubBot 
+                ? (cleanPhoneNumber(currentConn.subBotConfig?.phone || currentConn.user?.id) || 'sub') 
+                : 'main_bot';
+            if (localDB.bannedGroups?.includes(id) || isWelcomeDisabledForBot(id, botKey, localDB)) return;
 
             const myBotNum = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
             const botName = currentConn.botName || (currentConn.subBotConfig?.botName) || 'شادو';
@@ -1002,7 +1036,10 @@ const datelsHandler = {
         }
         if (action === 'remove' && id.endsWith('@g.us')) {
             let localDB = loadLocalDB();
-            if (localDB.bannedGroups?.includes(id) || localDB.disabledWelcomes?.includes(id)) return;
+            const botKey = currentConn.isSubBot 
+                ? (cleanPhoneNumber(currentConn.subBotConfig?.phone || currentConn.user?.id) || 'sub') 
+                : 'main_bot';
+            if (localDB.bannedGroups?.includes(id) || isWelcomeDisabledForBot(id, botKey, localDB)) return;
 
             const myBotNum = currentConn.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
             const botName = currentConn.botName || (currentConn.subBotConfig?.botName) || 'شادو';
@@ -1208,46 +1245,73 @@ const datelsHandler = {
             let textLower = body.toLowerCase().trim();
             let normalizedBody = normalizeArabic(textLower);
 
-            // فحص هل الرسالة موجهة صراحةً لبوت آخر في نفس الروم؟
-            const isCallingOtherBot = otherCallNames.concat(otherBotNames).filter(Boolean).some(otherName => {
-                return (
-                    normalizedBody === otherName ||
-                    normalizedBody === `يا ${otherName}` ||
-                    normalizedBody.startsWith(otherName + ' ') ||
-                    normalizedBody.startsWith(`يا ${otherName} `)
-                );
-            });
-
-            if (isCallingOtherBot) {
-                return false;
-            }
-
-            // فحص هل الرسالة تنادي هذا البوت بالاسم وقص اسم النداء
+            // 🤖 [تحديد وفحص البوت المستهدف وعزل البوتات في الروم الواحد]
+            // يدعم توجيه الأمر للبوت بوضع اسمه في أول الأمر (يا شادو اقفل ترحيبات) أو في آخر الأمر (اقفل ترحيبات شادو)
             const callName = currentConn.callName || currentConn.subBotConfig?.callName || '';
             const normalizedCallName = normalizeArabic((callName || '').toLowerCase().trim());
-            let matchedPrefix = null;
-            const myPrefixes = [];
-            if (normalizedCallName) {
-                myPrefixes.push(`يا ${normalizedCallName} `, `${normalizedCallName} `);
-            }
-            if (normalizedBotName) {
-                myPrefixes.push(`يا ${normalizedBotName} `, `${normalizedBotName} `);
-            }
-            if (!currentConn.isSubBot) {
-                myPrefixes.push('يا شادو ', 'شادو ');
-            }
+            const myNames = [normalizedBotName, normalizedCallName];
+            if (!currentConn.isSubBot) myNames.push('شادو');
+            const cleanMyNames = Array.from(new Set(myNames.filter(Boolean)));
+            const otherNames = otherBotNames.concat(otherCallNames).filter(n => n && !cleanMyNames.includes(n));
 
-            for (const pfx of myPrefixes) {
-                if (normalizedBody.startsWith(pfx)) {
-                    matchedPrefix = pfx;
+            // 1. فحص هل الأمر موجه لبوت آخر في أول الرسالة أو في آخرها؟
+            let isTargetedToOther = false;
+            for (const other of otherNames) {
+                if (
+                    normalizedBody === other ||
+                    normalizedBody === `يا ${other}` ||
+                    normalizedBody.startsWith(other + ' ') ||
+                    normalizedBody.startsWith(`يا ${other} `) ||
+                    normalizedBody.endsWith(' ' + other) ||
+                    normalizedBody.endsWith(' يا ' + other)
+                ) {
+                    isTargetedToOther = true;
                     break;
                 }
             }
 
-            if (matchedPrefix) {
-                normalizedBody = normalizedBody.slice(matchedPrefix.length).trim();
-                textLower = textLower.slice(matchedPrefix.length).trim();
-                body = body.slice(matchedPrefix.length).trim();
+            if (isTargetedToOther) {
+                return false;
+            }
+
+            // 2. فحص هل الأمر موجه لهذا البوت تحديداً (في أول الرسالة أو في آخرها) وقص الاسم
+            let matchedBotName = null;
+            // فحص من البداية
+            for (const my of cleanMyNames) {
+                if (normalizedBody.startsWith(`يا ${my} `)) {
+                    matchedBotName = { type: 'start', len: `يا ${my} `.length, rawPfx: `يا ${my} ` };
+                    break;
+                }
+                if (normalizedBody.startsWith(`${my} `)) {
+                    matchedBotName = { type: 'start', len: `${my} `.length, rawPfx: `${my} ` };
+                    break;
+                }
+            }
+            // فحص من النهاية (مثال: اقفل ترحيبات شادو / قفل الاذان يا شادو / قفل الروم شادو)
+            if (!matchedBotName) {
+                for (const my of cleanMyNames) {
+                    if (normalizedBody.endsWith(' يا ' + my)) {
+                        matchedBotName = { type: 'end', len: (' يا ' + my).length, name: my };
+                        break;
+                    }
+                    if (normalizedBody.endsWith(' ' + my)) {
+                        matchedBotName = { type: 'end', len: (' ' + my).length, name: my };
+                        break;
+                    }
+                }
+            }
+
+            if (matchedBotName) {
+                if (matchedBotName.type === 'start') {
+                    normalizedBody = normalizedBody.slice(matchedBotName.len).trim();
+                    textLower = textLower.slice(matchedBotName.len).trim();
+                    body = body.slice(matchedBotName.len).trim();
+                } else if (matchedBotName.type === 'end') {
+                    normalizedBody = normalizedBody.slice(0, -matchedBotName.len).trim();
+                    textLower = textLower.slice(0, -matchedBotName.len).trim();
+                    const endRegex = new RegExp(`\\s+(?:يا\\s+)?${matchedBotName.name}$`, 'i');
+                    body = body.replace(endRegex, '').trim();
+                }
             }
 
             // دالة التفاعل والمزامنة
@@ -2095,86 +2159,107 @@ const datelsHandler = {
                     return true;
                 }
 
+                const myBotKey = currentConn.isSubBot 
+                    ? (cleanPhoneNumber(currentConn.subBotConfig?.phone || currentConn.user?.id) || 'sub') 
+                    : 'main_bot';
+
                 // تفعيل الترحيب
-                const isEnableWelcome = /^(?:\.|\/|!)?(?:تفعيل\s*الترحيب|تشغيل\s*الترحيب|تفعيل\s*ترحيب|تشغيل\s*ترحيب)$/i.test(normalizedBody);
+                const isEnableWelcome = /^(?:\.|\/|!)?(?:تفعيل\s*الترحيب|تشغيل\s*الترحيب|تفعيل\s*ترحيب|تشغيل\s*ترحيب|فتح\s*الترحيب|فتح\s*ترحيب|تفعيل\s*ترحيبات|تشغيل\s*ترحيبات|فتح\s*ترحيبات|افتح\s*ترحيبات|افتح\s*الترحيب)$/i.test(normalizedBody);
                 if (isEnableWelcome) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
-                    if (!localDB.disabledWelcomes?.includes(from)) {
+                    if (!isWelcomeDisabledForBot(from, myBotKey, localDB)) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ رسائل الترحيب مفعلة وشغالة بالفعل في هذا الجروب! ✅' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `⚠️ رسائل الترحيب لبوت (${botName}) مفعلة وشغالة بالفعل في هذا الجروب! ✅` }, { quoted: mek });
                         return true;
                     }
-                    localDB.disabledWelcomes = localDB.disabledWelcomes.filter(g => g !== from);
+                    localDB.disabledWelcomesBots = localDB.disabledWelcomesBots || {};
+                    if (localDB.disabledWelcomesBots[from]) {
+                        localDB.disabledWelcomesBots[from] = localDB.disabledWelcomesBots[from].filter(b => b !== myBotKey);
+                    }
+                    if (Array.isArray(localDB.disabledWelcomes)) {
+                        localDB.disabledWelcomes = localDB.disabledWelcomes.filter(g => g !== from);
+                    }
                     saveLocalDB(localDB);
                     await handleCommandTiming('👋');
-                    await currentConn.sendMessage(from, { text: '✅ *تم تفعيل رسائل الترحيب التلقائية بالأعضاء الجدد بنجاح!* 🎉' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `✅ *تم تفعيل رسائل الترحيب التلقائية لبوت (${botName}) بالأعضاء الجدد بنجاح!* 🎉` }, { quoted: mek });
                     return true;
                 }
 
-                // إلغاء الترحيب
-                const isDisableWelcome = /^(?:\.|\/|!)?(?:الغاء\s*الترحيب|إلغاء\s*الترحيب|القاء\s*الترحيب|ايقاف\s*الترحيب|إيقاف\s*الترحيب|تعطيل\s*الترحيب|قفل\s*الترحيب|تعطيل\s*ترحيب)$/i.test(normalizedBody);
+                // إلغاء / قفل الترحيب
+                const isDisableWelcome = /^(?:\.|\/|!)?(?:الغاء\s*الترحيب|إلغاء\s*الترحيب|القاء\s*الترحيب|ايقاف\s*الترحيب|إيقاف\s*الترحيب|تعطيل\s*الترحيب|قفل\s*الترحيب|تعطيل\s*ترحيب|قفل\s*ترحيب|قفل\s*ترحيبات|اقفل\s*ترحيبات|ايقاف\s*ترحيبات|إيقاف\s*ترحيبات|تعطيل\s*ترحيبات)$/i.test(normalizedBody);
                 if (isDisableWelcome) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
-                    if (localDB.disabledWelcomes?.includes(from)) {
+                    if (isWelcomeDisabledForBot(from, myBotKey, localDB)) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ رسائل الترحيب معطلة بالفعل في هذا الجروب! ❌' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `⚠️ رسائل الترحيب لبوت (${botName}) معطلة بالفعل في هذا الجروب! ❌` }, { quoted: mek });
                         return true;
                     }
-                    if (!localDB.disabledWelcomes) localDB.disabledWelcomes = [];
-                    localDB.disabledWelcomes.push(from);
+                    localDB.disabledWelcomesBots = localDB.disabledWelcomesBots || {};
+                    if (!localDB.disabledWelcomesBots[from]) localDB.disabledWelcomesBots[from] = [];
+                    if (!localDB.disabledWelcomesBots[from].includes(myBotKey)) {
+                        localDB.disabledWelcomesBots[from].push(myBotKey);
+                    }
                     saveLocalDB(localDB);
                     await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ *تم إيقاف وتعطيل رسائل الترحيب التلقائية بالجروب بنجاح!*' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `❌ *تم إيقاف وتعطيل رسائل الترحيب التلقائية لبوت (${botName}) في هذا الجروب بنجاح!*` }, { quoted: mek });
                     return true;
                 }
 
                 // 🕌 تشغيل الأذكار والأذان (تشغيل مسلم)
-                const isEnableMuslim = /^(?:\.|\/|!)?(?:تشغيل\s*مسلم|تفعيل\s*مسلم|فتح\s*مسلم|تشغيلو|تشغيله|تشغيل\s*الاذان|تفعيل\s*الاذان|تشغيل\s*الأذان|تفعيل\s*الأذان)$/i.test(normalizedBody);
+                const isEnableMuslim = /^(?:\.|\/|!)?(?:تشغيل\s*مسلم|تفعيل\s*مسلم|فتح\s*مسلم|افتح\s*مسلم|تشغيلو|تشغيله|تشغيل\s*الاذان|تفعيل\s*الاذان|تشغيل\s*الأذان|تفعيل\s*الأذان|فتح\s*الاذان|فتح\s*الأذان|افتح\s*الاذان|افتح\s*الأذان|تشغيل\s*الاذكار|تفعيل\s*الاذكار|فتح\s*الاذكار|افتح\s*الاذكار)$/i.test(normalizedBody);
                 if (isEnableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
-                    if (!localDB.disabledMuslim) localDB.disabledMuslim = [];
-                    if (!localDB.disabledMuslim.includes(from)) {
+                    if (!isMuslimDisabledForBot(from, myBotKey, localDB)) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ مواقيت الصلاة والأذكار التلقائية مفعلة وشغالة بالفعل في هذا الجروب! 🕌✨' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `⚠️ مواقيت الصلاة والأذكار لبوت (${botName}) مفعلة وشغالة بالفعل في هذا الجروب! 🕌✨` }, { quoted: mek });
                         return true;
                     }
-                    localDB.disabledMuslim = localDB.disabledMuslim.filter(g => g !== from);
+                    localDB.disabledMuslimBots = localDB.disabledMuslimBots || {};
+                    if (localDB.disabledMuslimBots[from]) {
+                        localDB.disabledMuslimBots[from] = localDB.disabledMuslimBots[from].filter(b => b !== myBotKey);
+                    }
+                    if (Array.isArray(localDB.disabledMuslim)) {
+                        localDB.disabledMuslim = localDB.disabledMuslim.filter(g => g !== from);
+                    }
                     saveLocalDB(localDB);
                     await handleCommandTiming('🕌');
-                    await currentConn.sendMessage(from, { text: '✅ *تم تشغيل وتفعيل مواقيت الصلاة والأذكار التلقائية في هذا الجروب بنجاح!* 🕌🎉' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `✅ *تم تشغيل وتفعيل مواقيت الصلاة والأذكار التلقائية لبوت (${botName}) في هذا الجروب بنجاح!* 🕌🎉` }, { quoted: mek });
                     return true;
                 }
 
-                // 🛑 إيقاف الأذكار والأذان (وقف مسلم)
-                const isDisableMuslim = /^(?:\.|\/|!)?(?:وقف\s*مسلم|وقفو|وقفه|قفل\s*مسلم|تعطيل\s*مسلم|ايقاف\s*مسلم|إيقاف\s*مسلم|الغاء\s*مسلم|إلغاء\s*مسلم|وقف\s*الاذان|تعطيل\s*الاذان|ايقاف\s*الاذان|إيقاف\s*الاذان)$/i.test(normalizedBody);
+                // 🛑 إيقاف الأذكار والأذان (وقف مسلم / قفل الاذان / قفل الاذكار)
+                const isDisableMuslim = /^(?:\.|\/|!)?(?:وقف\s*مسلم|وقفو|وقفه|قفل\s*مسلم|اقفل\s*مسلم|تعطيل\s*مسلم|ايقاف\s*مسلم|إيقاف\s*مسلم|الغاء\s*مسلم|إلغاء\s*مسلم|وقف\s*الاذان|تعطيل\s*الاذان|ايقاف\s*الاذان|إيقاف\s*الاذان|قفل\s*الاذان|اقفل\s*الاذان|وقف\s*الأذان|تعطيل\s*الأذان|ايقاف\s*الأذان|إيقاف\s*الأذان|قفل\s*الأذان|اقفل\s*الأذان|قفل\s*الاذكار|اقفل\s*الاذكار|تعطيل\s*الاذكار|ايقاف\s*الاذكار|إيقاف\s*الاذكار)$/i.test(normalizedBody);
                 if (isDisableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
-                    if (!localDB.disabledMuslim) localDB.disabledMuslim = [];
-                    if (localDB.disabledMuslim.includes(from)) {
+                    if (isMuslimDisabledForBot(from, myBotKey, localDB)) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: '⚠️ مواقيت الصلاة والأذكار متوقفة بالفعل في هذا الجروب! 🛑' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `⚠️ مواقيت الصلاة والأذكار لبوت (${botName}) متوقفة بالفعل في هذا الجروب! 🛑` }, { quoted: mek });
                         return true;
                     }
-                    localDB.disabledMuslim.push(from);
+                    localDB.disabledMuslimBots = localDB.disabledMuslimBots || {};
+                    if (!localDB.disabledMuslimBots[from]) localDB.disabledMuslimBots[from] = [];
+                    if (!localDB.disabledMuslimBots[from].includes(myBotKey)) {
+                        localDB.disabledMuslimBots[from].push(myBotKey);
+                    }
                     saveLocalDB(localDB);
                     await handleCommandTiming('🛑');
-                    await currentConn.sendMessage(from, { text: '🛑 *تم إيقاف مواقيت الصلاة والأذكار التلقائية في هذا الروم بنجاح!* 📴\n(باقي الرومات ستستمر بالعمل كالمعتاد دون أي تغيير)' }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `🛑 *تم إيقاف مواقيت الصلاة والأذكار التلقائية لبوت (${botName}) في هذا الروم بنجاح!* 📴\n(باقي البوتات والرومات ستستمر بالعمل كالمعتاد دون أي تغيير)` }, { quoted: mek });
                     return true;
                 }
 
@@ -2747,8 +2832,9 @@ const datelsHandler = {
                     let actualAdminsList = participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin');
                     let adminsCount = actualAdminsList.length;
                     let isLocked = !!groupMetadata?.announce;
-                    let isWelcome = !localDB.disabledWelcomes?.includes(from);
-                    let isMuslim = !localDB.disabledMuslim?.includes(from);
+                    const infoBotKey = currentConn.isSubBot ? (cleanPhoneNumber(currentConn.subBotConfig?.phone || currentConn.user?.id) || 'sub') : 'main_bot';
+                    let isWelcome = !isWelcomeDisabledForBot(from, infoBotKey, localDB);
+                    let isMuslim = !isMuslimDisabledForBot(from, infoBotKey, localDB);
                     let infoText = `╭━━━〔 📋 *معلومات الجروب* 〕━━━╮\n\n` +
                                    `🏷️ *اسم الجروب:* ${subject}\n` +
                                    `👥 *عدد الأعضاء:* ${membersCount} عضو\n` +

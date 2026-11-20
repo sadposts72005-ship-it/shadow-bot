@@ -1405,45 +1405,69 @@ export async function handleAllMessages(mek, currentConn) {
             return;
         }
 
-        // 2️⃣ فحص هل الرسالة تبدأ باسم نداء هذا البوت ومتبوعة بأمر (مثلاً: زيزو بنك / يا زيزو منيو / الرعد روليت 500)
-        let matchedPrefix = null;
-        const myPrefixes = [];
-        if (normalizedCallName) {
-            myPrefixes.push(`يا ${normalizedCallName} `, `${normalizedCallName} `);
-        }
-        myPrefixes.push(`يا ${normalizedBotName} `, `${normalizedBotName} `);
-        if (!currentConn.isSubBot) {
-            myPrefixes.push('يا شادو ', 'شادو ');
-        }
+        // 2️⃣ تحديد وفحص البوت المستهدف وعزل البوتات في الروم الواحد (سواء كان اسم البوت في أول الأمر أو في آخره)
+        const myNames = [normalizedBotName, normalizedCallName];
+        if (!currentConn.isSubBot) myNames.push('شادو');
+        const cleanMyNames = Array.from(new Set(myNames.filter(Boolean)));
+        const otherNames = otherBotNames.concat(otherCallNames).filter(n => n && !cleanMyNames.includes(n));
 
-        for (const pfx of myPrefixes) {
-            if (normalizedBody.startsWith(pfx)) {
-                matchedPrefix = pfx;
+        // فحص هل الرسالة موجهة صراحةً لبوت آخر في أولها أو في آخرها؟
+        let isTargetedToOther = false;
+        for (const other of otherNames) {
+            if (
+                normalizedBody === other ||
+                normalizedBody === `يا ${other}` ||
+                normalizedBody.startsWith(other + ' ') ||
+                normalizedBody.startsWith(`يا ${other} `) ||
+                normalizedBody.endsWith(' ' + other) ||
+                normalizedBody.endsWith(' يا ' + other)
+            ) {
+                isTargetedToOther = true;
                 break;
             }
         }
 
-        if (matchedPrefix) {
-            // تم نداء هذا البوت بالتحديد: نقوم بقص اسم النداء لتمرير الأمر مباشرة للبوت
-            normalizedBody = normalizedBody.slice(matchedPrefix.length).trim();
-            textLower = textLower.slice(matchedPrefix.length).trim();
-            mek.text = textLower;
-        } else {
-            // 3️⃣ فحص هل الرسالة موجهة صراحةً لبوت آخر في نفس الروم/النظام؟
-            const isCallingOtherBot = otherCallNames.concat(otherBotNames).filter(Boolean).some(otherName => {
-                return (
-                    normalizedBody === otherName ||
-                    normalizedBody === `يا ${otherName}` ||
-                    normalizedBody.startsWith(otherName + ' ') ||
-                    normalizedBody.startsWith(`يا ${otherName} `)
-                );
-            });
+        if (isTargetedToOther) {
+            // الرسالة موجهة صراحةً لبوت آخر: هذا البوت يتجاهلها بصمت حتى يرد البوت المطلوب فقط!
+            return;
+        }
 
-            if (isCallingOtherBot) {
-                // الرسالة موجهة صراحةً لبوت آخر: هذا البوت يتجاهلها بصمت حتى يرد البوت المطلوب فقط!
-                return;
+        // فحص هل الرسالة موجهة لهذا البوت تحديداً (في أولها أو في آخرها) وقص الاسم
+        let matchedTarget = null;
+        for (const my of cleanMyNames) {
+            if (normalizedBody.startsWith(`يا ${my} `)) {
+                matchedTarget = { type: 'start', len: `يا ${my} `.length, name: my };
+                break;
             }
+            if (normalizedBody.startsWith(`${my} `)) {
+                matchedTarget = { type: 'start', len: `${my} `.length, name: my };
+                break;
+            }
+        }
+        if (!matchedTarget) {
+            for (const my of cleanMyNames) {
+                if (normalizedBody.endsWith(' يا ' + my)) {
+                    matchedTarget = { type: 'end', len: (' يا ' + my).length, name: my };
+                    break;
+                }
+                if (normalizedBody.endsWith(' ' + my)) {
+                    matchedTarget = { type: 'end', len: (' ' + my).length, name: my };
+                    break;
+                }
+            }
+        }
 
+        if (matchedTarget) {
+            if (matchedTarget.type === 'start') {
+                normalizedBody = normalizedBody.slice(matchedTarget.len).trim();
+                textLower = textLower.slice(matchedTarget.len).trim();
+                mek.text = textLower;
+            } else if (matchedTarget.type === 'end') {
+                normalizedBody = normalizedBody.slice(0, -matchedTarget.len).trim();
+                textLower = textLower.slice(0, -matchedTarget.len).trim();
+                mek.text = textLower;
+            }
+        } else {
             // 4️⃣ في حال تواجد عدة بوتات في نفس الجروب، ولم يتم توجيه الأمر أو اللعبة لبوت معين صراحة:
             if (isRealGroup && (otherBotsPresentInRoom || mainBotPresentInRoom)) {
                 const isQuotedToThisBot = Boolean(
