@@ -397,7 +397,7 @@ export async function startShadowBot() {
         },
         version,
         // 🌐 محاكاة متصفح لينكس كروم معتمد رسمياً لمنع الحظر والتعرف التلقائي
-        browser: Browsers.ubuntu('Chrome'),
+        browser: ['Windows', 'Chrome', '131.0.6778.86'],
         // 🔥 قفل كلي وصارم لكل أنواع اللوجات والباينري لمنع التهنيج وسرعة الاستجابة
         logger: pino({ level: 'silent', enabled: false }),
         printQRInTerminal: false,
@@ -408,7 +408,7 @@ export async function startShadowBot() {
         retryRequestDelayMs: 2000,
         maxMsgRetryCount: 5,
         markOnlineOnConnect: true,
-        generateHighQualityLinkPreview: false,
+        generateHighQualityLinkPreview: true,
         syncFullHistory: false,
         fireInitQueries: false,
         shouldSyncHistoryMessage: () => false, // تجاهل الرسائل القديمة تماماً لعدم تكرار الردود عند التشغيل
@@ -501,11 +501,12 @@ export async function startShadowBot() {
     conn.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        // 🔑 طلب كود الربط بطريقة آمنة عند فتح السوكيت فقط إذا كان غير مربوط
-        if (connection === 'connecting' && !conn.authState.creds.registered && !isPairingRequested) {
+        // 🔑 طلب كود الربط بطريقة آمنة وسريعة إذا كان البوت غير مسجل
+        if (!conn.authState.creds.registered && !isPairingRequested) {
             isPairingRequested = true;
             setTimeout(async () => {
                 try {
+                    if (conn.authState.creds.registered) return;
                     let targetBotPhone = '201229409956';
                     try {
                         const numFile = path.join(process.cwd(), 'bot_number.json');
@@ -544,7 +545,7 @@ export async function startShadowBot() {
                     console.error('❌ خطأ في طلب كود الربط:', err?.message || err);
                     isPairingRequested = false;
                 }
-            }, 6000);
+            }, 3000);
         }
 
         if (connection === 'open') {
@@ -609,9 +610,35 @@ export async function startShadowBot() {
         }
 
         if (connection === 'close') {
+            isPairingRequested = false;
             const reason = lastDisconnect?.error?.output?.statusCode;
             const isRegistered = Boolean(conn.authState?.creds?.registered);
             console.log(`⚠️ [Main-Bot] انقطع الاتصال! الكود: ${reason} (مسجل: ${isRegistered})`);
+
+            // 🛑 إذا تم تسجيل الخروج من واتساب (401)
+            if (reason === DisconnectReason.loggedOut || reason === 401) {
+                console.log(`❌ [Shadow Bot] تم تسجيل خروج جلسة البوت الأساسي (401). جاري تنظيف الجلسة لإتاحة ربط جديد فوراً...`);
+                try {
+                    const sessionDir = path.join(process.cwd(), 'session_data');
+                    if (fs.existsSync(sessionDir)) {
+                        const files = fs.readdirSync(sessionDir);
+                        for (const file of files) {
+                            if (file !== 'scramble_db_backup.json') {
+                                try { fs.rmSync(path.join(sessionDir, file), { recursive: true, force: true }); } catch (_) {}
+                            }
+                        }
+                    }
+                } catch (_) {}
+                global.latestPairingCode = null;
+                if (!isReconnecting) {
+                    isReconnecting = true;
+                    setTimeout(() => {
+                        isReconnecting = false;
+                        startShadowBot();
+                    }, 3000);
+                }
+                return;
+            }
 
             // 🛑 الحظر الصريح من واتساب فقط هو كود 403
             const isBanned = reason === 403;
@@ -740,14 +767,3 @@ export async function startShadowBot() {
 
 // تشغيل البوت الأساسي لشادو
 startShadowBot();
-
-// 💓 [Watchdog & Heartbeat] نبض حماية البوت الأساسي لمنع واتساب من اعتبار الجلسة خاملة وقطعها (24/7)
-if (!global.mainBotWatchdogInterval) {
-    global.mainBotWatchdogInterval = setInterval(async () => {
-        try {
-            if (global.conn?.ws?.isOpen && global.conn?.user?.id) {
-                await global.conn.sendPresenceUpdate('available');
-            }
-        } catch (_) {}
-    }, 2 * 60 * 1000);
-}
