@@ -760,19 +760,20 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
 
-                const isTerminal = statusCode === 403;
+                const isTerminal = statusCode === 403 || statusCode === 401 || statusCode === DisconnectReason.loggedOut;
                 if (isTerminal) {
-                    console.log(`❌ [Sub-Bot] تم حظر رقم البوت الفرعي من واتساب (+${cleanPhone}) بكود: 403. تم إيقافه.`);
+                    const statusReason = statusCode === 403 ? 'banned' : 'loggedOut';
+                    console.log(`❌ [Sub-Bot] تم ${statusCode === 403 ? 'حظر' : 'تسجيل خروج'} رقم البوت الفرعي من واتساب (+${cleanPhone}) بكود: ${statusCode}. تم إيقافه.`);
                     try {
                         const registry = loadSubBotsRegistry() || {};
                         if (registry[cleanPhone]) {
-                            registry[cleanPhone].status = 'banned';
+                            registry[cleanPhone].status = statusReason;
                             saveSubBotsRegistry(registry);
                         }
                         const cfgPath = path.join(SUB_BOTS_DIR, cleanPhone, 'config.json');
                         if (fs.existsSync(cfgPath)) {
                             const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-                            c.status = 'banned';
+                            c.status = statusReason;
                             fs.writeFileSync(cfgPath, JSON.stringify(c, null, 2), 'utf8');
                         }
                     } catch (_) {}
