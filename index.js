@@ -385,7 +385,7 @@ export async function startShadowBot() {
         } catch (_) {}
     }
 
-    // 🧹 تنفيذ تصفير بيانات الجلسة القديمة للبوت الأساسي فقط عند طلب التصفير (لضمان كود ربط نظيف 100%)
+    // 🧹 تنفيذ تصفير شامل لجميع الجلسات والتنصيبات القديمة عند طلب التصفير لضمان عودة البوت بيور 100%
     try {
         const resetFlagFile = path.join(process.cwd(), 'force_reset_main.json');
         const resetDoneFile = path.join(process.cwd(), 'last_reset_applied.txt');
@@ -397,7 +397,8 @@ export async function startShadowBot() {
                 appliedToken = fs.readFileSync(resetDoneFile, 'utf8').trim();
             }
             if (token && token !== appliedToken) {
-                console.log('🧹 [Force Reset] جاري مسح جلسة البوت الأساسي القديمة وتوليد كود ربط جديد نظيف...');
+                console.log('🧹 [Force Reset] جاري مسح كافة الجلسات والتنصيبات القديمة لتنظيف البوت بالكامل وجعله بيور 100%...');
+                // 1. مسح جلسة البوت الأساسي (مع الحفاظ على قاعدة البيانات ونقاط الفعاليات scramble_db_backup.json)
                 const sessionDir = path.join(process.cwd(), 'session_data');
                 if (fs.existsSync(sessionDir)) {
                     const files = fs.readdirSync(sessionDir);
@@ -407,9 +408,30 @@ export async function startShadowBot() {
                         }
                     }
                 }
+
+                // 2. مسح كافة تنصيبات وجلسات البوتات الفرعية تماماً
+                const subBotsDir = path.join(process.cwd(), 'sessions', 'sub_bots');
+                if (fs.existsSync(subBotsDir)) {
+                    try { fs.rmSync(subBotsDir, { recursive: true, force: true }); } catch (_) {}
+                    try { fs.mkdirSync(subBotsDir, { recursive: true }); } catch (_) {}
+                }
+
+                // 3. تصفير سجلات البوتات الفرعية القديمة بالكامل
+                const subBotsRegFile = path.join(process.cwd(), 'sessions', 'sub_bots_registry.json');
+                const subBotsRegBackup = path.join(process.cwd(), 'sessions', 'sub_bots_registry_backup.json');
+                const deletedSubBotsFile = path.join(process.cwd(), 'sessions', 'deleted_sub_bots.json');
+                const subBotsJson = path.join(process.cwd(), 'sub_bots.json');
+                const subBotsSavedJson = path.join(process.cwd(), 'sub_bots_saved.json');
+
+                try { fs.writeFileSync(subBotsRegFile, '{}', 'utf8'); } catch (_) {}
+                try { fs.writeFileSync(subBotsRegBackup, '{}', 'utf8'); } catch (_) {}
+                try { fs.writeFileSync(deletedSubBotsFile, '[]', 'utf8'); } catch (_) {}
+                try { fs.writeFileSync(subBotsJson, '{}', 'utf8'); } catch (_) {}
+                try { fs.writeFileSync(subBotsSavedJson, '{}', 'utf8'); } catch (_) {}
+
                 fs.writeFileSync(resetDoneFile, token, 'utf8');
                 global.latestPairingCode = null;
-                console.log('✅ [Force Reset] تم مسح session_data بنجاح! البوتات الفرعية آمنة 100%.');
+                console.log('✅ [Force Reset] تم تنظيف ومسح جميع التنصيبات والجلسات القديمة بنجاح! البوت الآن بيور وجاهز للربط الجديد كلياً.');
             }
         }
     } catch (e) {
