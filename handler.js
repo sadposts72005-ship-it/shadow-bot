@@ -595,12 +595,12 @@ export async function handleAllMessages(mek, currentConn) {
     try {
 
 
-        // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من دقيقتين) لمنع مشاكل فرق توقيت السيرفر
+        // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 5 دقائق) لمنع مشاكل فرق توقيت السيرفر
         const nowSec = Math.floor(Date.now() / 1000);
         const currentStartTime = currentConn.subBotStartTime || global.botStartTime || nowSec;
         const msgTime = getMsgTimestamp(mek);
         if (msgTime > 0) {
-            if (msgTime < (currentStartTime - 25) || (nowSec - msgTime) > 180) return;
+            if (msgTime < (currentStartTime - 30) || (nowSec - msgTime) > 300) return;
         }
 
         let from = mek.key.remoteJid;

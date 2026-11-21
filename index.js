@@ -751,10 +751,10 @@ export async function startShadowBot() {
             for (const m of chatUpdate.messages) {
                 if (!m || !m.message) continue;
 
-                // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من دقيقتين) لمنع مشاكل فرق توقيت السيرفر
+                // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 5 دقائق) لمنع مشاكل فرق توقيت السيرفر
                 const msgTime = getMsgTimestamp(m);
                 if (msgTime > 0) {
-                    if (msgTime < (activeStart - 25) || (nowSec - msgTime) > 180) {
+                    if (msgTime < (activeStart - 30) || (nowSec - msgTime) > 300) {
                         continue;
                     }
                 }
