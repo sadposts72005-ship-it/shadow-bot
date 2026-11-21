@@ -449,26 +449,25 @@ export async function startShadowBot() {
     const { version } = await fetchLatestBaileysVersion();
 
     const conn = makeWASocket({
+        version,
+        logger: pino({ level: 'silent', enabled: false }),
+        printQRInTerminal: false,
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent', enabled: false }))
         },
-        version,
-        // 🌐 محاكاة متصفح ويندوز كروم معتمد رسمياً
-        browser: Browsers.windows('Chrome'),
-        // 🔥 قفل كلي وصارم لكل أنواع اللوجات والباينري لمنع التهنيج وسرعة الاستجابة
-        logger: pino({ level: 'silent', enabled: false }),
-        printQRInTerminal: false,
-        defaultQueryTimeoutMs: 180000,
-        connectTimeoutMs: 180000,
-        keepAliveIntervalMs: 10000, // نبضات بينج كل 10 ثوانٍ لضمان بقاء السوكيت نشطاً لمدة 3 دقائق كاملة دون انقطاع
+        browser: ['Windows', 'Chrome', '131.0.6778.86'],
+        syncPhonenumber: true,
+        markOnlineOnConnect: true,
+        generateHighQualityLinkPreview: true,
+        syncFullHistory: false,
+        fireInitQueries: false,
+        shouldSyncHistoryMessage: () => false,
+        defaultQueryTimeoutMs: 60000,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 25000,
         retryRequestDelayMs: 2000,
         maxMsgRetryCount: 5,
-        markOnlineOnConnect: true,
-        generateHighQualityLinkPreview: false,
-        syncFullHistory: false,
-        fireInitQueries: true, // ✅ إلزامي لإكمال مصافحة الربط الأولية مع واتساب وواتساب أعمال بنجاح
-        shouldSyncHistoryMessage: () => false, // تجاهل الرسائل القديمة تماماً لعدم تكرار الردود عند التشغيل
         shouldIgnoreJid: () => false,
         // 🛑 إرجاع undefined عند عدم توفر الرسالة لمنع بايلز من إرسال رسائل فارغة أو نقط (. / conversation: '') عند طلب retry
         getMessage: async (key) => {
@@ -563,7 +562,11 @@ export async function startShadowBot() {
             isPairingRequested = true;
             setTimeout(async () => {
                 try {
-                    if (conn.authState.creds.registered || conn.ws?.isOpen === false) return;
+                    if (conn.authState.creds.registered) return;
+                    if (conn.ws && conn.ws.isOpen === false) {
+                        isPairingRequested = false;
+                        return;
+                    }
                     let targetBotPhone = '201229409956';
                     try {
                         const numFile = path.join(process.cwd(), 'bot_number.json');
