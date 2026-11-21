@@ -450,8 +450,8 @@ export async function startShadowBot() {
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent', enabled: false }))
         },
         version,
-        // 🌐 محاكاة متصفح لينكس كروم معتمد رسمياً لمنع الحظر والتعرف التلقائي
-        browser: ['Windows', 'Chrome', '131.0.6778.86'],
+        // 🌐 محاكاة متصفح ويندوز كروم معتمد رسمياً
+        browser: Browsers.windows('Chrome'),
         // 🔥 قفل كلي وصارم لكل أنواع اللوجات والباينري لمنع التهنيج وسرعة الاستجابة
         logger: pino({ level: 'silent', enabled: false }),
         printQRInTerminal: false,
@@ -462,9 +462,9 @@ export async function startShadowBot() {
         retryRequestDelayMs: 2000,
         maxMsgRetryCount: 5,
         markOnlineOnConnect: true,
-        generateHighQualityLinkPreview: true,
+        generateHighQualityLinkPreview: false,
         syncFullHistory: false,
-        fireInitQueries: false,
+        fireInitQueries: true, // ✅ إلزامي لإكمال مصافحة الربط الأولية مع واتساب وواتساب أعمال بنجاح
         shouldSyncHistoryMessage: () => false, // تجاهل الرسائل القديمة تماماً لعدم تكرار الردود عند التشغيل
         shouldIgnoreJid: () => false,
         // 🛑 إرجاع undefined عند عدم توفر الرسالة لمنع بايلز من إرسال رسائل فارغة أو نقط (. / conversation: '') عند طلب retry
