@@ -136,8 +136,8 @@ export function loadLocalDB() {
     if (!db.antiBan) db.antiBan = {};
     if (!db.knownGroups) db.knownGroups = [];
     if (!db.lidMap) db.lidMap = {};
-    if (!db.telegramToken) {
-        db.telegramToken = '9240074974:AAF80WaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
+    if (!db.telegramToken || db.telegramToken.startsWith('9183897015') || db.telegramToken.includes('AAF80Wa')) {
+        db.telegramToken = '9240074974:AAF8OWaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
     }
 
     return db;
@@ -146,8 +146,8 @@ export function loadLocalDB() {
 export function saveLocalDB(data) {
     if (!data || typeof data !== 'object') return;
     try {
-        if (!data.telegramToken) {
-            data.telegramToken = '9240074974:AAF80WaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
+        if (!data.telegramToken || data.telegramToken.startsWith('9183897015') || data.telegramToken.includes('AAF80Wa')) {
+            data.telegramToken = '9240074974:AAF8OWaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
         }
         data.lastSavedAt = Date.now();
         const jsonStr = JSON.stringify(data, null, 2);

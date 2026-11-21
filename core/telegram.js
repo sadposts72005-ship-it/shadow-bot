@@ -13,7 +13,7 @@ import {
 } from './subbot.js';
 import { getMenuSection } from '../plugins/menu.js';
 
-export const OFFICIAL_TELEGRAM_TOKEN = '9240074974:AAF80WaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
+export const OFFICIAL_TELEGRAM_TOKEN = '9240074974:AAF8OWaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
 
 /**
  * تنقية توكن تليجرام واستبعاد أي توكن قديم أو محظور في Google Play تلقائياً
@@ -35,9 +35,9 @@ export function getSanitizedTelegramToken(token = null) {
 
     resolved = String(resolved).replace(/\s+/g, '').trim();
 
-    // فحص واستبعاد التوكن القديم المحظور في جوجل بلاي (يبدأ بـ 9183897015)
-    if (resolved.startsWith('9183897015') || resolved.includes('AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE')) {
-        console.warn('⚠️ [Telegram Security] تم اكتشاف توكن البوت القديم المحظور في Google Play! تم تحويله فوراً للتوكن الرسمي الجديد.');
+    // فحص واستبعاد التوكن القديم المحظور في جوجل بلاي (يبدأ بـ 9183897015) أو التوكن القديم المكتوب خطأ
+    if (resolved.startsWith('9183897015') || resolved.includes('AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE') || resolved.includes('AAF80Wa')) {
+        console.warn('⚠️ [Telegram Security] تم اكتشاف توكن غير صالح أو قديم، جاري التحويل التلقائي للتوكن الرسمي الجديد المعتمد!');
         resolved = OFFICIAL_TELEGRAM_TOKEN;
         try {
             const db = loadLocalDB();
