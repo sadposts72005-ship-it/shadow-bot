@@ -694,13 +694,6 @@ export async function startShadowBot() {
                     } catch (_) {}
                 }
 
-                // 🛡️ وضع علامة مقروء فوراً على رسائل الخاص لمحاكاة السلوك البشري الطبيعي
-                if (!from.endsWith('@g.us')) {
-                    try {
-                        await conn.readMessages([m.key]);
-                    } catch (_) {}
-                }
-
                 // 🚀 تمرير الرسالة فوراً للمفسر (Handler)
                 await handleAllMessages(m, conn);
             }
