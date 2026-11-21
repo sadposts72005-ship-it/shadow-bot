@@ -15,6 +15,42 @@ import { getMenuSection } from '../plugins/menu.js';
 
 export const OFFICIAL_TELEGRAM_TOKEN = '9240074974:AAF80WaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
 
+/**
+ * تنقية توكن تليجرام واستبعاد أي توكن قديم أو محظور في Google Play تلقائياً
+ */
+export function getSanitizedTelegramToken(token = null) {
+    let resolved = token;
+    if (!resolved) {
+        resolved = process.env.TELEGRAM_BOT_TOKEN;
+    }
+    if (!resolved) {
+        try {
+            const db = loadLocalDB();
+            resolved = db?.telegramToken;
+        } catch (_) {}
+    }
+    if (!resolved) {
+        resolved = OFFICIAL_TELEGRAM_TOKEN;
+    }
+
+    resolved = String(resolved).replace(/\s+/g, '').trim();
+
+    // فحص واستبعاد التوكن القديم المحظور في جوجل بلاي (يبدأ بـ 9183897015)
+    if (resolved.startsWith('9183897015') || resolved.includes('AAHVyS6ASNy_MuqJcn4Bsrd31NGVHU607AE')) {
+        console.warn('⚠️ [Telegram Security] تم اكتشاف توكن البوت القديم المحظور في Google Play! تم تحويله فوراً للتوكن الرسمي الجديد.');
+        resolved = OFFICIAL_TELEGRAM_TOKEN;
+        try {
+            const db = loadLocalDB();
+            if (db) {
+                db.telegramToken = OFFICIAL_TELEGRAM_TOKEN;
+                saveLocalDB(db);
+            }
+        } catch (_) {}
+    }
+
+    return resolved;
+}
+
 let isPolling = false;
 let pollingAbortController = null;
 let currentBotInfo = null;
@@ -1916,11 +1952,7 @@ async function handleTelegramMessage(token, msg) {
  * بدء تشغيل بوت تليجرام واستقبال الرسائل بنظام Long Polling
  */
 export async function startTelegramBot(token = null) {
-    if (!token) {
-        const db = loadLocalDB();
-        token = process.env.TELEGRAM_BOT_TOKEN || db?.telegramToken || OFFICIAL_TELEGRAM_TOKEN;
-    }
-    token = String(token).replace(/\s+/g, '').trim();
+    token = getSanitizedTelegramToken(token);
 
     // 1. إلغاء أي جلسة بولينج قديمة على الفور باستخدام المعرف الفرعي للجيل
     pollingSessionId++;
@@ -2024,7 +2056,7 @@ export async function startTelegramBot(token = null) {
  */
 export function startTelegramWatchdog(token = null) {
     if (telegramWatchdogInterval) return;
-    const resolvedToken = token || process.env.TELEGRAM_BOT_TOKEN || OFFICIAL_TELEGRAM_TOKEN;
+    const resolvedToken = getSanitizedTelegramToken(token);
 
     telegramWatchdogInterval = setInterval(async () => {
         try {

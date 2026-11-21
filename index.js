@@ -39,12 +39,41 @@ import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
 import { initAllSubBots } from './core/subbot.js';
 // ✈️ استيراد محرك تليجرام الموحد (Telegram Bot Engine)
-import { startTelegramBot, startTelegramWatchdog, stopTelegramBot, getTelegramStatus, OFFICIAL_TELEGRAM_TOKEN } from './core/telegram.js';
+import { startTelegramBot, startTelegramWatchdog, stopTelegramBot, getTelegramStatus, OFFICIAL_TELEGRAM_TOKEN, getSanitizedTelegramToken } from './core/telegram.js';
 import { loadLocalDB } from './core/database.js';
 
 // 🌐 خادم ويب ولوحة تحكم مصغرة (HTTP Dashboard) لإدارة البوت وفحص حالته 24/7
 const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
+    // تفعيل بوت تليجرام الجديد فوراً في الذاكرة (@Shadowcomm_bot) وحظر التوكن القديم نهائياً
+    if ((req.url === '/activate-new-telegram' || req.url === '/activate-telegram') && (req.method === 'POST' || req.method === 'GET')) {
+        (async () => {
+            try {
+                const { loadLocalDB, saveLocalDB } = await import('./core/database.js');
+                const db = loadLocalDB() || {};
+                db.telegramToken = OFFICIAL_TELEGRAM_TOKEN;
+                saveLocalDB(db);
+
+                const startRes = await startTelegramBot(OFFICIAL_TELEGRAM_TOKEN);
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(`
+                    <body style="font-family: Arial; text-align: center; padding: 50px; background: #0f172a; color: #fff;">
+                        <h2 style="color: #4ade80;">🎉 تم تفعيل وتشغيل بوت تليجرام الجديد بنجاح 100%!</h2>
+                        <p style="font-size: 16px;">تم إيقاف البوت القديم وتوجيه البوت للعمل فوراً على المعرف الجديد الشغال مع جوجل بلاي وكل الأنظمة:</p>
+                        <p style="font-size: 24px; color: #38bdf8; font-weight: bold; margin: 15px 0;">@${startRes.botInfo?.username || 'Shadowcomm_bot'}</p>
+                        <a href="https://t.me/${startRes.botInfo?.username || 'Shadowcomm_bot'}" target="_blank" style="display:inline-block; margin-top:15px; padding:12px 25px; background:#38bdf8; color:#000; text-decoration:none; border-radius:8px; font-weight:bold; font-size:16px;">فتح البوت في تليجرام وتجربته 🚀</a>
+                        <br><br><a href="/" style="color: #94a3b8;">العودة للوحة التحكم</a>
+                    </body>
+                `);
+                return;
+            } catch (e) {
+                res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+                res.end('خطأ أثناء تفعيل تليجرام: ' + (e?.message || e));
+            }
+        })();
+        return;
+    }
+
     if (req.method === 'POST' && req.url === '/set-telegram') {
         let body = '';
         req.on('data', chunk => { body += chunk; });
@@ -204,6 +233,9 @@ const server = http.createServer((req, res) => {
                     ${isWaConnected ? '🟢 واتساب الأساسي: متصل ومحمي (+ ' + waUserNum + ')' : (pairCode ? '🔑 كود ربط واتساب جاهز للاستخدام' : '⏳ واتساب الأساسي: جاري إعداد الاتصال')}
                 </div>
                 <p>الحالة على تليجرام: <b>${tg.isActive ? '⚡ متصل (@' + tg.username + ')' : '🛑 غير مربوط حالياً'}</b></p>
+                <div style="margin: 10px 0 20px 0;">
+                    <a href="/activate-new-telegram" style="display: inline-block; padding: 10px 18px; background: #10b981; color: #fff; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 14px;">⚡ تفعيل بوت تليجرام الجديد فوراً (@Shadowcomm_bot)</a>
+                </div>
 
                 ${pairCode ? `
                     <div style="background: #0f172a; border: 2px dashed #38bdf8; padding: 15px; border-radius: 12px; margin: 20px 0;">
@@ -270,8 +302,7 @@ setTimeout(() => {
 // ✈️ تشغيل بوت تليجرام تلقائياً ومراقبته على السيرفر سحابياً 24/7 دون الحاجة لأي كمبيوتر
 setTimeout(async () => {
     try {
-        const db = loadLocalDB();
-        const tgToken = process.env.TELEGRAM_BOT_TOKEN || db?.telegramToken || OFFICIAL_TELEGRAM_TOKEN;
+        const tgToken = getSanitizedTelegramToken();
         console.log('✈️ [Telegram] جاري تشغيل بوت تليجرام السحابي 24/7 على الاستضافة...');
         await startTelegramBot(tgToken);
         startTelegramWatchdog(tgToken);
