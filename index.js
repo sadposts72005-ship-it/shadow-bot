@@ -459,10 +459,9 @@ export async function startShadowBot() {
         // 🔥 قفل كلي وصارم لكل أنواع اللوجات والباينري لمنع التهنيج وسرعة الاستجابة
         logger: pino({ level: 'silent', enabled: false }),
         printQRInTerminal: false,
-        syncPhonenumber: true,
-        defaultQueryTimeoutMs: 60000,
-        connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 25000,
+        defaultQueryTimeoutMs: 180000,
+        connectTimeoutMs: 180000,
+        keepAliveIntervalMs: 10000, // نبضات بينج كل 10 ثوانٍ لضمان بقاء السوكيت نشطاً لمدة 3 دقائق كاملة دون انقطاع
         retryRequestDelayMs: 2000,
         maxMsgRetryCount: 5,
         markOnlineOnConnect: true,
@@ -611,6 +610,7 @@ export async function startShadowBot() {
                                             `🔑 *كود اقتران البوت الأساسي الجديد (+${phoneNumber}):*\n\n` +
                                             `📋 اضغط للنسخ مباشرة (بدون شَرطة):\n\`${cleanCode}\`\n\n` +
                                             `🔢 مقسم بالشكل: \`${formattedCode}\`\n\n` +
+                                            `⏳ *معاك 3 دقائق كاملة (180 ثانية) براحتك تماماً عشان تلحق تحط الكود بدون استعجال!*\n\n` +
                                             `⚠️ *خطوات مهمة جداً لنجاح الربط:*\n` +
                                             `1️⃣ في واتساب: ادخل على *الأجهزة المرتبطة*، ولو في جهاز قديم اسمه (شادووو) اضغط عليه واعمل *تسجيل خروج* فوراً.\n` +
                                             `2️⃣ اضغط *ربط جهاز* ⬅️ *ربط باستخدام رقم الهاتف بدلاً من ذلك*.\n` +
@@ -695,8 +695,8 @@ export async function startShadowBot() {
             const isRegistered = Boolean(conn.authState?.creds?.registered);
             console.log(`⚠️ [Main-Bot] انقطع الاتصال! الكود: ${reason} (مسجل: ${isRegistered})`);
 
-            // 🛑 إذا تم تسجيل الخروج من واتساب (401)
-            if (reason === DisconnectReason.loggedOut || reason === 401) {
+            // 🛑 إذا تم تسجيل الخروج الصريح من واتساب (401) لجهاز مسجل بالفعل
+            if ((reason === DisconnectReason.loggedOut || reason === 401) && isRegistered) {
                 console.log(`❌ [Shadow Bot] تم تسجيل خروج جلسة البوت الأساسي (401). جاري تنظيف الجلسة لإتاحة ربط جديد فوراً...`);
                 try {
                     const sessionDir = path.join(process.cwd(), 'session_data');
