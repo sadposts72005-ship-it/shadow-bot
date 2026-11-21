@@ -975,13 +975,14 @@ export async function handleAllMessages(mek, currentConn) {
         currentConn.isSubBot = Boolean(subBotConfig);
         currentConn.subBotConfig = subBotConfig;
 
-        // ⏱️ دالة التوقيت الصارمة للحماية من حظر واتساب (محاكاة حركة بشرية)
+        // ⏱️ دالة التوقيت الطبيعية والسريعة للرد مع التفاعل الفوري دون تهنيج أو تعليق للكتابة
         const respondWithStrictTiming = async (reactChar, actionFunction) => {
-            await delay(2500);
             try {
-                if (reactChar) await currentConn.sendMessage(from, { react: { text: reactChar, key: mek.key } });
+                if (reactChar) {
+                    await currentConn.sendMessage(from, { react: { text: reactChar, key: mek.key } }).catch(() => {});
+                }
             } catch (e) {}
-            await delay(3000);
+            await delay(350);
             await actionFunction();
         };
 

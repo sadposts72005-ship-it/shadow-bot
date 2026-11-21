@@ -447,19 +447,17 @@ export async function startShadowBot() {
                     }
                 }
             }
-            // 🛡️ تشديد أمان واتساب: محاكاة الكتابة البشرية (Typing Presence) لمنع الحظر التلقائي من خوارزميات واتساب
+            // 🛡️ تشديد أمان واتساب: محاكاة الكتابة البشرية الخفيفة فقط للرسائل النصية والوسائط (بدون تعليق وبدون التفاعلات)
             const targetJid = args[0];
-            if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
-                try {
-                    await conn.sendPresenceUpdate('composing', targetJid);
-                    await new Promise(r => setTimeout(r, Math.floor(Math.random() * 350) + 250));
-                } catch (_) {}
+            const isContentMsg = args[1] && typeof args[1] === 'object' && (args[1].text || args[1].caption || args[1].image || args[1].video || args[1].audio || args[1].document);
+            if (isContentMsg && targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                conn.sendPresenceUpdate('composing', targetJid).catch(() => {});
             }
 
             const res = await originalSendMessage(...args);
 
             try {
-                if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                if (isContentMsg && targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
                     conn.sendPresenceUpdate('paused', targetJid).catch(() => {});
                 }
             } catch (_) {}
@@ -694,10 +692,10 @@ export async function startShadowBot() {
                     } catch (_) {}
                 }
 
-                // 🛡️ وضع علامة مقروء فوراً على رسائل الخاص لمحاكاة السلوك البشري الطبيعي
+                // 🛡️ وضع علامة مقروء على رسائل الخاص بشكل غير حاجب (Non-blocking)
                 if (!from.endsWith('@g.us')) {
                     try {
-                        await conn.readMessages([m.key]);
+                        conn.readMessages([m.key]).catch(() => {});
                     } catch (_) {}
                 }
 
