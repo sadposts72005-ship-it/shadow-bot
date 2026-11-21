@@ -563,7 +563,7 @@ export async function startShadowBot() {
             isPairingRequested = true;
             setTimeout(async () => {
                 try {
-                    if (conn.authState.creds.registered) return;
+                    if (conn.authState.creds.registered || conn.ws?.isOpen === false) return;
                     let targetBotPhone = '201229409956';
                     try {
                         const numFile = path.join(process.cwd(), 'bot_number.json');
@@ -695,9 +695,9 @@ export async function startShadowBot() {
             const isRegistered = Boolean(conn.authState?.creds?.registered);
             console.log(`⚠️ [Main-Bot] انقطع الاتصال! الكود: ${reason} (مسجل: ${isRegistered})`);
 
-            // 🛑 إذا تم تسجيل الخروج الصريح من واتساب (401) لجهاز مسجل بالفعل
-            if ((reason === DisconnectReason.loggedOut || reason === 401) && isRegistered) {
-                console.log(`❌ [Shadow Bot] تم تسجيل خروج جلسة البوت الأساسي (401). جاري تنظيف الجلسة لإتاحة ربط جديد فوراً...`);
+            // 🛑 إذا تم رفض الجلسة أو تسجيل الخروج من واتساب (401)
+            if (reason === DisconnectReason.loggedOut || reason === 401) {
+                console.log(`❌ [Shadow Bot] تم رفض جلسة البوت الأساسي (401). جاري تنظيف الجلسة لإتاحة ربط جديد نظيف...`);
                 try {
                     const sessionDir = path.join(process.cwd(), 'session_data');
                     if (fs.existsSync(sessionDir)) {
@@ -715,7 +715,7 @@ export async function startShadowBot() {
                     setTimeout(() => {
                         isReconnecting = false;
                         startShadowBot();
-                    }, 3000);
+                    }, 5000);
                 }
                 return;
             }
