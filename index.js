@@ -209,6 +209,7 @@ const server = http.createServer((req, res) => {
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            ${!isWaConnected ? '<meta http-equiv="refresh" content="5">' : ''}
             <title>لوحة تحكم شادو بوت | Shadow Bot</title>
             <style>
                 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 25px; text-align: center; }
@@ -382,6 +383,37 @@ export async function startShadowBot() {
             global.conn.ws?.close();
             global.conn.ev?.removeAllListeners();
         } catch (_) {}
+    }
+
+    // 🧹 تنفيذ تصفير بيانات الجلسة القديمة للبوت الأساسي فقط عند طلب التصفير (لضمان كود ربط نظيف 100%)
+    try {
+        const resetFlagFile = path.join(process.cwd(), 'force_reset_main.json');
+        const resetDoneFile = path.join(process.cwd(), 'last_reset_applied.txt');
+        if (fs.existsSync(resetFlagFile)) {
+            const flagData = JSON.parse(fs.readFileSync(resetFlagFile, 'utf8') || '{}');
+            const token = flagData.resetToken || '';
+            let appliedToken = '';
+            if (fs.existsSync(resetDoneFile)) {
+                appliedToken = fs.readFileSync(resetDoneFile, 'utf8').trim();
+            }
+            if (token && token !== appliedToken) {
+                console.log('🧹 [Force Reset] جاري مسح جلسة البوت الأساسي القديمة وتوليد كود ربط جديد نظيف...');
+                const sessionDir = path.join(process.cwd(), 'session_data');
+                if (fs.existsSync(sessionDir)) {
+                    const files = fs.readdirSync(sessionDir);
+                    for (const file of files) {
+                        if (file !== 'scramble_db_backup.json') {
+                            try { fs.rmSync(path.join(sessionDir, file), { recursive: true, force: true }); } catch (_) {}
+                        }
+                    }
+                }
+                fs.writeFileSync(resetDoneFile, token, 'utf8');
+                global.latestPairingCode = null;
+                console.log('✅ [Force Reset] تم مسح session_data بنجاح! البوتات الفرعية آمنة 100%.');
+            }
+        }
+    } catch (e) {
+        console.error('❌ خطأ أثناء تطبيق التصفير الإجباري:', e?.message || e);
     }
 
     // 📁 استخدام مجلد الجلسة الخاص بالبوت لضمان حفظ الاتصال
