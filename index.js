@@ -200,6 +200,7 @@ const server = http.createServer((req, res) => {
     const isWaConnected = Boolean(global.conn?.user?.id && global.conn?.ws?.isOpen !== false);
     const waUserNum = global.conn?.user?.id?.split(':')[0]?.replace(/[^0-9]/g, '') || '';
     const pairCode = global.latestPairingCode || '';
+    const pairFormatted = global.latestPairingFormatted || pairCode;
     const pairPhone = global.latestPairingPhone || '';
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -242,8 +243,11 @@ const server = http.createServer((req, res) => {
                     <div style="background: #0f172a; border: 2px dashed #38bdf8; padding: 15px; border-radius: 12px; margin: 20px 0;">
                         <h3 style="color: #38bdf8; margin: 0 0 5px 0;">🔑 كود اقتران واتساب لرقم (+${pairPhone}):</h3>
                         <div class="code-box">${pairCode}</div>
+                        <p style="font-size: 14px; color: #38bdf8; margin: 5px 0; font-weight: bold;">
+                            المقسم: ${pairFormatted}
+                        </p>
                         <p style="font-size: 13px; color: #cbd5e1; margin: 0; line-height: 1.6;">
-                            📱 افتح واتساب في هاتفك ➔ الأجهزة المرتبطة ➔ ربط جهاز ➔ ربط باستخدام رقم الهاتف ➔ واكتب الكود أعلاه!
+                            📱 افتح واتساب في هاتفك ➔ الأجهزة المرتبطة ➔ ربط جهاز ➔ ربط باستخدام رقم الهاتف ➔ واكتب الكود المكون من 8 خانات بدون كتابة شَرطة!
                         </p>
                     </div>
                 ` : ''}
@@ -555,7 +559,7 @@ export async function startShadowBot() {
     conn.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        // 🔑 طلب كود الربط بطريقة آمنة وسريعة إذا كان البوت غير مسجل
+        // 🔑 طلب كود الربط بطريقة آمنة ومستقرة إذا كان البوت غير مسجل
         if (!conn.authState.creds.registered && !isPairingRequested) {
             isPairingRequested = true;
             setTimeout(async () => {
@@ -572,14 +576,18 @@ export async function startShadowBot() {
                     if (process.env.BOT_NUMBER) targetBotPhone = String(process.env.BOT_NUMBER);
                     let phoneNumber = targetBotPhone.replace(/[^0-9]/g, '');
 
-                    let code = await conn.requestPairingCode(phoneNumber);
-                    code = code?.match(/.{1,4}/g)?.join('-') || code;
+                    let rawCode = await conn.requestPairingCode(phoneNumber);
+                    let cleanCode = String(rawCode || '').replace(/[^A-Za-z0-9]/g, '');
+                    let formattedCode = cleanCode.match(/.{1,4}/g)?.join('-') || cleanCode;
 
-                    global.latestPairingCode = code;
+                    global.latestPairingCode = cleanCode;
+                    global.latestPairingFormatted = formattedCode;
                     global.latestPairingPhone = phoneNumber;
 
                     console.log('\n====================================');
-                    console.log(`🤖 SHADOW BOT PAIRING CODE (+${phoneNumber}):`, code);
+                    console.log(`🤖 SHADOW BOT PAIRING CODE (+${phoneNumber}):`);
+                    console.log(`🔑 بدون فواصل (للنسخ): ${cleanCode}`);
+                    console.log(`🔑 مقسم: ${formattedCode}`);
                     console.log('====================================\n');
 
                     // إرسال كود الاقتران عبر تليجرام أيضاً إن كان البوت يعمل على تليجرام
@@ -599,7 +607,15 @@ export async function startShadowBot() {
                             if (token) {
                                 for (const hajjChat of targetChats) {
                                     if (hajjChat) {
-                                        await sendTelegramMessage(token, hajjChat, `🔑 *كود اقتران البوت الأساسي الجديد (+${phoneNumber}):*\n\n\`${code}\`\n\n📌 انسخ الكود وضعه في واتساب - الأجهزة المرتبطة.`).catch(() => {});
+                                        const tgMsg = 
+                                            `🔑 *كود اقتران البوت الأساسي الجديد (+${phoneNumber}):*\n\n` +
+                                            `📋 اضغط للنسخ مباشرة (بدون شَرطة):\n\`${cleanCode}\`\n\n` +
+                                            `🔢 مقسم بالشكل: \`${formattedCode}\`\n\n` +
+                                            `⚠️ *خطوات مهمة جداً لنجاح الربط:*\n` +
+                                            `1️⃣ في واتساب: ادخل على *الأجهزة المرتبطة*، ولو في جهاز قديم اسمه (شادووو) اضغط عليه واعمل *تسجيل خروج* فوراً.\n` +
+                                            `2️⃣ اضغط *ربط جهاز* ⬅️ *ربط باستخدام رقم الهاتف بدلاً من ذلك*.\n` +
+                                            `3️⃣ انسخ الكود أعلاه وضعه في الخانات (الرمز 8 حروف وأرقام فقط).`;
+                                        await sendTelegramMessage(token, hajjChat, tgMsg).catch(() => {});
                                     }
                                 }
                             }
@@ -609,7 +625,7 @@ export async function startShadowBot() {
                     console.error('❌ خطأ في طلب كود الربط:', err?.message || err);
                     isPairingRequested = false;
                 }
-            }, 3000);
+            }, 5000);
         }
 
         if (connection === 'open') {
