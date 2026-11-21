@@ -660,17 +660,10 @@ export async function startShadowBot() {
             for (const m of chatUpdate.messages) {
                 if (!m || !m.message) continue;
 
-                // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة:
-                // 1. إذا كان توقيت الرسالة قبل لحظة تشغيل البوت الحالي
-                // 2. أو إذا كان عمر الرسالة أقدم من 30 ثانية من الآن
-                // 3. أو إذا لم نتمكن من قراءة توقيت الرسالة أثناء أول 45 ثانية من فتح الاتصال (فترة المزامنة)
+                // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من دقيقتين) لمنع مشاكل فرق توقيت السيرفر
                 const msgTime = getMsgTimestamp(m);
                 if (msgTime > 0) {
-                    if (msgTime < (activeStart - 2) || msgTime < (nowSec - 30)) {
-                        continue;
-                    }
-                } else {
-                    if ((nowSec - activeStart) < 45) {
+                    if (msgTime < (activeStart - 25) || (nowSec - msgTime) > 180) {
                         continue;
                     }
                 }

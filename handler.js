@@ -595,14 +595,12 @@ export async function handleAllMessages(mek, currentConn) {
     try {
 
 
-        // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة أُرسلت قبل تشغيل البوت الحالي أو أثناء إغلاقه
+        // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من دقيقتين) لمنع مشاكل فرق توقيت السيرفر
         const nowSec = Math.floor(Date.now() / 1000);
         const currentStartTime = currentConn.subBotStartTime || global.botStartTime || nowSec;
         const msgTime = getMsgTimestamp(mek);
         if (msgTime > 0) {
-            if (msgTime < (currentStartTime - 2) || msgTime < (nowSec - 30)) return;
-        } else {
-            if ((nowSec - currentStartTime) < 45) return;
+            if (msgTime < (currentStartTime - 25) || (nowSec - msgTime) > 180) return;
         }
 
         let from = mek.key.remoteJid;
@@ -1380,13 +1378,15 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
-        // 0️⃣ إذا كانت الرسالة عبارة عن ريبلاي (اقتباس) لرسالة صادرة من بوت آخر في النظام:
+        // 0️⃣ إذا كانت الرسالة عبارة عن ريبلاي (اقتباس) لرسالة صادرة من بوت آخر في النظام (داخل الجروبات فقط):
         // يجب على هذا البوت تجاهلها بصمت تام لكي لا يتدخل في لعبة أو أمر بوت آخر!
-        const quotedParticipantEarly = mek.message?.extendedTextMessage?.contextInfo?.participant;
-        if (quotedParticipantEarly) {
-            const cleanQuotedPart = quotedParticipantEarly.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-            if (cleanQuotedPart && allOtherBotNumbers.has(cleanQuotedPart) && !thisBotIdentities.has(cleanQuotedPart)) {
-                return;
+        if (isRealGroup) {
+            const quotedParticipantEarly = mek.message?.extendedTextMessage?.contextInfo?.participant;
+            if (quotedParticipantEarly) {
+                const cleanQuotedPart = quotedParticipantEarly.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+                if (cleanQuotedPart && allOtherBotNumbers.has(cleanQuotedPart) && !thisBotIdentities.has(cleanQuotedPart)) {
+                    return;
+                }
             }
         }
 
@@ -1474,8 +1474,8 @@ export async function handleAllMessages(mek, currentConn) {
             }
         }
 
-        if (isTargetedToOther) {
-            // الرسالة موجهة صراحةً لبوت آخر: هذا البوت يتجاهلها بصمت حتى يرد البوت المطلوب فقط!
+        if (isRealGroup && isTargetedToOther) {
+            // في الجروبات فقط: الرسالة موجهة صراحةً لبوت آخر: هذا البوت يتجاهلها بصمت حتى يرد البوت المطلوب فقط!
             return;
         }
 
@@ -4492,6 +4492,51 @@ export async function handleAllMessages(mek, currentConn) {
         if (normalizedBody === 'عاش') {
             await respondWithStrictTiming('❤️', async () => {
                 await currentConn.sendMessage(from, { text: 'حبييي❤️' }, { quoted: mek });
+            });
+            return;
+        }
+
+        // 👑 ردود خاصة وفورية للحج شادو الأصلي في المحادثات الخاصة
+        if (isAbsoluteOwner && !isRealGroup) {
+            if (['الو', 'يا شادو', 'شادو', 'انت فين', 'انت شغال', 'شغال', 'موجود', 'هاي', 'هلو'].includes(normalizedBody)) {
+                await respondWithStrictTiming('👑', async () => {
+                    await currentConn.sendMessage(from, { 
+                        text: `👑 *عيون شادو وروحه يا حج شادو يا غالي!* ❤️⚡\n\nأنا شغال وتحت أمرك في أي لحظة وبأعلى كفاءة.\nأؤمرني يا كبير أو اكتب *(الاوامر)* عشان تشوف كل المميزات! 🚀` 
+                    }, { quoted: mek });
+                });
+                return;
+            }
+        }
+
+        // 🌸 التحيات العامة في الخاص والجروبات
+        if (['السلام عليكم', 'سلام عليكم', 'السلام عليكم ورحمة الله', 'سلام عليكم ورحمة الله وبركاته'].includes(normalizedBody)) {
+            await respondWithStrictTiming('🌸', async () => {
+                const title = isAbsoluteOwner ? 'يا بابا الحج شادو الغالي 👑❤️' : 'يا فنان 🌸';
+                await currentConn.sendMessage(from, { text: `وعليكم السلام ورحمة الله وبركاته ${title}! نورت شادو بوت ✨` }, { quoted: mek });
+            });
+            return;
+        }
+
+        if (['ازيك', 'عامل ايه', 'اخبارك', 'ازيك يا شادو', 'عامل ايه يا شادو', 'شخبارك'].includes(normalizedBody)) {
+            await respondWithStrictTiming('❤️', async () => {
+                const title = isAbsoluteOwner ? 'بخير ونعمة طول ما حضرتك بخير يا بابا الحج شادو 👑❤️' : 'الحمد لله يا فنان بخير طول ما انت بخير! ❤️✨';
+                await currentConn.sendMessage(from, { text: title }, { quoted: mek });
+            });
+            return;
+        }
+
+        if (['صباح الخير', 'صباح الفل', 'صباح الورد', 'صباح النور'].includes(normalizedBody)) {
+            await respondWithStrictTiming('☀️', async () => {
+                const title = isAbsoluteOwner ? 'يا صباح النور والسرور على أغلى وأطيب حج في الدنيا! 👑❤️' : 'صباح الورد والياسمين يا فنان! ☀️🌸';
+                await currentConn.sendMessage(from, { text: title }, { quoted: mek });
+            });
+            return;
+        }
+
+        if (['مساء الخير', 'مساء الفل', 'مساء الورد', 'مساء النور'].includes(normalizedBody)) {
+            await respondWithStrictTiming('🌙', async () => {
+                const title = isAbsoluteOwner ? 'يا مساء الورد والياسمين على الحج شادو نور عيني! 👑❤️' : 'مساء الورد والجمال يا نجم! 🌙✨';
+                await currentConn.sendMessage(from, { text: title }, { quoted: mek });
             });
             return;
         }
