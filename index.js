@@ -447,17 +447,19 @@ export async function startShadowBot() {
                     }
                 }
             }
-            // 🛡️ تشديد أمان واتساب: محاكاة الكتابة البشرية الخفيفة فقط للرسائل النصية والوسائط (بدون تعليق وبدون التفاعلات)
+            // 🛡️ تشديد أمان واتساب: محاكاة الكتابة البشرية (Typing Presence) لمنع الحظر التلقائي من خوارزميات واتساب
             const targetJid = args[0];
-            const isContentMsg = args[1] && typeof args[1] === 'object' && (args[1].text || args[1].caption || args[1].image || args[1].video || args[1].audio || args[1].document);
-            if (isContentMsg && targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
-                conn.sendPresenceUpdate('composing', targetJid).catch(() => {});
+            if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                try {
+                    await conn.sendPresenceUpdate('composing', targetJid);
+                    await new Promise(r => setTimeout(r, Math.floor(Math.random() * 350) + 250));
+                } catch (_) {}
             }
 
             const res = await originalSendMessage(...args);
 
             try {
-                if (isContentMsg && targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
                     conn.sendPresenceUpdate('paused', targetJid).catch(() => {});
                 }
             } catch (_) {}
@@ -692,10 +694,10 @@ export async function startShadowBot() {
                     } catch (_) {}
                 }
 
-                // 🛡️ وضع علامة مقروء على رسائل الخاص بشكل غير حاجب (Non-blocking)
+                // 🛡️ وضع علامة مقروء فوراً على رسائل الخاص لمحاكاة السلوك البشري الطبيعي
                 if (!from.endsWith('@g.us')) {
                     try {
-                        conn.readMessages([m.key]).catch(() => {});
+                        await conn.readMessages([m.key]);
                     } catch (_) {}
                 }
 

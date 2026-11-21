@@ -445,17 +445,19 @@ async function createSubBotSocket(phone, sessionDir) {
                     }
                 }
             }
-            // 🛡️ تشديد أمان واتساب للبوت الفرعي: محاكاة الكتابة البشرية الخفيفة فقط للرسائل النصية والوسائط (بدون تعليق وبدون التفاعلات)
+            // 🛡️ تشديد أمان واتساب للبوت الفرعي: محاكاة الكتابة البشرية (Typing Presence) لمنع الحظر التلقائي من خوارزميات واتساب
             const targetJid = args[0];
-            const isContentMsg = args[1] && typeof args[1] === 'object' && (args[1].text || args[1].caption || args[1].image || args[1].video || args[1].audio || args[1].document);
-            if (isContentMsg && targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
-                sock.sendPresenceUpdate('composing', targetJid).catch(() => {});
+            if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                try {
+                    await sock.sendPresenceUpdate('composing', targetJid);
+                    await new Promise(r => setTimeout(r, Math.floor(Math.random() * 350) + 250));
+                } catch (_) {}
             }
 
             const res = await originalSendMessage(...args);
 
             try {
-                if (isContentMsg && targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
+                if (targetJid && typeof targetJid === 'string' && !targetJid.includes('status@broadcast')) {
                     sock.sendPresenceUpdate('paused', targetJid).catch(() => {});
                 }
             } catch (_) {}
