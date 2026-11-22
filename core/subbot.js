@@ -2,14 +2,52 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaile
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { handleAllMessages } from '../handler.js';
 import { getMsgTimestamp } from './points.js';
 
-const REGISTRY_FILE = path.join(process.cwd(), 'sub_bots.json');
-const PRIMARY_REGISTRY_FILE = path.join(process.cwd(), 'sessions', 'sub_bots_registry.json');
-const BACKUP_REGISTRY_FILE = path.join(process.cwd(), 'sessions', 'sub_bots_registry_backup.json');
-const DELETED_BOTS_FILE = path.join(process.cwd(), 'sessions', 'deleted_sub_bots.json');
-const SUB_BOTS_DIR = path.join(process.cwd(), 'sessions', 'sub_bots');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const BOT_ROOT = path.resolve(__dirname, '..');
+
+const REGISTRY_FILE = path.join(BOT_ROOT, 'sub_bots.json');
+const PRIMARY_REGISTRY_FILE = path.join(BOT_ROOT, 'sessions', 'sub_bots_registry.json');
+const BACKUP_REGISTRY_FILE = path.join(BOT_ROOT, 'sessions', 'sub_bots_registry_backup.json');
+const DELETED_BOTS_FILE = path.join(BOT_ROOT, 'sessions', 'deleted_sub_bots.json');
+const SUB_BOTS_DIR = path.join(BOT_ROOT, 'sessions', 'sub_bots');
+
+// 🛡️ كتم ومعالجة أخطاء تشفير الجلسات (Bad MAC) للبوتات الفرعية تلقائياً
+if (!global._subbotBadMacHookInstalled) {
+    global._subbotBadMacHookInstalled = true;
+    const _origErr = console.error;
+    console.error = function (...args) {
+        const text = args.map(a => (typeof a === 'string' ? a : (a?.stack || a?.message || ''))).join(' ');
+        if (text.includes('Bad MAC') || text.includes('Failed to decrypt message with any known session') || text.includes('No matching sessions found')) {
+            const match = text.match(/(\d{10,20})_\d+\.\d+/);
+            if (match && match[1]) {
+                const brokenId = match[1];
+                try {
+                    if (fs.existsSync(SUB_BOTS_DIR)) {
+                        const subDirs = fs.readdirSync(SUB_BOTS_DIR);
+                        for (const sd of subDirs) {
+                            const subDirPath = path.join(SUB_BOTS_DIR, sd);
+                            if (fs.statSync(subDirPath).isDirectory()) {
+                                const files = fs.readdirSync(subDirPath);
+                                for (const f of files) {
+                                    if (f.startsWith(`session-${brokenId}`)) {
+                                        try { fs.unlinkSync(path.join(subDirPath, f)); } catch (_) {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (_) {}
+            }
+            return;
+        }
+        _origErr.apply(console, args);
+    };
+}
 
 // حفظ السوكيتات النشطة في الذاكرة
 export const activeSubBots = new Map();
@@ -204,7 +242,7 @@ export function saveSubBotsRegistry(data) {
             }
         }
 
-        const sessionsDir = path.join(process.cwd(), 'sessions');
+        const sessionsDir = path.join(BOT_ROOT, 'sessions');
         if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
 
         fs.writeFileSync(PRIMARY_REGISTRY_FILE, JSON.stringify(cleanData, null, 2), 'utf8');
@@ -217,7 +255,7 @@ export function saveSubBotsRegistry(data) {
     }
 }
 
-const SAVED_PROFILES_FILE = path.join(process.cwd(), 'sub_bots_saved.json');
+const SAVED_PROFILES_FILE = path.join(BOT_ROOT, 'sub_bots_saved.json');
 
 /**
  * تحميل إعدادات البوتات المحفوظة لأصحابها
@@ -230,7 +268,7 @@ export function loadSavedBotProfiles() {
                 return JSON.parse(content);
             }
         }
-        const backupFile = path.join(process.cwd(), 'sessions', 'sub_bots_saved_backup.json');
+        const backupFile = path.join(BOT_ROOT, 'sessions', 'sub_bots_saved_backup.json');
         if (fs.existsSync(backupFile)) {
             return JSON.parse(fs.readFileSync(backupFile, 'utf8'));
         }
@@ -255,7 +293,7 @@ export function saveSavedBotProfile(phone, profile) {
         };
         fs.writeFileSync(SAVED_PROFILES_FILE, JSON.stringify(data, null, 2), 'utf8');
         try {
-            const backupDir = path.join(process.cwd(), 'sessions');
+            const backupDir = path.join(BOT_ROOT, 'sessions');
             if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
             const backupFile = path.join(backupDir, 'sub_bots_saved_backup.json');
             fs.writeFileSync(backupFile, JSON.stringify(data, null, 2), 'utf8');
@@ -629,7 +667,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                     }
                 }
                 if (updated) {
-                    const cfgPath = path.join(process.cwd(), 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                    const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
                     if (fs.existsSync(path.dirname(cfgPath))) {
                         fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
                     }
@@ -645,7 +683,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                     if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
                     if (!sock.subBotConfig.knownGroups.includes(update.id)) {
                         sock.subBotConfig.knownGroups.push(update.id);
-                        const cfgPath = path.join(process.cwd(), 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                        const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
                         if (fs.existsSync(path.dirname(cfgPath))) {
                             fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
                         }
@@ -693,7 +731,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                                 }
                                 try {
                                     fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8');
-                                    const dbPath = path.join(process.cwd(), 'scramble_db.json');
+                                    const dbPath = path.join(BOT_ROOT, 'scramble_db.json');
                                     if (fs.existsSync(dbPath)) {
                                         const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
                                         if (!db.lidMap) db.lidMap = {};
@@ -1248,7 +1286,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         // إذا لم يكن LID الحج مستخرجاً، نستخرجه فوراً عبر قاعدة البيانات أو السوكيت بعد الاتصال مباشرة
                         if (!cleanLid && cleanAdmin) {
                             try {
-                                const dbPath = path.join(process.cwd(), 'scramble_db.json');
+                                const dbPath = path.join(BOT_ROOT, 'scramble_db.json');
                                 if (fs.existsSync(dbPath)) {
                                     const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
                                     if (db.lidMap && db.lidMap[cleanAdmin]) {
@@ -1315,7 +1353,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         // توثيق الـ LID في scramble_db.json
                         if (cleanAdmin && cleanLid) {
                             try {
-                                const dbPath = path.join(process.cwd(), 'scramble_db.json');
+                                const dbPath = path.join(BOT_ROOT, 'scramble_db.json');
                                 if (fs.existsSync(dbPath)) {
                                     const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
                                     if (!db.lidMap) db.lidMap = {};
@@ -1496,7 +1534,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         }
                     }
                     if (updated) {
-                        const cfgPath = path.join(process.cwd(), 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                        const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
                         if (fs.existsSync(path.dirname(cfgPath))) {
                             fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
                         }
@@ -1512,7 +1550,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
                         if (!sock.subBotConfig.knownGroups.includes(update.id)) {
                             sock.subBotConfig.knownGroups.push(update.id);
-                            const cfgPath = path.join(process.cwd(), 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                            const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
                             if (fs.existsSync(path.dirname(cfgPath))) {
                                 fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
                             }
@@ -1673,7 +1711,7 @@ export async function initAllSubBots(mainConn) {
         }
 
         const cfg = registry[phone];
-        const sessionCreds = path.join(process.cwd(), 'sessions', 'sub_bots', phone, 'creds.json');
+        const sessionCreds = path.join(BOT_ROOT, 'sessions', 'sub_bots', phone, 'creds.json');
         const hasCreds = fs.existsSync(sessionCreds);
         if (cfg && cfg.status !== 'stopped' && cfg.status !== 'banned') {
             if (hasCreds || cfg.status === 'active') {
@@ -2098,7 +2136,7 @@ export function updateSubBotMainOwner(botPhone, newAdminPhone, newAdminLid = '')
     // ربط الـ LID برقم الهاتف في scramble_db.json
     if (cleanAdmin && newAdminLid) {
         try {
-            const dbPath = path.join(process.cwd(), 'scramble_db.json');
+            const dbPath = path.join(BOT_ROOT, 'scramble_db.json');
             if (fs.existsSync(dbPath)) {
                 const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
                 if (!db.lidMap) db.lidMap = {};
@@ -2261,7 +2299,36 @@ export function getSubBotsReport() {
     };
 }
 
-const UPDATES_TRACKER_FILE = path.join(process.cwd(), 'broadcasted_updates.json');
+/**
+ * قائمة بكافة بيانات البوتات الفرعية بالتفصيل للموقع ولوحة تحكم الحج
+ */
+export function getSubBotsList() {
+    getSubBotsReport(); // مزامنة الذاكرة والقرص أولاً
+    const registry = loadSubBotsRegistry() || {};
+    const deletedList = loadDeletedSubBots();
+
+    return Object.entries(registry)
+        .filter(([p]) => !deletedList.has(cleanPhoneNumber(p)))
+        .map(([phone, data]) => {
+            const cleanP = cleanPhoneNumber(phone) || phone;
+            const isRunning = activeSubBots.has(phone) || (cleanP && activeSubBots.has(cleanP));
+            const platform = data.installPlatform || (data.notifyJid?.startsWith('web:') ? 'web' : (data.notifyJid?.startsWith('tg:') ? 'telegram' : 'whatsapp'));
+            return {
+                phone: cleanP,
+                botName: data.botName || 'بوت فرعي',
+                callName: data.callName || 'فرعي',
+                gender: data.gender === 'female' ? 'أنثى' : 'ذكر',
+                personality: data.personality === 'bad' ? 'قليل الأدب ومشاكس 😈🔥' : 'محترم ومؤدب 😇🤍',
+                adminPhone: data.adminPhone || '201129249396',
+                adminLid: data.adminLid || '',
+                platform: platform,
+                status: isRunning ? 'active' : (data.status || 'stopped'),
+                installedAt: data.installedAt ? new Date(data.installedAt).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' }) : 'غير مسجل'
+            };
+        });
+}
+
+const UPDATES_TRACKER_FILE = path.join(BOT_ROOT, 'broadcasted_updates.json');
 
 /**
  * تحميل سجل التحديثات المذاعة للبوتات الفرعية

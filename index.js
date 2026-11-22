@@ -25,6 +25,32 @@ console.info = function (...args) {
     _origInfo.apply(console, args);
 };
 
+// 🛡️ معالجة وكتم أخطاء فك التشفير التالفة (Bad MAC) تلقائياً لمنع سبام الترمنال وإصلاح الجلسة ذاتياً
+const _origError = console.error;
+console.error = function (...args) {
+    const text = args.map(a => (typeof a === 'string' ? a : (a?.stack || a?.message || ''))).join(' ');
+    if (text.includes('Bad MAC') || text.includes('Failed to decrypt message with any known session') || text.includes('No matching sessions found')) {
+        // استخراج معرف الرقم أو الـ LID صاحب الجلسة التالفة لحذف ملفه وتجديد المفاتيح تلقائياً
+        const match = text.match(/(\d{10,20})_\d+\.\d+/);
+        if (match && match[1]) {
+            const brokenId = match[1];
+            try {
+                const sessionsDir = path.join(process.cwd(), 'sessions');
+                if (fs.existsSync(sessionsDir)) {
+                    const files = fs.readdirSync(sessionsDir);
+                    for (const f of files) {
+                        if (f.startsWith(`session-${brokenId}`)) {
+                            try { fs.unlinkSync(path.join(sessionsDir, f)); } catch (_) {}
+                        }
+                    }
+                }
+            } catch (_) {}
+        }
+        return; // كتم الخطأ تماماً من الظهور في الترمنال
+    }
+    _origError.apply(console, args);
+};
+
 // ⚡ تحرير الذاكرة دورياً وبشكل مكثف للحفاظ على استهلاك الرام خفيفاً جداً
 if (typeof global.gc === 'function') {
     setTimeout(() => { try { global.gc(); } catch (_) {} }, 3000);
