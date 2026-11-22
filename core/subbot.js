@@ -1013,6 +1013,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     ].filter(Boolean);
 
     const isTelegramInstallEarly = String(notifyJid).startsWith('tg:');
+    const isWebInstallEarly = String(notifyJid).startsWith('web:');
     const telegramChatIdEarly = isTelegramInstallEarly ? String(notifyJid).replace('tg:', '') : '';
 
     let cfgData = {
@@ -1029,7 +1030,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
         bannedUsers: [],
         notifyJid: notifyJid || '',
         telegramChatId: telegramChatIdEarly,
-        installPlatform: isTelegramInstallEarly ? 'telegram' : 'whatsapp',
+        installPlatform: isWebInstallEarly ? 'web' : (isTelegramInstallEarly ? 'telegram' : 'whatsapp'),
         installedAt: new Date().toISOString(),
         status: 'active',
         sleep: false,
