@@ -23,8 +23,9 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
     const footer = `\n─── 𖤐 ──── 𖤐 ───\n` +
                    `↩️ *للرجوع للقائمة الرئيسية:* أرسل (منيو)\n` +
                    `💡 *للتنقل المباشر:* أرسل رقم القسم (1 - 9)\n` +
+                   `🌐 *موقع التنصيب الرسمي:* https://shadow-bott.web.app/\n` +
                    `📢 *قناة الواتساب:* https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
-                   `🌐 *تليجرام البوت والقناة:* https://t.me/Shadowcomm_bot`;
+                   `🔵 *تليجرام البوت والقناة:* https://t.me/Shadowcomm_bot`;
 
     // القائمة الرئيسية المرقمة بالأقسام
     if (!section || section === 0 || section === 'main') {
@@ -235,15 +236,15 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                footer;
     }
 
-    // 9. قسم قناة المطور
+    // 9. قسم قناة المطور والموقع الرسمي
     if (section === 9 || section === '9' || section === 'channel' || section === 'قناة' || section === 'قناه') {
         return header +
-               `📢 *[ 9️⃣ قناة المطور وبوت تليجرام الرسمي ]* 📢\n\n` +
-               `تابع كافة التحديثات، المميزات الجديدة، الإعلانات وشروحات البوت الحصرية عبر قنواتنا الرسمية:\n\n` +
+               `📢 *[ 9️⃣ موقع التنصيب، قناة التحديثات وبوت تليجرام ]* 📢\n\n` +
+               `تابع كافة التحديثات، المميزات الجديدة، وشروحات البوت ورابط التنصيب الذاتي:\n\n` +
+               `🌐 *موقع التنصيب وإدارة البوتات الفرعية:*\n` +
+               `https://shadow-bott.web.app/\n\n` +
                `🟢 *قناة الواتساب الرسمية:*\n` +
                `https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n\n` +
-               `💬 *رابط شات وتواصل المطور واتساب:*\n` +
-               `https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n\n` +
                `🔵 *بوت وقناة تليجرام الرسمية:*\n` +
                `https://t.me/Shadowcomm_bot\n\n` +
                `👑 *المطور والمالك العام:* الحج شادو (@Shadwwmy)\n\n` +
@@ -270,9 +271,9 @@ export function getMenuSection(section, botName = 'شادو', isSubBot = false) 
                `• استيكر (مع حقوق Shadow Bot) | استيكر حقوق [اسمك] | سرقة وتعديل حقوق ستيكر | اغنية / شغل | انطق | صوره | بروف [صورة البروفايل]\n\n` +
                `💬 *[ الردود السريعة والدردشة ]* ➔ أرسل *8*\n` +
                `• قول | ${botName} / بوت | ابوك مين | ردود الشتائم للبوت قليل الأدب | بموت | حصل | خلصانه | اتصل بمين\n\n` +
-               `📢 *[ قناة المطور الرسمية وتليجرام ]* ➔ أرسل *9*\n` +
-               `• واتساب: https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
-               `• شات المطور: https://wa.me/message/6GYOJZ7NVOIGM1?src=qr\n` +
+               `📢 *[ موقع التنصيب، القناة وتليجرام ]* ➔ أرسل *9*\n` +
+               `• الموقع الرسمي: https://shadow-bott.web.app/\n` +
+               `• قناة الواتساب: https://whatsapp.com/channel/0029VbDsDKlKgsNryj6w0A1F\n` +
                `• تليجرام: https://t.me/Shadowcomm_bot\n` +
                footer;
     }

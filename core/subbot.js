@@ -985,6 +985,18 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
 }
 
 /**
+ * توليد باسورد سري عشوائي للبوت الفرعي لإدارته وتعديل بياناته
+ */
+export function generateSubBotPassword() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let pwd = 'SB-';
+    for (let i = 0; i < 6; i++) {
+        pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return pwd;
+}
+
+/**
  * طلب ربط بوت فرعي واستخراج كود الاقتران عبر واتساب
  */
 export async function requestSubBotPairing(targetPhone, botName, callName, adminPhone, adminLid, gender = 'male', personality = 'respectful', mainConn, notifyJid, quotedMek, customNotifier = null) {
@@ -1054,6 +1066,10 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     const isWebInstallEarly = String(notifyJid).startsWith('web:');
     const telegramChatIdEarly = isTelegramInstallEarly ? String(notifyJid).replace('tg:', '') : '';
 
+    const currentRegEarly = loadSubBotsRegistry() || {};
+    const existingPwd = currentRegEarly[cleanPhone]?.botPassword;
+    const botPassword = existingPwd || generateSubBotPassword();
+
     let cfgData = {
         phone: cleanPhone,
         botName: botName,
@@ -1072,7 +1088,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
         installedAt: new Date().toISOString(),
         status: 'active',
         sleep: false,
-        muted: false
+        muted: false,
+        botPassword: botPassword
     };
 
     // تنظيف أي جلسة غير مكتملة أو معلقة سابقة لضمان توليد مفاتيح ربط جديدة نقية
@@ -2306,13 +2323,19 @@ export function getSubBotsList() {
     getSubBotsReport(); // مزامنة الذاكرة والقرص أولاً
     const registry = loadSubBotsRegistry() || {};
     const deletedList = loadDeletedSubBots();
+    let regUpdated = false;
 
-    return Object.entries(registry)
+    const list = Object.entries(registry)
         .filter(([p]) => !deletedList.has(cleanPhoneNumber(p)))
         .map(([phone, data]) => {
             const cleanP = cleanPhoneNumber(phone) || phone;
             const isRunning = activeSubBots.has(phone) || (cleanP && activeSubBots.has(cleanP));
             const platform = data.installPlatform || (data.notifyJid?.startsWith('web:') ? 'web' : (data.notifyJid?.startsWith('tg:') ? 'telegram' : 'whatsapp'));
+            if (!data.botPassword) {
+                data.botPassword = generateSubBotPassword();
+                registry[phone] = data;
+                regUpdated = true;
+            }
             return {
                 phone: cleanP,
                 botName: data.botName || 'بوت فرعي',
@@ -2323,9 +2346,85 @@ export function getSubBotsList() {
                 adminLid: data.adminLid || '',
                 platform: platform,
                 status: isRunning ? 'active' : (data.status || 'stopped'),
-                installedAt: data.installedAt ? new Date(data.installedAt).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' }) : 'غير مسجل'
+                installedAt: data.installedAt ? new Date(data.installedAt).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' }) : 'غير مسجل',
+                botPassword: data.botPassword
             };
         });
+
+    if (regUpdated) {
+        saveSubBotsRegistry(registry);
+    }
+    return list;
+}
+
+/**
+ * البحث عن بيانات البوت الفرعي عبر الباسورد السري الخاص به
+ */
+export function findSubBotByPassword(password) {
+    if (!password) return null;
+    const cleanPwd = String(password).trim().toUpperCase();
+    const registry = loadSubBotsRegistry() || {};
+    const deletedList = loadDeletedSubBots();
+
+    for (const [phone, data] of Object.entries(registry)) {
+        const cleanP = cleanPhoneNumber(phone) || phone;
+        if (deletedList.has(cleanP)) continue;
+        if (data.botPassword && data.botPassword.trim().toUpperCase() === cleanPwd) {
+            const isRunning = activeSubBots.has(phone) || (cleanP && activeSubBots.has(cleanP));
+            return {
+                phone: cleanP,
+                botName: data.botName || 'بوت فرعي',
+                callName: data.callName || 'فرعي',
+                gender: data.gender === 'female' ? 'أنثى' : 'ذكر',
+                personality: data.personality === 'bad' ? 'قليل الأدب ومشاكس 😈🔥' : 'محترم ومؤدب 😇🤍',
+                adminPhone: data.adminPhone || '201129249396',
+                adminLid: data.adminLid || '',
+                platform: data.installPlatform || 'web',
+                status: isRunning ? 'active' : (data.status || 'stopped'),
+                installedAt: data.installedAt ? new Date(data.installedAt).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' }) : 'غير مسجل',
+                botPassword: data.botPassword
+            };
+        }
+    }
+    return null;
+}
+
+/**
+ * تعديل إعدادات البوت الفرعي (الاسم، النداء، الجنس، الشخصية)
+ */
+export async function updateSubBotSettings(phone, { botName, callName, gender, personality }) {
+    const cleanPhone = cleanPhoneNumber(phone);
+    if (!cleanPhone) return { success: false, message: 'رقم هاتف غير صالح' };
+
+    const registry = loadSubBotsRegistry();
+    if (!registry[cleanPhone]) {
+        return { success: false, message: 'البوت غير مسجل في السيرفر' };
+    }
+
+    const cfg = registry[cleanPhone];
+    if (botName && botName.trim()) cfg.botName = botName.trim();
+    if (callName && callName.trim()) cfg.callName = callName.trim();
+    if (gender) cfg.gender = (gender === 'female' || gender === 'أنثى' || gender === 'بنت') ? 'female' : 'male';
+    if (personality) cfg.personality = (personality === 'bad' || personality === 'قليل الأدب' || personality === 'قليل الأدب ومشاكس 😈🔥') ? 'bad' : 'respectful';
+
+    registry[cleanPhone] = cfg;
+    saveSubBotsRegistry(registry);
+
+    // تحديث ملف الجلسة على القرص
+    const sessionCfgPath = path.join(SUB_BOTS_DIR, cleanPhone, 'config.json');
+    try {
+        if (fs.existsSync(path.dirname(sessionCfgPath))) {
+            fs.writeFileSync(sessionCfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+        }
+    } catch (_) {}
+
+    // تحديث السوكيت النشط في الذاكرة إن وجد
+    const active = activeSubBots.get(cleanPhone);
+    if (active && active.sock) {
+        active.sock.subBotConfig = cfg;
+    }
+
+    return { success: true, message: 'تم حفظ وتحديث إعدادات البوت بنجاح! 🚀', bot: cfg };
 }
 
 const UPDATES_TRACKER_FILE = path.join(BOT_ROOT, 'broadcasted_updates.json');
