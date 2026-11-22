@@ -1250,10 +1250,10 @@
     }
   },
   "sentRemindersLog": {
-    "date": "2026-11-21",
+    "date": "2026-11-22",
     "list": [
-      "salawat_2026-11-21_0",
-      "salawat_2026-11-21_3"
+      "salawat_2026-11-22_3",
+      "prayer_2026-11-22_الفجر 🌌"
     ]
   },
   "mainHajjUsers": [
@@ -1282,7 +1282,7 @@
     "01129249396",
     "194961618301016"
   ],
-  "lastSavedAt": 1795225830302,
+  "lastSavedAt": 1795316261866,
   "knownGroups": [
     "120363410622948934@g.us",
     "120363428308152695@g.us",
@@ -1302,5 +1302,5 @@
   "disabledMuslim": [],
   "mutedUsers": {},
   "antiBan": {},
-  "lastSalawatBroadcastTime": 1795225791370
+  "lastSalawatBroadcastTime": 1795315209566
 }

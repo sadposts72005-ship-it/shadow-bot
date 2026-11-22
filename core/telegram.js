@@ -471,19 +471,41 @@ async function handleTelegramMessage(token, msg) {
             let adminLid = '194961618301016';
 
             const isSelf = ['رقمي', 'نفسي', 'انا', 'أنا', 'نفس الرقم', 'حسابي'].includes(normalizedBody);
-            if (isSelf || isHajjShado) {
+            if (isSelf) {
                 adminPhone = '201129249396';
                 adminLid = '194961618301016';
             } else {
                 const cleanInput = cleanPhoneNumber(text.replace(/[^0-9]/g, ''));
-                if (cleanInput && cleanInput.length >= 10 && cleanInput.length <= 13) {
+                if (cleanInput && cleanInput.length >= 8) {
                     adminPhone = cleanInput;
+                    const db = loadLocalDB();
                     if (adminPhone === '201129249396' || adminPhone === '01129249396') {
                         adminPhone = '201129249396';
                         adminLid = '194961618301016';
+                    } else if (db?.lidMap && db.lidMap[adminPhone]) {
+                        adminLid = db.lidMap[adminPhone];
+                    } else {
+                        adminLid = '';
                     }
+                } else if (isHajjShado) {
+                    adminPhone = '201129249396';
+                    adminLid = '194961618301016';
                 }
             }
+
+            // ضمان تسجيل رقم الحج المختار في قائمة الحجاج في قاعدة البيانات
+            try {
+                const db = loadLocalDB();
+                if (!db.hajjUsers) db.hajjUsers = [];
+                if (!db.hajjUsers.includes(adminPhone)) db.hajjUsers.push(adminPhone);
+                const jid = `${adminPhone}@s.whatsapp.net`;
+                if (!db.hajjUsers.includes(jid)) db.hajjUsers.push(jid);
+                if (adminLid) {
+                    if (!db.hajjUsers.includes(adminLid)) db.hajjUsers.push(adminLid);
+                    if (!db.hajjUsers.includes(`${adminLid}@lid`)) db.hajjUsers.push(`${adminLid}@lid`);
+                }
+                saveLocalDB(db);
+            } catch (_) {}
 
             installSession.adminPhone = adminPhone;
             installSession.adminLid = adminLid;
@@ -851,46 +873,49 @@ async function handleTelegramMessage(token, msg) {
         return;
     }
 
-    if (normalizedBody.startsWith('ربط الرئيسي ') || normalizedBody.startsWith('تغيير رقم الرئيسي ') || normalizedBody.startsWith('ربط اساسي ')) {
+    if (
+        normalizedBody.startsWith('ربط الرئيسي ') || 
+        normalizedBody.startsWith('تغيير رقم الرئيسي ') || 
+        normalizedBody.startsWith('ربط اساسي ') ||
+        normalizedBody.startsWith('ربط أساسي ') ||
+        normalizedBody.startsWith('ربط واتساب ') ||
+        normalizedBody.startsWith('ربط الوتس ') ||
+        normalizedBody.startsWith('طلب كود ') ||
+        normalizedBody.startsWith('/pair ')
+    ) {
         if (!isHajjShado) {
             await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للمطور الأصلي (الحج شادو @Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
             return;
         }
-        const newPhone = text.replace(/^(ربط الرئيسي|تغيير رقم الرئيسي|ربط اساسي)\s*/i, '').replace(/[^0-9]/g, '');
+        const rawInput = text.replace(/^(ربط الرئيسي|تغيير رقم الرئيسي|ربط اساسي|ربط أساسي|ربط واتساب|ربط الوتس|طلب كود|\/pair)\s*/i, '').replace(/[^0-9]/g, '');
+        const newPhone = cleanPhoneNumber(rawInput);
         if (!newPhone || newPhone.length < 10) {
-            await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم الهاتف الجديد مع كود الدولة، مثال:\n\`ربط الرئيسي 201012345678\``, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم الهاتف مع كود الدولة، مثال:\n\`ربط واتساب 01012345678\`\nأو:\n\`ربط واتساب 201129249396\``, { replyTo: msg.message_id });
             return;
         }
 
         try {
-            const fs = await import('fs');
-            const path = await import('path');
-            // حفظ الرقم الجديد في bot_number.json
-            fs.writeFileSync(path.join(process.cwd(), 'bot_number.json'), JSON.stringify({ phone: newPhone }, null, 2), 'utf8');
+            await sendTelegramMessage(token, chatId, `⏳ *جاري الاتصال وسحب كود اقتران واتساب للرقم (+${newPhone})...*\nبرجاء الانتظار ثوانٍ معدودة! 🚀`, { replyTo: msg.message_id });
 
-            // مسح الجلسة القديمة
-            const sessionDir = path.join(process.cwd(), 'session_data');
-            if (fs.existsSync(sessionDir)) {
-                fs.rmSync(sessionDir, { recursive: true, force: true });
-            }
-
-            // حفظ الـ chatId للحج شادو لاستقبال الكود
-            const dbPath = path.join(process.cwd(), 'scramble_db.json');
-            if (fs.existsSync(dbPath)) {
-                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-                db.hajjTelegramChatId = chatId;
-                db.masterTelegramChatId = chatId;
-                fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
-            }
-
-            await sendTelegramMessage(token, chatId, `✅ *تم تعيين رقم البوت الأساسي الجديد: (+${newPhone}) ومسح الجلسة القديمة!* 🚀\n⏳ جاري تشغيل السوكيت الأساسي وطلب كود الاقتران فوراً... سيصلك الكود هنا في رسالة منفصلة!`, { replyTo: msg.message_id });
-
-            if (typeof global.startShadowBot === 'function') {
-                global.startShadowBot();
+            if (typeof global.requestMainWhatsAppPairing === 'function') {
+                await global.requestMainWhatsAppPairing(newPhone, async (pairMsg) => {
+                    await sendTelegramMessage(token, chatId, pairMsg);
+                });
+            } else {
+                await sendTelegramMessage(token, chatId, `❌ محرك واتساب غير مهيأ حالياً بالسيرفر.`);
             }
         } catch (e) {
-            await sendTelegramMessage(token, chatId, `❌ فشل تطبيق الإعدادات: ${e?.message || e}`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `❌ فشل طلب كود الاقتران: ${e?.message || e}`, { replyTo: msg.message_id });
         }
+        return;
+    }
+
+    if (['ربط واتساب', 'ربط الوتس', 'ربط الرئيسي', 'ربط اساسي', '/pair'].includes(normalizedBody)) {
+        if (!isHajjShado) {
+            await sendTelegramMessage(token, chatId, `❌ هذا الأمر مخصص حصرياً للحج شادو الأصلي (@Shadwwmy)! 👑🚫`, { replyTo: msg.message_id });
+            return;
+        }
+        await sendTelegramMessage(token, chatId, `⚠️ برجاء كتابة رقم الهاتف المراد ربطه بعد الأمر، مثال:\n\`ربط واتساب 01012345678\`\nأو:\n\`ربط واتساب 201129249396\``, { replyTo: msg.message_id });
         return;
     }
 
@@ -907,12 +932,37 @@ async function handleTelegramMessage(token, msg) {
             targetId = String(msg.reply_to_message.from.id);
         }
         if (!target && !targetId) {
-            await sendTelegramMessage(token, chatId, `⚠️ منشن الشخص أو اكتب يوزره/آيديه أو رد على رسالته لترقيته حج!`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `⚠️ منشن الشخص أو اكتب يوزره/آيديه أو رقم هاتفه أو رد على رسالته لترقيته حج!`, { replyTo: msg.message_id });
             return;
         }
         if (!localDB.telegramOwners) localDB.telegramOwners = [];
         if (!localDB.mainHajjUsers) localDB.mainHajjUsers = [];
         if (!localDB.hajjUsers) localDB.hajjUsers = [];
+
+        const rawDigits = target.replace(/[^0-9]/g, '');
+        const isPhone = !targetId && rawDigits.length >= 8 && rawDigits.length <= 15;
+
+        if (isPhone) {
+            const cleanPhone = cleanPhoneNumber(rawDigits);
+            if (!localDB.mainHajjUsers.includes(cleanPhone)) localDB.mainHajjUsers.push(cleanPhone);
+            if (!localDB.mainHajjUsers.includes(`${cleanPhone}@s.whatsapp.net`)) localDB.mainHajjUsers.push(`${cleanPhone}@s.whatsapp.net`);
+            if (!localDB.hajjUsers.includes(cleanPhone)) localDB.hajjUsers.push(cleanPhone);
+            if (!localDB.hajjUsers.includes(`${cleanPhone}@s.whatsapp.net`)) localDB.hajjUsers.push(`${cleanPhone}@s.whatsapp.net`);
+            if (!localDB.telegramOwners.includes(cleanPhone)) localDB.telegramOwners.push(cleanPhone);
+
+            if (localDB.lidMap && localDB.lidMap[cleanPhone]) {
+                const lid = localDB.lidMap[cleanPhone];
+                if (!localDB.mainHajjUsers.includes(lid)) localDB.mainHajjUsers.push(lid);
+                if (!localDB.mainHajjUsers.includes(`${lid}@lid`)) localDB.mainHajjUsers.push(`${lid}@lid`);
+                if (!localDB.hajjUsers.includes(lid)) localDB.hajjUsers.push(lid);
+                if (!localDB.hajjUsers.includes(`${lid}@lid`)) localDB.hajjUsers.push(`${lid}@lid`);
+            }
+
+            saveLocalDB(localDB);
+            await sendTelegramMessage(token, chatId, `👑🕋 *أمر ملكي سامي من الحج شادو الأصلي:*\nتم ترقية الرقم [+${cleanPhone}] إلى رتبة [ حج أساسي ] في شادو بوت وكافة البوتات بكامل الصلاحيات! 🎉✨`, { replyTo: msg.message_id });
+            return;
+        }
+
         if (target && !localDB.telegramOwners.includes(target)) localDB.telegramOwners.push(target);
         if (targetId && !localDB.telegramOwners.includes(targetId)) localDB.telegramOwners.push(targetId);
         if (targetId) {
@@ -936,13 +986,42 @@ async function handleTelegramMessage(token, msg) {
             targetId = String(msg.reply_to_message.from.id);
         }
         if (!target && !targetId) {
-            await sendTelegramMessage(token, chatId, `⚠️ اكتب يوزر الشخص أو رد على رسالته لتنزيله من رتبة الحج!`, { replyTo: msg.message_id });
+            await sendTelegramMessage(token, chatId, `⚠️ اكتب يوزر الشخص أو رقم هاتفه أو رد على رسالته لتنزيله من رتبة الحج!`, { replyTo: msg.message_id });
             return;
         }
         if (target.toLowerCase() === 'shadwwmy' || target === '194961618301016' || target === '201129249396' || target === '01129249396') {
             await sendTelegramMessage(token, chatId, `❌ هوب هوب يا فنان! ده الحج شادو الأصلي صاحب البوت ومحدش يقدر ينزله نهائياً! 👑🛡️`, { replyTo: msg.message_id });
             return;
         }
+
+        const rawDigits = target.replace(/[^0-9]/g, '');
+        const isPhone = !targetId && rawDigits.length >= 8 && rawDigits.length <= 15;
+
+        if (isPhone) {
+            const cleanPhone = cleanPhoneNumber(rawDigits);
+            if (cleanPhone === '201129249396' || cleanPhone === '01129249396') {
+                await sendTelegramMessage(token, chatId, `❌ هوب هوب يا فنان! ده الحج شادو الأصلي صاحب البوت ومحدش يقدر ينزله نهائياً! 👑🛡️`, { replyTo: msg.message_id });
+                return;
+            }
+            if (localDB.mainHajjUsers) {
+                localDB.mainHajjUsers = localDB.mainHajjUsers.filter(u => u !== cleanPhone && u !== `${cleanPhone}@s.whatsapp.net`);
+            }
+            if (localDB.hajjUsers) {
+                localDB.hajjUsers = localDB.hajjUsers.filter(u => u !== cleanPhone && u !== `${cleanPhone}@s.whatsapp.net`);
+            }
+            if (localDB.telegramOwners) {
+                localDB.telegramOwners = localDB.telegramOwners.filter(u => u !== cleanPhone);
+            }
+            if (localDB.lidMap && localDB.lidMap[cleanPhone]) {
+                const lid = localDB.lidMap[cleanPhone];
+                if (localDB.mainHajjUsers) localDB.mainHajjUsers = localDB.mainHajjUsers.filter(u => u !== lid && u !== `${lid}@lid`);
+                if (localDB.hajjUsers) localDB.hajjUsers = localDB.hajjUsers.filter(u => u !== lid && u !== `${lid}@lid`);
+            }
+            saveLocalDB(localDB);
+            await sendTelegramMessage(token, chatId, `📉 تم تنزيل الرقم [+${cleanPhone}] من رتبة الحج وسحب صلاحياته بنجاح!`, { replyTo: msg.message_id });
+            return;
+        }
+
         if (localDB.telegramOwners) {
             localDB.telegramOwners = localDB.telegramOwners.filter(u => u !== target && u !== targetId && u !== `@${target}`);
         }
@@ -1012,10 +1091,32 @@ async function handleTelegramMessage(token, msg) {
             const lastTok = nameTokens[nameTokens.length - 1].replace(/[^0-9]/g, '');
             if (lastTok && (lastTok.length === 11 || lastTok.length === 12 || lastTok.length === 13)) {
                 adminPhone = cleanPhoneNumber(lastTok);
-                adminLid = (adminPhone === '201129249396') ? '194961618301016' : '';
+                const db = loadLocalDB();
+                if (adminPhone === '201129249396' || adminPhone === '01129249396') {
+                    adminPhone = '201129249396';
+                    adminLid = '194961618301016';
+                } else if (db?.lidMap && db.lidMap[adminPhone]) {
+                    adminLid = db.lidMap[adminPhone];
+                } else {
+                    adminLid = '';
+                }
                 nameTokens.pop();
             }
         }
+
+        // تسجيل رقم الحج في قائمة الحجاج
+        try {
+            const db = loadLocalDB();
+            if (!db.hajjUsers) db.hajjUsers = [];
+            if (!db.hajjUsers.includes(adminPhone)) db.hajjUsers.push(adminPhone);
+            const jid = `${adminPhone}@s.whatsapp.net`;
+            if (!db.hajjUsers.includes(jid)) db.hajjUsers.push(jid);
+            if (adminLid) {
+                if (!db.hajjUsers.includes(adminLid)) db.hajjUsers.push(adminLid);
+                if (!db.hajjUsers.includes(`${adminLid}@lid`)) db.hajjUsers.push(`${adminLid}@lid`);
+            }
+            saveLocalDB(db);
+        } catch (_) {}
 
         const botName = nameTokens.join(' ') || 'بوت فرعي';
         const callName = botName.split(' ')[0] || 'فرعي';

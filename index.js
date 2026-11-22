@@ -377,6 +377,50 @@ export function getMsgTimestamp(m) {
 }
 
 let isReconnecting = false;
+global.manualPairingRequested = false;
+global.manualPairingPhone = null;
+global.manualPairingNotifier = null;
+
+/**
+ * دالة طلب كود اقتران واتساب للبوت الأساسي عند الطلب اليدوي فقط
+ */
+export async function requestMainWhatsAppPairing(phoneNumber, notifyCallback = null) {
+    const cleanPhone = String(phoneNumber || '').replace(/[^0-9]/g, '');
+    if (!cleanPhone || cleanPhone.length < 10) {
+        if (notifyCallback) await notifyCallback('❌ رقم الهاتف غير صالح! برجاء كتابة رقم صحيح مع كود الدولة.');
+        return false;
+    }
+
+    try {
+        const numFile = path.join(process.cwd(), 'bot_number.json');
+        fs.writeFileSync(numFile, JSON.stringify({ phone: cleanPhone }, null, 2), 'utf8');
+    } catch (_) {}
+
+    // مسح الجلسة القديمة لضمان ربط جديد نظيف وبيور
+    try {
+        const sessionDir = path.join(process.cwd(), 'session_data');
+        if (fs.existsSync(sessionDir)) {
+            const files = fs.readdirSync(sessionDir);
+            for (const file of files) {
+                if (file !== 'scramble_db_backup.json') {
+                    try { fs.rmSync(path.join(sessionDir, file), { recursive: true, force: true }); } catch (_) {}
+                }
+            }
+        }
+    } catch (_) {}
+
+    global.manualPairingRequested = true;
+    global.manualPairingPhone = cleanPhone;
+    global.manualPairingNotifier = notifyCallback;
+    global.latestPairingCode = null;
+
+    if (typeof global.startShadowBot === 'function') {
+        global.startShadowBot();
+        return true;
+    }
+    return false;
+}
+global.requestMainWhatsAppPairing = requestMainWhatsAppPairing;
 
 export async function startShadowBot() {
     global.startShadowBot = startShadowBot;
@@ -444,6 +488,20 @@ export async function startShadowBot() {
 
     // 📁 استخدام مجلد الجلسة الخاص بالبوت لضمان حفظ الاتصال
     const { state, saveCreds } = await useMultiFileAuthState('session_data');
+    const isRegistered = Boolean(state.creds?.registered);
+
+    // 🛑 وضع الأمان الصارم: إذا لم تكن هناك جلسة مسجلة مسبقاً ولم يطلب المستخدم ربطاً يدوياً الآن
+    if (!isRegistered && !global.manualPairingRequested) {
+        console.log('\n============================================================');
+        console.log('ℹ️ [WhatsApp Main] لا توجد جلسة واتساب مسجلة حالياً.');
+        console.log('🛡️ وضع الأمان التام: تم إيقاف طلب أكواد الاقتران التلقائي لحماية أرقامك من الحظر.');
+        console.log('✈️ بوت تليجرام يعمل الآن بكامل طاقته وألعابه وأوامره 24/7 دون أي اعتماد على واتساب!');
+        console.log('💡 لربط رقم واتساب في أي وقت: اكتب في تليجرام: (ربط واتساب <رقم الهاتف>).');
+        console.log('============================================================\n');
+        global.conn = null;
+        global.latestPairingCode = null;
+        return;
+    }
     
     // 🔄 جلب أحدث إصدار توافقي تلقائياً لتفادي خطأ 405
     const { version } = await fetchLatestBaileysVersion();
@@ -557,8 +615,8 @@ export async function startShadowBot() {
     conn.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
-        // 🔑 طلب كود الربط بطريقة آمنة ومستقرة إذا كان البوت غير مسجل
-        if (!conn.authState.creds.registered && !isPairingRequested) {
+        // 🔑 طلب كود الربط عند طلب الاقتران اليدوي فقط وبشكل غير متكرر
+        if (!conn.authState.creds.registered && global.manualPairingRequested && !isPairingRequested) {
             isPairingRequested = true;
             setTimeout(async () => {
                 try {
@@ -567,7 +625,7 @@ export async function startShadowBot() {
                         isPairingRequested = false;
                         return;
                     }
-                    let targetBotPhone = '201229409956';
+                    let targetBotPhone = global.manualPairingPhone || '201229409956';
                     try {
                         const numFile = path.join(process.cwd(), 'bot_number.json');
                         if (fs.existsSync(numFile)) {
@@ -585,6 +643,7 @@ export async function startShadowBot() {
                     global.latestPairingCode = cleanCode;
                     global.latestPairingFormatted = formattedCode;
                     global.latestPairingPhone = phoneNumber;
+                    global.manualPairingRequested = false;
 
                     console.log('\n====================================');
                     console.log(`🤖 SHADOW BOT PAIRING CODE (+${phoneNumber}):`);
@@ -592,43 +651,32 @@ export async function startShadowBot() {
                     console.log(`🔑 مقسم: ${formattedCode}`);
                     console.log('====================================\n');
 
-                    // إرسال كود الاقتران عبر تليجرام أيضاً إن كان البوت يعمل على تليجرام
-                    try {
-                        const { sendTelegramMessage } = await import('./core/telegram.js');
-                        const dbPath = path.join(process.cwd(), 'scramble_db.json');
-                        if (fs.existsSync(dbPath)) {
-                            const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-                            const token = db.telegramToken;
-                            const targetChats = new Set([
-                                db.hajjTelegramChatId, 
-                                db.masterTelegramChatId,
-                                '2055141456',
-                                '6058342366',
-                                ...(Array.isArray(db.telegramOwners) ? db.telegramOwners.filter(x => /^[0-9]+$/.test(x)) : [])
-                            ]);
-                            if (token) {
-                                for (const hajjChat of targetChats) {
-                                    if (hajjChat) {
-                                        const tgMsg = 
-                                            `🔑 *كود اقتران البوت الأساسي الجديد (+${phoneNumber}):*\n\n` +
-                                            `📋 اضغط للنسخ مباشرة (بدون شَرطة):\n\`${cleanCode}\`\n\n` +
-                                            `🔢 مقسم بالشكل: \`${formattedCode}\`\n\n` +
-                                            `⏳ *معاك 3 دقائق كاملة (180 ثانية) براحتك تماماً عشان تلحق تحط الكود بدون استعجال!*\n\n` +
-                                            `⚠️ *خطوات مهمة جداً لنجاح الربط:*\n` +
-                                            `1️⃣ في واتساب: ادخل على *الأجهزة المرتبطة*، ولو في جهاز قديم اسمه (شادووو) اضغط عليه واعمل *تسجيل خروج* فوراً.\n` +
-                                            `2️⃣ اضغط *ربط جهاز* ⬅️ *ربط باستخدام رقم الهاتف بدلاً من ذلك*.\n` +
-                                            `3️⃣ انسخ الكود أعلاه وضعه في الخانات (الرمز 8 حروف وأرقام فقط).`;
-                                        await sendTelegramMessage(token, hajjChat, tgMsg).catch(() => {});
-                                    }
-                                }
-                            }
-                        }
-                    } catch (_) {}
+                    const tgMsg = 
+                        `🔑 *كود اقتران البوت الأساسي الجديد (+${phoneNumber}):*\n\n` +
+                        `📋 اضغط للنسخ مباشرة (بدون شَرطة):\n\`${cleanCode}\`\n\n` +
+                        `🔢 مقسم بالشكل: \`${formattedCode}\`\n\n` +
+                        `⏳ *معاك 3 دقائق كاملة (180 ثانية) براحتك تماماً عشان تلحق تحط الكود بدون استعجال!*\n\n` +
+                        `⚠️ *خطوات مهمة جداً لنجاح الربط:*\n` +
+                        `1️⃣ في واتساب: ادخل على *الأجهزة المرتبطة*، ولو في جهاز قديم اسمه (شادووو) اضغط عليه واعمل *تسجيل خروج* فوراً.\n` +
+                        `2️⃣ اضغط *ربط جهاز* ⬅️ *ربط باستخدام رقم الهاتف بدلاً من ذلك*.\n` +
+                        `3️⃣ انسخ الكود أعلاه وضعه في الخانات (الرمز 8 حروف وأرقام فقط).`;
+
+                    if (typeof global.manualPairingNotifier === 'function') {
+                        try {
+                            await global.manualPairingNotifier(tgMsg);
+                        } catch (_) {}
+                    }
                 } catch (err) {
                     console.error('❌ خطأ في طلب كود الربط:', err?.message || err);
                     isPairingRequested = false;
+                    global.manualPairingRequested = false;
+                    if (typeof global.manualPairingNotifier === 'function') {
+                        try {
+                            await global.manualPairingNotifier(`❌ فشل طلب كود الاقتران من واتساب: ${err?.message || err}\nتأكد من سلامة الرقم وإلغاء حظره، وجرب ثانية عبر (ربط واتساب <الرقم>).`);
+                        } catch (_) {}
+                    }
                 }
-            }, 5000);
+            }, 3000);
         }
 
         if (connection === 'open') {
@@ -698,9 +746,16 @@ export async function startShadowBot() {
             const isRegistered = Boolean(conn.authState?.creds?.registered);
             console.log(`⚠️ [Main-Bot] انقطع الاتصال! الكود: ${reason} (مسجل: ${isRegistered})`);
 
+            // إذا لم يكن البوت مسجلاً، لا نقوم بإعادة الاتصال إطلاقاً لتفادي تكرار الأكواد والحظر
+            if (!isRegistered) {
+                console.log(`ℹ️ [Main-Bot] الجلسة غير مسجلة. البوت الأساسي في وضع الانتظار الساكن لحماية الرقم.`);
+                global.manualPairingRequested = false;
+                return;
+            }
+
             // 🛑 إذا تم رفض الجلسة أو تسجيل الخروج من واتساب (401)
             if (reason === DisconnectReason.loggedOut || reason === 401) {
-                console.log(`❌ [Shadow Bot] تم رفض جلسة البوت الأساسي (401). جاري تنظيف الجلسة لإتاحة ربط جديد نظيف...`);
+                console.log(`❌ [Shadow Bot] تم تسجيل الخروج من جلسة البوت الأساسي (401). جاري تنظيف الجلسة.`);
                 try {
                     const sessionDir = path.join(process.cwd(), 'session_data');
                     if (fs.existsSync(sessionDir)) {
@@ -713,13 +768,7 @@ export async function startShadowBot() {
                     }
                 } catch (_) {}
                 global.latestPairingCode = null;
-                if (!isReconnecting) {
-                    isReconnecting = true;
-                    setTimeout(() => {
-                        isReconnecting = false;
-                        startShadowBot();
-                    }, 5000);
-                }
+                // بعد 401 أصبحت الجلسة غير مسجلة، فلا نعيد الاتصال التلقائي لتفادي الحظر
                 return;
             }
 
@@ -730,7 +779,7 @@ export async function startShadowBot() {
                 return;
             }
 
-            // لا نقوم بمسح الجلسة أبداً تلقائياً، بل نعيد الاتصال دائماً للحفاظ على استقرار البوت ورقمك
+            // إعادة الاتصال التلقائي فقط للجلسات المفتوحة والمسجلة فعلياً عند انقطاع مؤقت بالإنترنت
             if (!isReconnecting) {
                 isReconnecting = true;
                 const delayMs = (reason === 515 || reason === DisconnectReason.restartRequired) ? 1500 : 3500;
