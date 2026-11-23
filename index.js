@@ -3,9 +3,22 @@ import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
+import net from 'net';
 import v8 from 'v8';
 import vm from 'vm';
 import { handleAllMessages } from './handler.js';
+
+// 🛡️ حارس النسخة الواحدة الصارم: منع تشغيل نسختين من البوت على الجهاز نهائياً لمنع تعارض السوكيت (440) وخروج البوتات
+const INSTANCE_LOCK_PORT = 34567;
+const instanceLockServer = net.createServer();
+instanceLockServer.once('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.warn('🛑 [Single Instance Guard] تنبيه: نسخة أخرى من البوت تعمل بالفعل على هذا الجهاز!');
+        console.warn('🛑 تم إنهاء هذه العملية فوراً لمنع تعارض السوكيت (Error 440: connectionReplaced) وحماية البوتات الفرعية من الخروج.');
+        process.exit(0);
+    }
+});
+instanceLockServer.listen(INSTANCE_LOCK_PORT, '127.0.0.1');
 
 // ⚡ تفعيل واستدعاء Garbage Collector وضبط استهلاك الذاكرة وتخفيف استهلاك الرام
 try {

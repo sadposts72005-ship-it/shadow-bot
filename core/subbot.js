@@ -531,10 +531,19 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
     if (!cleanPhone) return false;
     unmarkDeletedSubBot(cleanPhone);
 
-    // إذا كان شغالاً ومتصلاً بالفعل نتخطى
-    const active = activeSubBots.get(cleanPhone);
-    if (active && (active.sock?.ws?.isOpen || active.sock?.user?.id)) {
-        return true;
+    // إذا كان شغالاً ومتصلاً بنجاح نتخطى، وإذا كان السوكيت مقطوعاً نقفله تماماً أولاً
+    if (activeSubBots.has(cleanPhone)) {
+        const active = activeSubBots.get(cleanPhone);
+        if (active && active.sock?.ws?.isOpen && active.sock?.user?.id) {
+            return true;
+        }
+        try {
+            active.sock?.ws?.removeAllListeners();
+            active.sock?.ws?.close();
+            active.sock?.ev?.removeAllListeners();
+            active.sock?.end();
+        } catch (_) {}
+        activeSubBots.delete(cleanPhone);
     }
 
     // إذا كان البوت قيد بدء التشغيل بالفعل، نتخطى لمنع تكرار فتح السوكيت ومضاعفة استهلاك الرام
@@ -793,37 +802,17 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
 
-                if (statusCode === 401 || statusCode === DisconnectReason.loggedOut) {
-                    const attempts = (subBot401Attempts.get(cleanPhone) || 0) + 1;
-                    subBot401Attempts.set(cleanPhone, attempts);
-                    if (attempts <= 3) {
-                        console.log(`⚠️ [Sub-Bot] استلام كود 401 للبوت (+${cleanPhone}) (محاولة ${attempts}/3)، سيتم إعادة المحاولة بعد 10 ثوانٍ لحماية الجلسة...`);
-                        setTimeout(() => {
-                            const reg = loadSubBotsRegistry() || {};
-                            const latestCfg = reg[cleanPhone] || cfg;
-                            if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned') {
-                                bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
-                            }
-                        }, 10000);
-                        return;
-                    }
-                }
-
                 const isTerminal = statusCode === 403 || statusCode === 401 || statusCode === DisconnectReason.loggedOut;
                 if (isTerminal) {
-                    const statusReason = statusCode === 403 ? 'banned' : 'loggedOut';
-                    console.log(`❌ [Sub-Bot] تم ${statusCode === 403 ? 'حظر' : 'تسجيل خروج'} رقم البوت الفرعي من واتساب (+${cleanPhone}) بكود: ${statusCode}. تم إيقافه.`);
+                    console.log(`🗑️ [Sub-Bot Cleanup] تم تسجيل خروج أو حظر رقم البوت الفرعي (+${cleanPhone}) بكود: ${statusCode}. جاري مسحه وحذفه نهائياً...`);
                     try {
                         const registry = loadSubBotsRegistry() || {};
-                        if (registry[cleanPhone]) {
-                            registry[cleanPhone].status = statusReason;
-                            saveSubBotsRegistry(registry);
-                        }
-                        const cfgPath = path.join(SUB_BOTS_DIR, cleanPhone, 'config.json');
-                        if (fs.existsSync(cfgPath)) {
-                            const c = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-                            c.status = statusReason;
-                            fs.writeFileSync(cfgPath, JSON.stringify(c, null, 2), 'utf8');
+                        delete registry[cleanPhone];
+                        saveSubBotsRegistry(registry);
+
+                        const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+                        if (fs.existsSync(sessionDir)) {
+                            fs.rmSync(sessionDir, { recursive: true, force: true });
                         }
                     } catch (_) {}
                     return;
@@ -1222,78 +1211,36 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                     }
                                 }, 120000);
 
-                                // ⏱️ انتهاء صلاحية الكود بعد 3 دقائق (180 ثانية) وسؤال المستخدم إذا كان يريد كوداً آخر أم إلغاء
+                                // ⏱️ انتهاء صلاحية الكود بعد 3 دقائق (180 ثانية) وحذف الجلسة فوراً
                                 expireTimer = setTimeout(async () => {
                                     if (!isConnected && !isExpired && (!sock.authState?.creds?.registered)) {
                                         isExpired = true;
-                                        console.log(`⌛ [Sub-Bot Pairing] انتهاء صلاحية الكود للرقم (+${cleanPhone})`);
+                                        console.log(`⌛ [Sub-Bot Pairing] انتهاء مهلة الـ 3 دقائق للاقتران (+${cleanPhone})، جاري مسح الجلسة فوراً...`);
 
                                         try {
+                                            sock.ws?.removeAllListeners();
+                                            sock.ws?.close();
+                                            sock.ev?.removeAllListeners();
                                             sock.end(new Error('Pairing code 3m timeout'));
                                         } catch (_) {}
 
-                                        const retryKey = cleanAdmin || getCleanNumber(notifyJid) || cleanPhone;
-                                        const retryMsg = 
-                                            `⌛ *انتهت صلاحية كود الاقتران الحالي (3 دقائق)!* ⌛\n\n` +
-                                            `❓ *عايز تطلب كود جديد بنفس التنصيب ولا تلغي العملية؟*\n\n` +
-                                            `1️⃣ اكتب *(تجديد)* أو *(كود جديد)* أو *(1)* لتجديد الكود واستخراج كود ساري بنفس بيانات التنصيب 🔄\n` +
-                                            `2️⃣ اكتب *(الغاء)* أو *(2)* لإلغاء عملية التنصيب ❌\n\n` +
-                                            `⏱️ _الرسالة دي هتقعد 5 دقائق، لو مردتش البوت هيلغي العملية تلقائياً ويحفظ بيانات بوتك لتشغيله في أي وقت._`;
+                                        activePairingSockets.delete(cleanPhone);
 
-                                        await sendNotify(retryMsg);
-
-                                        // حفظ بيانات البوت الملغي للحفاظ على الخصوصية وإمكانية الاسترجاع
-                                        saveSavedBotProfile(retryKey, {
-                                            botName,
-                                            callName: finalCallName,
-                                            gender: finalGender,
-                                            personality: finalPersonality,
-                                            targetPhone: cleanPhone,
-                                            adminPhone: cleanAdmin || retryKey
-                                        });
-
-                                        // تايمر الـ 5 دقائق للإلغاء التلقائي في حال عدم الرد
-                                        const autoCancelTimer = setTimeout(async () => {
-                                            if (global.pendingPairingRetry && (global.pendingPairingRetry.has(retryKey) || global.pendingPairingRetry.has(cleanAdmin))) {
-                                                global.pendingPairingRetry.delete(retryKey);
-                                                if (cleanAdmin) global.pendingPairingRetry.delete(cleanAdmin);
-                                                if (notifyJid) global.pendingPairingRetry.delete(getCleanNumber(notifyJid));
-
-                                                try {
-                                                    if (fs.existsSync(sessionDir)) {
-                                                        fs.rmSync(sessionDir, { recursive: true, force: true });
-                                                    }
-                                                } catch (_) {}
-
-                                                console.log(`❌ [Sub-Bot Pairing] إلغاء تلقائي للتنصيب بعد 5 دقائق لعدم الرد (+${cleanPhone})`);
-                                                const autoCancelMsg = `❌ *تم إلغاء عملية التنصيب تلقائياً لعدم الرد خلال 5 دقائق.* ⌛\n💡 _تم حفظ بيانات بوتك (${botName})، لو حبيت ترجع تشغله في أي وقت اكتب فقط (تنصيب)._`;
-                                                await sendNotify(autoCancelMsg);
+                                        try {
+                                            if (fs.existsSync(sessionDir)) {
+                                                fs.rmSync(sessionDir, { recursive: true, force: true });
                                             }
-                                        }, 5 * 60 * 1000);
+                                        } catch (_) {}
 
-                                        if (!global.pendingPairingRetry) global.pendingPairingRetry = new Map();
-                                        const retryData = {
-                                            targetPhone: cleanPhone,
-                                            botName,
-                                            callName: finalCallName,
-                                            gender: finalGender,
-                                            personality: finalPersonality,
-                                            adminPhone: cleanAdmin,
-                                            adminLid: cleanLid,
-                                            sessionDir,
-                                            notifyJid,
-                                            quotedMek,
-                                            mainConn,
-                                            autoCancelTimer,
-                                            createdAt: Date.now()
-                                        };
+                                        try {
+                                            const reg = loadSubBotsRegistry() || {};
+                                            if (reg[cleanPhone] && reg[cleanPhone].status !== 'active') {
+                                                delete reg[cleanPhone];
+                                                saveSubBotsRegistry(reg);
+                                            }
+                                        } catch (_) {}
 
-                                        global.pendingPairingRetry.set(retryKey, retryData);
-                                        if (cleanAdmin) global.pendingPairingRetry.set(cleanAdmin, retryData);
-                                        if (notifyJid) {
-                                             const notifyClean = getCleanNumber(notifyJid);
-                                             if (notifyClean) global.pendingPairingRetry.set(notifyClean, retryData);
-                                        }
+                                        await sendNotify(`⌛ *انتهت مهلة الـ 3 دقائق المخصصة للاقتران!* ❌\nتم إلغاء التنصيب ومسح الجلسة بالكامل لحماية الخصوصية وموارد السيرفر. يمكنك طلب كود جديد في أي وقت.`);
                                     }
                                 }, 180000);
                             }
@@ -1404,38 +1351,19 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             } catch (_) {}
                         }
 
-                        activeSubBots.set(cleanPhone, { sock, cfg: cfgData, startTime: subBotStartTime });
+                        // 🚀 إرسال إشعار التفعيل والتهنئة للمنصّب وللحج شادو فوراً
+                        sendSubBotActivationAlerts(sock, cfgData, mainConn || global.conn, customNotifier).catch(() => {});
 
-                        // 📡 مزامنة مجموعات البوت الفرعي فور اتصاله لضمان إرسال الأذان والأذكار بها
-                        if (typeof sock.groupFetchAllParticipating === 'function') {
-                            sock.groupFetchAllParticipating().then(participatingGroups => {
-                                if (participatingGroups && typeof participatingGroups === 'object') {
-                                    const gids = Object.keys(participatingGroups).filter(g => g.endsWith('@g.us'));
-                                    if (!sock.subBotConfig) sock.subBotConfig = cfgData || {};
-                                    sock.subBotConfig.knownGroups = gids;
-                                    if (cfgData) cfgData.knownGroups = gids;
-                                    try {
-                                        const registry = loadSubBotsRegistry();
-                                        if (registry[cleanPhone]) {
-                                            registry[cleanPhone].knownGroups = gids;
-                                            saveSubBotsRegistry(registry);
-                                        }
-                                        const cfgPath = path.join(sessionDir, 'config.json');
-                                        if (fs.existsSync(cfgPath)) {
-                                            fs.writeFileSync(cfgPath, JSON.stringify(cfgData, null, 2), 'utf8');
-                                        }
-                                    } catch (_) {}
-                                    console.log(`📡 [Sub-Bot Sync] تم مزامنة ${gids.length} مجموعة للبوت الفرعي (+${cleanPhone}) بنجاح.`);
-                                }
-                            }).catch(() => {});
-                        }
-
-                        // تشغيل الأذكار والأذان تلقائياً على هذا البوت الفرعي
-                        try {
-                            const datelsModule = await import('../plugins/datels.js');
-                            if (datelsModule?.startAutoReminders) datelsModule.startAutoReminders(sock);
-                        } catch (_) {}
-
+                        // 🔄 إغلاق سوكيت الاقتران المؤقت بسلاسة وتسليم الإدارة بالكامل لـ bootSubBot
+                        setTimeout(() => {
+                            try {
+                                sock.ws?.removeAllListeners();
+                                sock.ws?.close();
+                                sock.ev?.removeAllListeners();
+                                sock.end();
+                            } catch (_) {}
+                            bootSubBot(cleanPhone, cfgData, mainConn || global.conn).catch(e => console.error(e));
+                        }, 1500);
 
                     } catch (openErr) {
                         console.error('❌ [Sub-Bot Connection Open Handling Error]:', openErr?.message || openErr);
@@ -1450,14 +1378,17 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                     const isTerminal = statusCode === DisconnectReason.loggedOut || statusCode === 403 || statusCode === 401;
                     if (isTerminal) {
-                        const statusReason = statusCode === 403 ? 'banned' : 'loggedOut';
-                        console.log(`❌ [Sub-Bot Pairing] تم ${statusCode === 403 ? 'حظر الرقم من واتساب' : 'تسجيل الخروج'} (+${cleanPhone}) بكود ${statusCode}. تم إيقاف المحاولات.`);
+                        console.log(`❌ [Sub-Bot Pairing] تم ${statusCode === 403 ? 'حظر الرقم من واتساب' : 'تسجيل الخروج'} (+${cleanPhone}) بكود ${statusCode}. جاري الحذف النهائي...`);
                         const reg = loadSubBotsRegistry() || {};
-                        if (reg[cleanPhone]) {
-                            reg[cleanPhone].status = statusReason;
-                            saveSubBotsRegistry(reg);
-                        }
-                        await sendNotify(`❌ تعذر إكمال اقتران البوت الفرعي (+${cleanPhone}) لأن الرقم ${statusCode === 403 ? 'محظور من واتساب (403)' : 'تم تسجيل خروجه'}.`);
+                        delete reg[cleanPhone];
+                        saveSubBotsRegistry(reg);
+                        recordDeletedSubBot(cleanPhone);
+                        try {
+                            if (fs.existsSync(sessionDir)) {
+                                fs.rmSync(sessionDir, { recursive: true, force: true });
+                            }
+                        } catch (_) {}
+                        await sendNotify(`❌ تعذر إكمال اقتران البوت الفرعي (+${cleanPhone}) لأن الرقم ${statusCode === 403 ? 'محظور من واتساب (403)' : 'تم تسجيل خروجه'}. تم مسح الجلسة نهائياً.`);
                         return;
                     }
 
@@ -1499,109 +1430,6 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         }
                     }, 2500);
                 }
-            });
-
-            // ربط مستمع الرسائل
-            sock.ev.on('messages.upsert', async ({ messages, type }) => {
-                if (!messages || messages.length === 0) return;
-
-                // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
-                for (const m of messages) {
-                    if (m && m.message && m.key?.id) {
-                        if (!sock._msgStore) sock._msgStore = new Map();
-                        sock._msgStore.set(m.key.id, m.message);
-                        if (sock._msgStore.size > 50) {
-                            const fk = sock._msgStore.keys().next().value;
-                            sock._msgStore.delete(fk);
-                        }
-                        if (global.mainMsgStore) {
-                            global.mainMsgStore.set(m.key.id, m.message);
-                            if (global.mainMsgStore.size > 200) {
-                                const firstK = global.mainMsgStore.keys().next().value;
-                                global.mainMsgStore.delete(firstK);
-                            }
-                        }
-
-                    }
-                }
-
-                if (type !== 'notify') return;
-                const nowSec = Math.floor(Date.now() / 1000);
-                const activeStart = sock.subBotStartTime || subBotStartTime || nowSec;
-
-                for (const m of messages) {
-                    try {
-                        if (!m.message) continue;
-
-                        // ⏰ تجاهل قاطع وفوري لأي رسالة قديمة جداً فقط (أكثر من 3 دقائق)
-                        const msgTime = getMsgTimestamp(m);
-                        if (msgTime > 0) {
-                            if (msgTime < (activeStart - 10) || (nowSec - msgTime) > 180) {
-                                continue;
-                            }
-                        }
-
-                        if (m.key.id && subBotSentMsgIds.has(m.key.id)) continue;
-                        const from = m.key.remoteJid;
-                        if (!from) continue;
-
-                        if (from.endsWith('@g.us')) {
-                            if (!sock.subBotConfig) sock.subBotConfig = {};
-                            if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
-                            if (!sock.subBotConfig.knownGroups.includes(from)) {
-                                sock.subBotConfig.knownGroups.push(from);
-                            }
-                        }
-
-                        await handleAllMessages(m, sock);
-                    } catch (err) {
-                        console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, err?.message || err);
-                    }
-                }
-            });
-
-            // 📥 تسجيل مجموعات البوت الفرعي تلقائياً
-            sock.ev.on('groups.upsert', async (groups) => {
-                try {
-                    if (!sock.subBotConfig) sock.subBotConfig = {};
-                    if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
-                    let updated = false;
-                    for (const g of groups) {
-                        const gid = g.id;
-                        if (gid && gid.endsWith('@g.us') && !sock.subBotConfig.knownGroups.includes(gid)) {
-                            sock.subBotConfig.knownGroups.push(gid);
-                            updated = true;
-                        }
-                    }
-                    if (updated) {
-                        const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
-                        if (fs.existsSync(path.dirname(cfgPath))) {
-                            fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
-                        }
-                    }
-                } catch (_) {}
-            });
-
-            // 🔥 الترحيب التلقائي وتسجيل الجروب بالبوت الفرعي
-            sock.ev.on('group-participants.update', async (update) => {
-                try {
-                    if (update?.id && update.id.endsWith('@g.us')) {
-                        if (!sock.subBotConfig) sock.subBotConfig = {};
-                        if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
-                        if (!sock.subBotConfig.knownGroups.includes(update.id)) {
-                            sock.subBotConfig.knownGroups.push(update.id);
-                            const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
-                            if (fs.existsSync(path.dirname(cfgPath))) {
-                                fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
-                            }
-                        }
-                    }
-                    const datelsModule = await import('../plugins/datels.js');
-                    const handler = datelsModule.default || datelsModule;
-                    if (handler && typeof handler.participantsUpdate === 'function') {
-                        await handler.participantsUpdate(update, sock);
-                    }
-                } catch (_) {}
             });
 
             return sock;
