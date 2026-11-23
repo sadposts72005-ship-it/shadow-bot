@@ -680,6 +680,9 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         let normalizedBody = normalizeArabic(textLower);
+        if (/^[./#!]/.test(normalizedBody)) {
+            normalizedBody = normalizedBody.replace(/^[./#!]+/, '').trim();
+        }
         mek.text = textLower;
         
         // 👑 المالك المطلق (الحج شادو الحقيقي الأصلي)
@@ -968,6 +971,7 @@ export async function handleAllMessages(mek, currentConn) {
         mek.isSubBotMainOwner = isSubBotMainOwner;
         mek.isSubBotHajj = isSubBotHajj;
         mek.isBotOwner = isBotOwner;
+        mek.isSenderAdmin = isSenderAdmin;
         currentConn.botName = botName;
         currentConn.callName = botCallName;
         currentConn.isSubBot = Boolean(subBotConfig);
@@ -1239,6 +1243,11 @@ export async function handleAllMessages(mek, currentConn) {
 
                 await respondWithStrictTiming('⚡', async () => {
                     await currentConn.sendMessage(from, { text: `⚡ *صباح الفل يا حج! تم استيقاظ (${botName}) في هذا الجروب وعاد للعمل بكامل طاقته للجميع!* 🚀🔥` }, { quoted: mek });
+                });
+                return;
+            } else {
+                await respondWithStrictTiming('⚡', async () => {
+                    await currentConn.sendMessage(from, { text: `⚡ *البوت مستيقظ وشغال بالفعل وبكامل طاقته يا حج!* 🚀🔥` }, { quoted: mek });
                 });
                 return;
             }
@@ -1591,6 +1600,10 @@ export async function handleAllMessages(mek, currentConn) {
             } else if (matchL2) {
                 isLeaveCmd = true;
                 if (matchL2[1]) specifiedLeaveName = normalizeArabic(matchL2[1].replace(/^يا\s+/, '').trim().toLowerCase());
+            }
+
+            if (['الجروب', 'الروم', 'المجموعة', 'من الجروب', 'من الروم', 'من المجموعة'].includes(specifiedLeaveName)) {
+                specifiedLeaveName = '';
             }
 
             if (isLeaveCmd) {
@@ -2721,7 +2734,7 @@ export async function handleAllMessages(mek, currentConn) {
                 });
                 return;
             }
-            const targetPhone = body.replace(/^(ايقاف تنصيب|إيقاف تنصيب)\s*/i, '').replace(/[^0-9]/g, '');
+            const targetPhone = body.replace(/^[./#!]*/, '').replace(/^(ايقاف تنصيب|إيقاف تنصيب)\s*/i, '').replace(/[^0-9]/g, '');
             if (!targetPhone) {
                 await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم الذي تريد إيقافه، مثال:\n(ايقاف تنصيب 201012345678)' }, { quoted: mek });
                 return;
@@ -2740,7 +2753,7 @@ export async function handleAllMessages(mek, currentConn) {
                 });
                 return;
             }
-            const targetPhone = body.replace(/^تشغيل تنصيب\s*/i, '').replace(/[^0-9]/g, '');
+            const targetPhone = body.replace(/^[./#!]*/, '').replace(/^تشغيل تنصيب\s*/i, '').replace(/[^0-9]/g, '');
             if (!targetPhone) {
                 await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم الذي تريد تشغيله، مثال:\n(تشغيل تنصيب 201012345678)' }, { quoted: mek });
                 return;
@@ -3243,7 +3256,7 @@ export async function handleAllMessages(mek, currentConn) {
                 });
                 return;
             }
-            const targetPhone = body.replace(/^(حذف تنصيب|الغاء تنصيب|إلغاء تنصيب)\s*/i, '').replace(/[^0-9]/g, '');
+            const targetPhone = body.replace(/^[./#!]*/, '').replace(/^(حذف تنصيب|الغاء تنصيب|إلغاء تنصيب)\s*/i, '').replace(/[^0-9]/g, '');
             if (!targetPhone) {
                 await currentConn.sendMessage(from, { text: '⚠️ اكتب الرقم الذي تريد حذفه، مثال:\n(حذف تنصيب 201012345678)' }, { quoted: mek });
                 return;
@@ -3255,7 +3268,7 @@ export async function handleAllMessages(mek, currentConn) {
             const targetBotName = botData?.botName || cleanTarget;
 
             // إذا حدد الحج خياره مباشرة مع الأمر (مثال: حذف تنصيب 201012345678 نعم أو لا)
-            const remaining = body.replace(/^(حذف تنصيب|الغاء تنصيب|إلغاء تنصيب)\s*/i, '').replace(targetPhone, '').trim();
+            const remaining = body.replace(/^[./#!]*/, '').replace(/^(حذف تنصيب|الغاء تنصيب|إلغاء تنصيب)\s*/i, '').replace(targetPhone, '').trim();
             const normRem = normalizeArabic(remaining);
             if (['نعم', 'اه', 'ايوه', '1', 'ارسل', 'ابعت', 'بلغ'].includes(normRem)) {
                 const res = await deleteSubBotRemote(cleanTarget, currentConn, true);
@@ -3605,6 +3618,25 @@ export async function handleAllMessages(mek, currentConn) {
                     return;
                 }
             }
+        }
+
+        if (['عشان انت الحج', 'عشان انت الحج بس', 'عشان انت الحج مسموحلك'].includes(normalizedBody)) {
+            const isFemale = (subBotConfig?.gender === 'female');
+            const isFather = isAbsoluteOwner || isSubBotMainOwner || (currentConn.isSubBot && isSubBotAdmin);
+            let reply = '';
+            if (isFather) {
+                reply = isFemale 
+                    ? 'عشان انت/ي ابويا/امي ف مسموحلك كل حاجة ومحدش يقدر يكلمك يا تاج راسي! 👑❤️' 
+                    : 'عشان انت ابويا ف مسموحلك كل حاجة ومحدش يقدر يكلمك يا تاج راسي! 👑❤️';
+            } else {
+                reply = isFemale 
+                    ? 'عشان انت/ي الحج/ة بس.. ف مسموحلك كل حاجة ومحدش يقدر يكلمك يا كبيرنا وسيد الناس! 👑❤️' 
+                    : 'عشان انت الحج بس.. ف مسموحلك كل حاجة ومحدش يقدر يكلمك يا كبيرنا وسيد الناس! 👑❤️';
+            }
+            await respondWithStrictTiming('👑', async () => {
+                await currentConn.sendMessage(from, { text: reply }, { quoted: mek });
+            });
+            return;
         }
 
         if (isExactShatema && isHajj) {

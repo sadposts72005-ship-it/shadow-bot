@@ -1228,6 +1228,7 @@ const datelsHandler = {
                 subAdminNumbers.includes(cleanSenderNum) ||
                 subAdminNumbers.includes(senderCleanPhone) ||
                 subAdminNumbers.includes(sender) ||
+                (Array.isArray(subCfg.subHajjUsers) && (subCfg.subHajjUsers.includes(cleanSenderNum) || subCfg.subHajjUsers.includes(senderCleanPhone))) ||
                 (subCfg.adminJid && (sender === subCfg.adminJid || cleanSenderNum === getCleanNumber(subCfg.adminJid))) ||
                 mek.isSubBotAdmin ||
                 mek.isSubBotMainOwner
@@ -1253,6 +1254,10 @@ const datelsHandler = {
 
             let textLower = body.toLowerCase().trim();
             let normalizedBody = normalizeArabic(textLower);
+            // إزالة أي بادئة (. أو / أو # أو !) تلقائياً لضمان عمل كافة أوامر الإشراف والحج سواء بنقطة أو بدونها
+            if (/^[./#!]/.test(normalizedBody)) {
+                normalizedBody = normalizedBody.replace(/^[./#!]+/, '').trim();
+            }
 
             // 🤖 [تحديد وفحص البوت المستهدف وعزل البوتات في الروم الواحد]
             // يدعم توجيه الأمر للبوت بوضع اسمه في أول الأمر (يا شادو اقفل ترحيبات) أو في آخر الأمر (اقفل ترحيبات شادو)
@@ -1383,8 +1388,10 @@ const datelsHandler = {
                                (localDB.lidMap?.[myBotNum] && groupAdmins.includes(localDB.lidMap[myBotNum])) ||
                                (currentConn.subBotConfig?.phone && groupAdmins.includes(cleanPhoneNumber(currentConn.subBotConfig.phone)));
 
-            let isSenderAdmin = groupAdmins.includes(cleanSenderNum) || 
+            let isSenderAdmin = Boolean(mek.isSenderAdmin) || 
+                                groupAdmins.includes(cleanSenderNum) || 
                                 (localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum])) ||
+                                (mappedSender && groupAdmins.includes(mappedSender)) ||
                                 (senderCleanPhone && groupAdmins.includes(senderCleanPhone));
             let creatorMember = participants.find(p => p.admin === 'superadmin');
             let groupCreatorRaw = creatorMember ? getCleanNumber(creatorMember.id) : '';
@@ -2022,6 +2029,10 @@ const datelsHandler = {
                     isLeaveMatch = true;
                     if (matchL2[1]) specifiedName = normalizeArabic(matchL2[1].replace(/^يا\s+/, '').trim().toLowerCase());
                 }
+
+                if (['الجروب', 'الروم', 'المجموعة', 'من الجروب', 'من الروم', 'من المجموعة'].includes(specifiedName)) {
+                    specifiedName = '';
+                }
             }
 
             if (isLeaveMatch) {
@@ -2342,7 +2353,7 @@ const datelsHandler = {
                 }
 
                 // رفع أدمن
-                if (normalizedBody.startsWith('رفع ادمن') || normalizedBody.startsWith('رفع مشرف') || normalizedBody.startsWith('ترقيه') || normalizedBody.startsWith('ترقية')) {
+                if ((normalizedBody.startsWith('رفع ادمن') || normalizedBody.startsWith('رفع مشرف') || normalizedBody.startsWith('ترقيه') || normalizedBody.startsWith('ترقية')) && !normalizedBody.includes('حج') && !normalizedBody.includes('تنبيه')) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -2372,7 +2383,7 @@ const datelsHandler = {
                 }
 
                 // تنزيل أدمن
-                if (normalizedBody.startsWith('نزل ادمن') || normalizedBody.startsWith('نزل مشرف') || normalizedBody.startsWith('تنزيل ادمن') || normalizedBody.startsWith('تنزيل مشرف') || normalizedBody.startsWith('تنزيل') || normalizedBody.startsWith('سحب الاشراف')) {
+                if ((normalizedBody.startsWith('نزل ادمن') || normalizedBody.startsWith('نزل مشرف') || normalizedBody.startsWith('تنزيل ادمن') || normalizedBody.startsWith('تنزيل مشرف') || normalizedBody.startsWith('تنزيل') || normalizedBody.startsWith('سحب الاشراف')) && !normalizedBody.includes('حج') && !normalizedBody.includes('تنبيه')) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -2418,9 +2429,6 @@ const datelsHandler = {
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
-                    const isBotAdmin = groupAdmins.includes(myBotNum) || 
-                                       (localDB.lidMap?.[myBotNum] && groupAdmins.includes(localDB.lidMap[myBotNum])) || 
-                                       (currentConn.user?.lid && groupAdmins.includes(getCleanNumber(currentConn.user.lid)));
                     if (!isBotAdmin) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ يجب ترقية البوت لمشرف (Admin) في المجموعة أولاً ليتمكن من الإضافة! 🛡️' }, { quoted: mek });
@@ -2481,7 +2489,9 @@ const datelsHandler = {
                         return true;
                     }
                     let targetNum = getCleanNumber(target);
-                    if (targetNum === ownerPhone || targetNum === ownerLid || targetNum === groupCreatorRaw || isUserInList(target, localDB.mainHajjUsers)) {
+                    const subCfg = currentConn.subBotConfig || {};
+                    const isProtectedTarget = targetNum === ownerPhone || targetNum === ownerLid || targetNum === ownerAltPhone || targetNum === groupCreatorRaw || isUserInList(target, localDB.mainHajjUsers) || (Array.isArray(subCfg.subHajjUsers) && subCfg.subHajjUsers.includes(targetNum)) || (subCfg.adminPhone && targetNum === subCfg.adminPhone) || (Array.isArray(subCfg.adminNumbers) && subCfg.adminNumbers.includes(targetNum));
+                    if (isProtectedTarget) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ لا يمكن طرد الحج شادو أو منشئ المجموعة أو الحجاج المعتمدين!' }, { quoted: mek });
                         return true;
@@ -2575,8 +2585,12 @@ const datelsHandler = {
                         }
                     }
 
-                    // إذا وجد أكثر من بوت في الروم ولم يحدد اسم، وكان البوت فرعياً، يترك الأمر للبوت الأساسي
-                    if (!isMuteDirectedToMe && currentConn.isSubBot && otherBotNames.length > 0) {
+                    // إذا وجد البوت الأساسي متصلاً ونشطاً في نفس الروم ولم يحدد اسم، وكان البوت فرعياً، يترك الأمر للبوت الأساسي
+                    const isMainBotActiveInThisRoom = participants.some(p => {
+                        const pNum = getCleanNumber(p.id);
+                        return pNum === mainBotNumber && global.conn && global.conn.user?.id;
+                    });
+                    if (!isMuteDirectedToMe && currentConn.isSubBot && isMainBotActiveInThisRoom) {
                         return false;
                     }
 
@@ -2716,7 +2730,12 @@ const datelsHandler = {
                         }
                     }
 
-                    if (!isUnmuteDirectedToMe && currentConn.isSubBot && otherBotNames.length > 0) {
+                    // إذا وجد البوت الأساسي متصلاً ونشطاً في نفس الروم ولم يحدد اسم، وكان البوت فرعياً، يترك الأمر للبوت الأساسي
+                    const isMainBotActiveInThisRoom = participants.some(p => {
+                        const pNum = getCleanNumber(p.id);
+                        return pNum === mainBotNumber && global.conn && global.conn.user?.id;
+                    });
+                    if (!isUnmuteDirectedToMe && currentConn.isSubBot && isMainBotActiveInThisRoom) {
                         return false;
                     }
 
@@ -2938,7 +2957,7 @@ const datelsHandler = {
                 // منشن مخفي (تنبيه جميع الأعضاء دون إظهار أرقامهم في الرسالة)
                 if (normalizedBody.startsWith('منشن مخفي') || normalizedBody.startsWith('تاغ مخفي') || normalizedBody.startsWith('تاج مخفي') || normalizedBody.startsWith('مخفي') || normalizedBody.startsWith('تنبيه مخفي')) {
                     await handleCommandTiming('👻');
-                    let customMsg = body.replace(/^(منشن\s*مخفي|تاغ\s*مخفي|تاج\s*مخفي|مخفي|تنبيه\s*مخفي)\s*/i, '').trim();
+                    let customMsg = body.replace(/^[./#!]+/, '').replace(/^(منشن\s*مخفي|تاغ\s*مخفي|تاج\s*مخفي|مخفي|تنبيه\s*مخفي)\s*/i, '').trim();
                     let mentionsList = participants.map(p => p.id).filter(Boolean);
                     let ghostText = customMsg 
                         ? `👻 *[ تنبيه مخفي للجميع ]* 🔔\n\n${customMsg}`
@@ -2951,7 +2970,7 @@ const datelsHandler = {
                 // منشن جماعي ظاهر
                 if (normalizedBody.startsWith('منشن') || normalizedBody.startsWith('تاغ') || normalizedBody.startsWith('تاج')) {
                     await handleCommandTiming('📢');
-                    let customMsg = body.replace(/^(منشن|تاغ|تاج)\s*/i, '').trim();
+                    let customMsg = body.replace(/^[./#!]+/, '').replace(/^(منشن|تاغ|تاج)\s*/i, '').trim();
                     let mentionsList = participants.map(p => p.id).filter(Boolean);
                     let tagText = `📢 *منشن جماعي لجميع الأعضاء:* 📢\n`;
                     if (customMsg) tagText += `\n💬 *الرسالة:* ${customMsg}\n`;
