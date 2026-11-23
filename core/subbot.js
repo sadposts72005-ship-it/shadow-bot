@@ -950,30 +950,8 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
         try { await customNotifier(successMsg); } catch (_) {}
     }
 
-    // 2. إرسال للشخص المنصّب عبر واتساب بدون أي تكرار
-    const cMain = (mainConn && mainConn.user?.id) ? mainConn : global.conn;
-    const sender = (cMain && cMain.user?.id) ? cMain : sock;
-
-    const targetNumbers = new Set();
-    if (cleanPhone) targetNumbers.add(cleanPhone);
-    if (cleanAdmin && cleanAdmin !== cleanPhone) {
-        targetNumbers.add(cleanAdmin);
-    }
-    if (cfg.notifyJid && !String(cfg.notifyJid).startsWith('tg:') && !cfg.notifyJid.endsWith('@g.us')) {
-        const cNotify = cleanPhoneNumber(cfg.notifyJid);
-        if (cNotify) targetNumbers.add(cNotify);
-    }
-
-    for (const num of targetNumbers) {
-        const destJid = `${num}@s.whatsapp.net`;
-        try {
-            if (sender) {
-                await sender.sendMessage(destJid, { text: successMsg }).catch(() => {});
-            }
-        } catch (_) {}
-    }
-
-    // 3. إشعار فوري للحج شادو (المالك الأصلي) عبر واتساب وتليجرام دائماً
+    // تم إلغاء إرسال رسائل الإشعار على واتساب بناءً على طلب الحج شادو (يتم المتابعة عبر لوحة الموقع)
+    // 3. إشعار فوري للحج شادو (المالك الأصلي) عبر تليجرام فقط
     const isTelegramInstall = Boolean(tgChatId || String(cfg.notifyJid).startsWith('tg:'));
     const ownerNotice = 
         `📢 *إشعار تنصيب بوت فرعي جديد:*\n` +
@@ -984,13 +962,6 @@ export async function sendSubBotActivationAlerts(sock, cfg, mainConn = null, cus
         `👤 *الحج الأساسي:* +${cleanAdmin}${cleanLid ? ` (ID: ${cleanLid})` : ''}\n` +
         `⏰ *التاريخ:* ${new Date().toLocaleString('ar-EG')}\n` +
         `👑 الحج الأصلي لديه التحكم الكامل بهذا البوت.`;
-
-    const masterPhone = '201129249396@s.whatsapp.net';
-    try {
-        if (sender) {
-            await sender.sendMessage(masterPhone, { text: ownerNotice }).catch(() => {});
-        }
-    } catch (_) {}
 
     // إرسال عبر تليجرام للحج شادو
     if (tgToken) {
