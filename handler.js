@@ -1543,21 +1543,28 @@ export async function handleAllMessages(mek, currentConn) {
                 );
 
                 if (!isQuotedToThisBot && !isGameActiveOnMe) {
-                    const isGameStarter = /^(كوره|كورة|لعبة الكورة|احزر|احذر|رتب|ترتيب|xo|اكس او|صراحه|صراحة|بكاسه|بكاسة|بازل|puzzle|فيلم|افلام)$/i.test(normalizedBody);
-                    const isGeneralCmd = /^(اوامر|الاوامر|أوامر|الأوامر|منيو|المنيو|مطور|المطور|بنج|ping)$/i.test(normalizedBody);
+                    const cleanCheck = normalizedBody.replace(/^[./#!]/, '').trim();
+                    const isGameStarter = /^(كوره|كورة|لعبة الكورة|احزر|احذر|رتب|ترتيب|xo|اكس او|صراحه|صراحة|بكاسه|بكاسة|بازل|puzzle|فيلم|افلام)$/i.test(cleanCheck);
+                    const isGeneralCmd = /^(اوامر|الاوامر|أوامر|الأوامر|منيو|المنيو|مطور|المطور|بنج|ping)$/i.test(cleanCheck);
                     if (isGameStarter || isGeneralCmd) {
                         if (mainBotPresentInRoom) {
                             if (currentConn.isSubBot) return;
                         } else if (otherBotsPresentInRoom) {
-                            // إذا لم يكن البوت الأساسي متواجداً وتوجد عدة بوتات فرعية في نفس الروم:
-                            // نختار بوتاً فرعياً واحداً فقط لبدء الأمر غير الموجه تفادياً لتضارب الألعاب
-                            const subBotNumbersInRoom = [myBotNum];
-                            for (const num of allOtherBotNumbers) {
-                                subBotNumbersInRoom.push(num);
+                            // نتحقق من أرقام البوتات الفرعية النشطة والمتواجدة فعلياً في هذا الجروب فقط
+                            const activeSubBotsInRoom = [myBotNum];
+                            if (groupMeta && Array.isArray(groupMeta.participants)) {
+                                for (const p of groupMeta.participants) {
+                                    const pNum = p.id?.split('@')[0]?.split(':')[0]?.replace(/[^0-9]/g, '');
+                                    if (pNum && pNum !== myBotNum && activeSubBots.has(pNum)) {
+                                        activeSubBotsInRoom.push(pNum);
+                                    }
+                                }
                             }
-                            subBotNumbersInRoom.sort();
-                            if (subBotNumbersInRoom[0] !== myBotNum) {
-                                return;
+                            if (activeSubBotsInRoom.length > 1) {
+                                activeSubBotsInRoom.sort();
+                                if (activeSubBotsInRoom[0] !== myBotNum) {
+                                    return;
+                                }
                             }
                         }
                     }
@@ -3896,29 +3903,30 @@ export async function handleAllMessages(mek, currentConn) {
 
         // 📜 [قائمة الأوامر المقسمة إلى أقسام ذكية بالأرقام]
         // =========================================================================
-        const isMainMenuCmd = ['اوامر', 'أوامر', 'منيو', 'المنيو', 'menu', 'help'].includes(normalizedBody);
-        const isAllMenuCmd = ['اوامر الكل', 'أوامر الكل', 'منيو الكل', 'المنيو الكل', 'اوامر كل', 'منيو كل', 'الكل'].includes(normalizedBody);
+        const cleanMenuCmd = normalizedBody.replace(/^[./#!]/, '').trim();
+        const isMainMenuCmd = /^(اوامر|الاوامر|أوامر|الأوامر|منيو|المنيو|menu|help)$/i.test(cleanMenuCmd);
+        const isAllMenuCmd = /^(اوامر الكل|الاوامر الكل|أوامر الكل|الأوامر الكل|منيو الكل|المنيو الكل|اوامر كل|الاوامر كل|منيو كل|الكل)$/i.test(cleanMenuCmd);
 
         let targetMenuSec = null;
         if (isAllMenuCmd) {
             targetMenuSec = 'all';
-        } else if (/^(قسم\s*1|1)$/.test(normalizedBody) || ['الالعاب', 'الألعاب', 'قسم الالعاب', 'قسم الألعاب'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*1|1)$/.test(cleanMenuCmd) || ['الالعاب', 'الألعاب', 'قسم الالعاب', 'قسم الألعاب'].includes(cleanMenuCmd)) {
             targetMenuSec = 1;
-        } else if (/^(قسم\s*2|2)$/.test(normalizedBody) || ['البروفايل', 'نقاط', 'قسم البروفايل', 'قسم النقاط'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*2|2)$/.test(cleanMenuCmd) || ['البروفايل', 'نقاط', 'قسم البروفايل', 'قسم النقاط'].includes(cleanMenuCmd)) {
             targetMenuSec = 2;
-        } else if (/^(قسم\s*3|3)$/.test(normalizedBody) || ['الجروب', 'الجروبات', 'الاشراف', 'الإشراف', 'قسم الجروب', 'قسم الاشراف'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*3|3)$/.test(cleanMenuCmd) || ['الجروب', 'الجروبات', 'الاشراف', 'الإشراف', 'قسم الجروب', 'قسم الاشراف'].includes(cleanMenuCmd)) {
             targetMenuSec = 3;
-        } else if (/^(قسم\s*4|4)$/.test(normalizedBody) || ['التنبيهات', 'الانذارات', 'قسم التنبيهات'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*4|4)$/.test(cleanMenuCmd) || ['التنبيهات', 'الانذارات', 'قسم التنبيهات'].includes(cleanMenuCmd)) {
             targetMenuSec = 4;
-        } else if (/^(قسم\s*5|5)$/.test(normalizedBody) || ['التنصيب', 'البوتات الفرعية', 'قسم التنصيب'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*5|5)$/.test(cleanMenuCmd) || ['التنصيب', 'البوتات الفرعية', 'قسم التنصيب'].includes(cleanMenuCmd)) {
             targetMenuSec = 5;
-        } else if (/^(قسم\s*6|6)$/.test(normalizedBody) || ['الحج', 'المالك', 'اوامر الحج', 'قسم الحج', 'قسم المالك'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*6|6)$/.test(cleanMenuCmd) || ['الحج', 'المالك', 'اوامر الحج', 'قسم الحج', 'قسم المالك'].includes(cleanMenuCmd)) {
             targetMenuSec = 6;
-        } else if (/^(قسم\s*7|7)$/.test(normalizedBody) || ['الذكاء', 'الميديا', 'قسم الذكاء', 'قسم الميديا'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*7|7)$/.test(cleanMenuCmd) || ['الذكاء', 'الميديا', 'قسم الذكاء', 'قسم الميديا'].includes(cleanMenuCmd)) {
             targetMenuSec = 7;
-        } else if (/^(قسم\s*8|8)$/.test(normalizedBody) || ['الردود', 'الدردشة', 'قسم الردود', 'قسم الدردشة'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*8|8)$/.test(cleanMenuCmd) || ['الردود', 'الدردشة', 'قسم الردود', 'قسم الدردشة'].includes(cleanMenuCmd)) {
             targetMenuSec = 8;
-        } else if (/^(قسم\s*9|9)$/.test(normalizedBody) || ['القناة', 'القناه', 'قناة', 'قناه', 'قناة المطور', 'قناه المطور', 'قسم القناة', 'قسم القناه'].includes(normalizedBody)) {
+        } else if (/^(قسم\s*9|9)$/.test(cleanMenuCmd) || ['القناة', 'القناه', 'قناة', 'قناه', 'قناة المطور', 'قناه المطور', 'قسم القناة', 'قسم القناه', 'الموقع', 'موقع'].includes(cleanMenuCmd)) {
             targetMenuSec = 9;
         }
 

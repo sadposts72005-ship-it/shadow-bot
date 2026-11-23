@@ -1,1 +1,125 @@
-{}
+{
+  "201201721798": {
+    "phone": "201201721798",
+    "botName": "𝑺𝒐𝒏 𝑮𝒐𝒌𝒖",
+    "callName": "غوكو",
+    "gender": "male",
+    "personality": "respectful",
+    "adminPhone": "201201721798",
+    "adminLid": "",
+    "adminJid": "201201721798@s.whatsapp.net",
+    "adminNumbers": [
+      "201201721798",
+      "011201721798",
+      "+201201721798",
+      "201201721798@s.whatsapp.net",
+      "011201721798@s.whatsapp.net"
+    ],
+    "subHajjUsers": [
+      "201201721798",
+      "011201721798"
+    ],
+    "bannedUsers": [],
+    "notifyJid": "web:1795397198221",
+    "telegramChatId": "",
+    "installPlatform": "web",
+    "installedAt": "2026-11-23T01:26:38.224Z",
+    "status": "active",
+    "sleep": false,
+    "muted": false,
+    "botPassword": "SB-PYWPAX",
+    "notifiedSuccess": true,
+    "knownGroups": [
+      "120363432285567288@g.us",
+      "120363431471423703@g.us",
+      "120363431101248136@g.us",
+      "120363430944476695@g.us",
+      "120363430807399584@g.us",
+      "120363430510175394@g.us",
+      "120363429087919945@g.us",
+      "120363415215359242@g.us",
+      "120363415039960121@g.us",
+      "120363414847445082@g.us"
+    ]
+  },
+  "201025639937": {
+    "phone": "201025639937",
+    "botName": "العرصجي",
+    "callName": "عرصجي",
+    "gender": "male",
+    "personality": "respectful",
+    "adminPhone": "201025639937",
+    "adminLid": "",
+    "adminJid": "201025639937@s.whatsapp.net",
+    "adminNumbers": [
+      "201025639937",
+      "011025639937",
+      "+201025639937",
+      "201025639937@s.whatsapp.net",
+      "011025639937@s.whatsapp.net"
+    ],
+    "subHajjUsers": [
+      "201025639937",
+      "011025639937"
+    ],
+    "bannedUsers": [],
+    "notifyJid": "web:1795400428627",
+    "telegramChatId": "",
+    "installPlatform": "web",
+    "installedAt": "2026-11-23T02:20:28.631Z",
+    "status": "active",
+    "sleep": false,
+    "muted": false,
+    "botPassword": "SB-QHZGA9",
+    "notifiedSuccess": true,
+    "knownGroups": [
+      "120363430308818820@g.us",
+      "120363429492599617@g.us",
+      "120363415039960121@g.us",
+      "120363414960795321@g.us",
+      "120363413702108641@g.us",
+      "120363350185406918@g.us"
+    ]
+  },
+  "201026358352": {
+    "phone": "201026358352",
+    "botName": "رورو",
+    "callName": "رورو",
+    "gender": "female",
+    "personality": "respectful",
+    "adminPhone": "201026358352",
+    "adminLid": "",
+    "adminJid": "201026358352@s.whatsapp.net",
+    "adminNumbers": [
+      "201026358352",
+      "011026358352",
+      "+201026358352",
+      "201026358352@s.whatsapp.net",
+      "011026358352@s.whatsapp.net"
+    ],
+    "subHajjUsers": [
+      "201026358352",
+      "011026358352"
+    ],
+    "bannedUsers": [],
+    "notifyJid": "web:1795400870329",
+    "telegramChatId": "",
+    "installPlatform": "web",
+    "installedAt": "2026-11-23T02:27:50.333Z",
+    "status": "active",
+    "sleep": false,
+    "muted": false,
+    "botPassword": "SB-9G3M5S",
+    "notifiedSuccess": true,
+    "knownGroups": [
+      "201554491139-1608834916@g.us",
+      "120363431248490888@g.us",
+      "120363430793188885@g.us",
+      "120363415039960121@g.us",
+      "120363414632836424@g.us",
+      "120363414344686558@g.us",
+      "120363213064413715@g.us",
+      "120363022122867247@g.us"
+    ]
+  }
+}

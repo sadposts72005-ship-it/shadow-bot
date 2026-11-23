@@ -1627,7 +1627,7 @@ export function startSubBotWatchdog(mainConn) {
             const registry = loadSubBotsRegistry() || {};
             for (const [phone, cfg] of Object.entries(registry)) {
                 const clean = cleanPhoneNumber(phone);
-                if (!clean || cfg?.status === 'stopped' || cfg?.status === 'banned') continue;
+                if (!clean || cfg?.status === 'stopped' || cfg?.status === 'banned' || cfg?.status === 'loggedOut') continue;
 
                 // نتخطى إذا كان البوت قيد التشغيل بالفعل أو مجدولاً للإقلاع
                 if (bootingPhones.has(clean) || scheduledBootTimers.has(clean)) continue;
