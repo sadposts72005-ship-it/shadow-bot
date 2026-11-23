@@ -64,6 +64,9 @@ if (typeof global.gc === 'function') {
 import { startAutoReminders } from './plugins/datels.js';
 // 🤖 استيراد محرك البوتات الفرعية (Sub-Bots)
 import { initAllSubBots } from './core/subbot.js';
+// 🌐 استيراد وتشغيل محرك الجسر السحابي للربط مع موقع الويب وتطبيق الفلاتر (Cloud Bridge Worker)
+import { startBridgeWorker } from './core/bridge_worker.js';
+startBridgeWorker();
 // ✈️ استيراد محرك تليجرام الموحد (Telegram Bot Engine)
 import { startTelegramBot, startTelegramWatchdog, stopTelegramBot, getTelegramStatus, OFFICIAL_TELEGRAM_TOKEN, getSanitizedTelegramToken } from './core/telegram.js';
 import { loadLocalDB } from './core/database.js';
