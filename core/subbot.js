@@ -404,12 +404,24 @@ export function formatGenderText(text) {
         .replace(/مقدرش ازعل من حبايب بابا الحج/g, 'مقدرش ازعل من حبايب بابا/ماما الحج/ة');
 }
 
+let cachedBaileysVersion = null;
+async function getCachedBaileysVersion() {
+    if (cachedBaileysVersion) return cachedBaileysVersion;
+    try {
+        const { version } = await fetchLatestBaileysVersion();
+        if (version) cachedBaileysVersion = version;
+    } catch (_) {
+        cachedBaileysVersion = [2, 3000, 1015901307];
+    }
+    return cachedBaileysVersion;
+}
+
 /**
  * إعداد سوكيت بوت فرعي مع تطبيق معايير الأمان ومكافحة الحظر
  */
 async function createSubBotSocket(phone, sessionDir) {
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
-    const { version } = await fetchLatestBaileysVersion();
+    const version = await getCachedBaileysVersion();
 
     const sock = makeWASocket({
         version,
@@ -1177,10 +1189,10 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             sock.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect } = update;
 
-                // 🔑 طلب كود الاقتران فور الاتصال وبأقصى سرعة
+                // 🔑 طلب كود الاقتران فوراً وبأقصى سرعة
                 if (!sock.authState.creds.registered && !pairingCodeSent) {
                     pairingCodeSent = true;
-                    setTimeout(async () => {
+                    setImmediate(async () => {
                         try {
                             if (!sock.authState.creds.registered && !isExpired) {
                                 let code = await sock.requestPairingCode(cleanPhone);
@@ -1262,7 +1274,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             console.error('❌ خطأ في استخراج كود الاقتران:', codeErr?.message || codeErr);
                             pairingCodeSent = false;
                         }
-                    }, 3500);
+                    });
                 }
 
                 if (connection === 'open') {

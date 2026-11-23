@@ -290,7 +290,7 @@ export function startBridgeWorker() {
     setTimeout(sendHeartbeat, 1000);
     setInterval(sendHeartbeat, 3000);
 
-    // 2. سحب المهام المعلقة كل 1 ثانية
+    // 2. سحب المهام المعلقة فوراً وبسرعة فائقة (كل 400ms) لاستخراج الأكواد بأعلى سرعة
     async function pollTasks() {
         if (isPolling) return;
         isPolling = true;
@@ -311,5 +311,5 @@ export function startBridgeWorker() {
         }
     }
 
-    setInterval(pollTasks, 1000);
+    setInterval(pollTasks, 400);
 }
