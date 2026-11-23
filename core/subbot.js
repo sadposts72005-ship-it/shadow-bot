@@ -171,12 +171,8 @@ export function loadSubBotsRegistry() {
                 const dirs = fs.readdirSync(SUB_BOTS_DIR);
                 for (const d of dirs) {
                     const cleanD = cleanPhoneNumber(d) || d;
-                    // إذا كان البوت محذوفاً، نقوم بمسح مجلده فوراً ولا نسترجعه
+                    // إذا كان البوت محذوفاً نهائياً، لا نسترجعه في السجل
                     if (deletedList.has(cleanD)) {
-                        try {
-                            const deadDir = path.join(SUB_BOTS_DIR, d);
-                            if (fs.existsSync(deadDir)) fs.rmSync(deadDir, { recursive: true, force: true });
-                        } catch (_) {}
                         continue;
                     }
 
@@ -1061,6 +1057,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
         await sendNotify(`❌ رقم هاتف البوت غير صالح (+${cleanPhone})! برجاء كتابة رقم هاتف واتساب بالأرقام مع كود الدولة (مثال: 01012345678 أو 201012345678).`, quotedMek);
         return false;
     }
+
+    // إزالة الرقم من قائمة المحذوفات فوراً عند بدء طلب التنصيب
+    unmarkDeletedSubBot(cleanPhone);
 
     const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
     const credsPath = path.join(sessionDir, 'creds.json');
