@@ -1189,11 +1189,16 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             sock.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect } = update;
 
-                // 🔑 طلب كود الاقتران فوراً وبأقصى سرعة
+                // 🔑 طلب كود الاقتران فوراً بمجرد اكتمال السوكيت وبأقصى سرعة
                 if (!sock.authState.creds.registered && !pairingCodeSent) {
                     pairingCodeSent = true;
-                    setImmediate(async () => {
+                    (async () => {
                         try {
+                            if (typeof sock.waitForSocketOpen === 'function') {
+                                await sock.waitForSocketOpen().catch(() => {});
+                            } else {
+                                await new Promise(r => setTimeout(r, 400));
+                            }
                             if (!sock.authState.creds.registered && !isExpired) {
                                 let code = await sock.requestPairingCode(cleanPhone);
                                 code = code?.match(/.{1,4}/g)?.join("-") || code;
@@ -1274,7 +1279,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             console.error('❌ خطأ في استخراج كود الاقتران:', codeErr?.message || codeErr);
                             pairingCodeSent = false;
                         }
-                    });
+                    })();
                 }
 
                 if (connection === 'open') {
