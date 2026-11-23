@@ -62,6 +62,7 @@ const sentSubBotActivationPhones = new Set();
 // تتبع الرسائل المرسلة من البوتات الفرعية لتجنب اللوب
 export const subBotSentMsgIds = new Set();
 global.subBotSentMsgIds = subBotSentMsgIds;
+const subBot401Attempts = new Map();
 
 /**
  * تحميل قائمة أرقام البوتات المحذوفة نهائياً لمنع استرجاعها بعد التحديثات
@@ -163,11 +164,6 @@ export function loadSubBotsRegistry() {
             }
         }
 
-        // 🛡️ تصفية صارمة: حذف أي رقم مسجل في قائمة المحذوفات نهائياً
-        for (const delPhone of deletedList) {
-            if (registry[delPhone]) delete registry[delPhone];
-        }
-
         // 🔄 فحص مجلدات الجلسات الفعلية لاسترجاع البوتات غير المحذوفة فقط
         if (fs.existsSync(SUB_BOTS_DIR)) {
             let foundAny = false;
@@ -233,12 +229,11 @@ export function loadSubBotsRegistry() {
  */
 export function saveSubBotsRegistry(data) {
     try {
-        const deletedList = loadDeletedSubBots();
         const cleanData = {};
         if (data && typeof data === 'object') {
             for (const [p, cfg] of Object.entries(data)) {
                 const cleanP = cleanPhoneNumber(p) || p;
-                if (cleanP && !deletedList.has(cleanP)) {
+                if (cleanP && cfg && typeof cfg === 'object') {
                     cleanData[cleanP] = cfg;
                 }
             }
@@ -538,6 +533,7 @@ async function createSubBotSocket(phone, sessionDir) {
 export async function bootSubBot(phone, cfg, mainConn = null) {
     const cleanPhone = cleanPhoneNumber(phone);
     if (!cleanPhone) return false;
+    unmarkDeletedSubBot(cleanPhone);
 
     // إذا كان شغالاً ومتصلاً بالفعل نتخطى
     const active = activeSubBots.get(cleanPhone);
@@ -707,6 +703,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 subBotStartTime = Math.floor(Date.now() / 1000);
                 sock.subBotStartTime = subBotStartTime;
                 console.log(`🤖 [Sub-Bot] البوت الفرعي (${cfg.botName || cleanPhone}) متصل وشغال الآن! (+${cleanPhone})`);
+                subBot401Attempts.delete(cleanPhone);
 
                 if (typeof global.gc === 'function') {
                     try { global.gc(); } catch (_) {}
@@ -799,6 +796,22 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 }
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
+
+                if (statusCode === 401 || statusCode === DisconnectReason.loggedOut) {
+                    const attempts = (subBot401Attempts.get(cleanPhone) || 0) + 1;
+                    subBot401Attempts.set(cleanPhone, attempts);
+                    if (attempts <= 3) {
+                        console.log(`⚠️ [Sub-Bot] استلام كود 401 للبوت (+${cleanPhone}) (محاولة ${attempts}/3)، سيتم إعادة المحاولة بعد 10 ثوانٍ لحماية الجلسة...`);
+                        setTimeout(() => {
+                            const reg = loadSubBotsRegistry() || {};
+                            const latestCfg = reg[cleanPhone] || cfg;
+                            if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned') {
+                                bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
+                            }
+                        }, 10000);
+                        return;
+                    }
+                }
 
                 const isTerminal = statusCode === 403 || statusCode === 401 || statusCode === DisconnectReason.loggedOut;
                 if (isTerminal) {
@@ -1848,6 +1861,7 @@ export async function stopSubBot(phone) {
  */
 export async function startSubBotRemote(phone, mainConn) {
     const cleanPhone = cleanPhoneNumber(phone);
+    if (cleanPhone) unmarkDeletedSubBot(cleanPhone);
     const registry = loadSubBotsRegistry();
 
     if (!registry[cleanPhone]) {
@@ -1875,11 +1889,11 @@ export async function deleteSubBotRemote(phone, mainConn = null, notifyOwner = f
         return { success: false, message: '❌ رقم هاتف غير صالح!' };
     }
 
-    // 1. تسجيل الرقم في قائمة المحذوفات الدائمة فوراً لمنع استرجاعه نهائياً بعد أي تحديث
-    recordDeletedSubBot(cleanPhone);
-
     const registry = loadSubBotsRegistry();
     const botData = registry[cleanPhone] || null;
+
+    // 1. تسجيل الرقم في قائمة المحذوفات الدائمة فوراً لمنع استرجاعه نهائياً بعد أي تحديث
+    recordDeletedSubBot(cleanPhone);
 
     // إرسال إشعار لرقم البوت الفرعي فقط عندما يقوم المطور الأساسي (شادو) بالحذف للتحديثات
     if (notifyOwner && mainConn && cleanPhone) {
