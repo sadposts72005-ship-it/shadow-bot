@@ -750,7 +750,7 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
                 sentGids.add(gid);
             }
         } catch (_) {}
-        await delay(1200); // ⏱️ تأخير سريع وآمن لمنع الحظر
+        await delay(5000); // ⏱️ تأخير 5 ثوانٍ كاملة بين كل جروب والتاني لمنع الحظر وبطلب الحج شادو
     }
 }
 
@@ -771,9 +771,17 @@ async function broadcastReminders(messageGeneratorOrText, localDB) {
     // دعم بث الأذكار والصلوات في جروبات البوتات الفرعية النشطة أيضاً
     try {
         if (activeSubBots && activeSubBots.size > 0) {
+            const now = Date.now();
             for (const [subPhone, subData] of activeSubBots.entries()) {
                 const subSock = subData?.sock;
                 if (!subSock || !subSock.user?.id || subSock.ws?.isOpen === false) continue;
+
+                // 🛑 منع إرسال الصلاة أو الأذكار فور ربط الرقم (مهلة أمان 15 دقيقة بعد اتصال البوت الفرعي)
+                const subStartTime = subData?.startTime || subSock.connectedAt || 0;
+                if (subStartTime > 0 && (now - subStartTime) < 15 * 60 * 1000) {
+                    continue; // تخطي البوت الفرعي إذا كان حديث الربط
+                }
+
                 subSock.isSubBot = true;
                 if (!subSock.subBotConfig && subData.cfg) subSock.subBotConfig = subData.cfg;
                 const subGroups = await getParticipatingGroupIds(subSock, localDB);
@@ -834,8 +842,8 @@ export async function startAutoReminders(currentConn) {
                 const pTotalMin = pHour * 60 + pMin;
                 const diffMin = cTotalMin - pTotalMin;
 
-                // إرسال الأذان في موعده تماماً أو خلال 15 دقيقة من دخوله (لضمان وصوله حتى لو كان البوت يقوم بريستارت أو إعادة اتصال)
-                if (diffMin >= 0 && diffMin <= 15) {
+                // إرسال الأذان في موعده تماماً في دقيقة الأذان الفعلية فقط (0 إلى 2 دقيقة من وقته الفعلي)
+                if (diffMin >= 0 && diffMin <= 2) {
                     isRemindingInProgress = true;
                     try {
                         let messageGenerator = (sock) => {
@@ -875,10 +883,11 @@ export async function startAutoReminders(currentConn) {
             const salawatSlotHour = Math.floor(hourNum / 3) * 3;
             const salawatLogKey = `salawat_${todayDateStr}_${salawatSlotHour}`;
 
-            const isSlotDue = (hourNum >= salawatSlotHour && !localDB.sentRemindersLog?.list?.includes(salawatLogKey));
+            // إرسال التذكير فقط في أول 3 دقائق من الساعة المحددة لضمان عدم إرساله فور تشغيل أو ربط البوت
+            const isSlotDue = (hourNum === salawatSlotHour && minNum <= 3 && !localDB.sentRemindersLog?.list?.includes(salawatLogKey));
             const hasEnoughTimePassed = (now - lastSalawat >= TWO_HOURS_MS);
 
-            if ((isSlotDue || (now - lastSalawat >= 3 * 60 * 60 * 1000)) && hasEnoughTimePassed) {
+            if (isSlotDue && hasEnoughTimePassed) {
                 isRemindingInProgress = true;
                 try {
                     const salawatMessages = [
