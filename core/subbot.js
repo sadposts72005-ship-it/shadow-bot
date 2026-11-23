@@ -802,9 +802,26 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
 
                 console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
 
+                // 🔒 إذا كان كود 401: نتحقق بمحاولة واحدة أخيرة للتأكد هل تم تسجيل الخروج فعلاً من الهاتف أم أنه خطأ شبكة مؤقت
+                if (statusCode === 401 || statusCode === DisconnectReason.loggedOut) {
+                    const attempts = (subBot401Attempts.get(cleanPhone) || 0) + 1;
+                    subBot401Attempts.set(cleanPhone, attempts);
+                    if (attempts === 1) {
+                        console.log(`⚠️ [Sub-Bot] استلام كود 401 للبوت (+${cleanPhone}) (فحص تأكيدي)، جاري إعادة المحاولة بعد ثانيتين لحماية الجلسة...`);
+                        setTimeout(() => {
+                            const reg = loadSubBotsRegistry() || {};
+                            const latestCfg = reg[cleanPhone] || cfg;
+                            if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned') {
+                                bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
+                            }
+                        }, 2000);
+                        return;
+                    }
+                }
+
                 const isTerminal = statusCode === 403 || statusCode === 401 || statusCode === DisconnectReason.loggedOut;
                 if (isTerminal) {
-                    console.log(`🗑️ [Sub-Bot Cleanup] تم تسجيل خروج أو حظر رقم البوت الفرعي (+${cleanPhone}) بكود: ${statusCode}. جاري مسحه وحذفه نهائياً...`);
+                    console.log(`🗑️ [Sub-Bot Cleanup] تم تأكيد تسجيل خروج أو حظر رقم البوت الفرعي (+${cleanPhone}) بكود: ${statusCode}. جاري مسحه وحذفه نهائياً...`);
                     try {
                         const registry = loadSubBotsRegistry() || {};
                         delete registry[cleanPhone];
@@ -821,7 +838,7 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
                 // لا نقوم بحذف الجلسة مطلقاً، ونعيد الاتصال تلقائياً طالما لم يتم إيقافه يدوياً بأمر (ايقاف تنصيب)
                 const isManuallyStopped = cfg.status === 'stopped' || cfg.status === 'banned';
                 if (!isManuallyStopped) {
-                    const delayMs = statusCode === 515 ? 1500 : 5000;
+                    const delayMs = statusCode === 515 ? 300 : 3000;
                     console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي تلقائياً (+${cleanPhone}) بعد ${delayMs / 1000} ثوانٍ...`);
                     setTimeout(() => {
                         const reg = loadSubBotsRegistry() || {};
@@ -1160,7 +1177,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             sock.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect } = update;
 
-                // 🔑 طلب كود الاقتران عند الاتصال إذا لم يكن الجهاز مسجلاً
+                // 🔑 طلب كود الاقتران فور الاتصال وبأقصى سرعة
                 if (!sock.authState.creds.registered && !pairingCodeSent) {
                     pairingCodeSent = true;
                     setTimeout(async () => {
@@ -1168,6 +1185,9 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             if (!sock.authState.creds.registered && !isExpired) {
                                 let code = await sock.requestPairingCode(cleanPhone);
                                 code = code?.match(/.{1,4}/g)?.join("-") || code;
+
+                                // ⚡ إرسال الكود فوراً وبدون تأخير لموقع الويب والجسور والـ Callback
+                                await sendNotify(`${code}`);
 
                                 const pairMsg = 
                                     `╭━━━〔 🤖 *كود تنصيب بوت فرعي* 〕━━━╮\n` +
@@ -1184,16 +1204,10 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                     `2️⃣ اضغط على الثلاث نقاط (⋮) ⬅️ *الأجهزة المرتبطة*.\n` +
                                     `3️⃣ اضغط *ربط جهاز*.\n` +
                                     `4️⃣ اضغط *الربط باستخدام رقم الهاتف بدلاً من ذلك*.\n` +
-                                    `5️⃣ انسخ الكود من الرسالة التالية وأدخله مباشرة.\n\n` +
-                                    `📋👇 *تم إرسال الكود في الرسالة التالية بمفرده لنسخه بنقرة واحدة بسهولة!* 👇\n\n` +
-                                    `⏳ *الكود صالح لمدة 3 دقائق فقط.*\n` +
-                                    `⚠️ سيصلك إشعار تنبيه قبل دقيقة من انتهاء الوقت إذا لم تقم بالربط!`;
+                                    `5️⃣ انسخ الكود وأدخله مباشرة.\n\n` +
+                                    `⏳ *الكود صالح لمدة 3 دقائق فقط.*`;
 
                                 await sendNotify(pairMsg, quotedMek);
-
-                                // 📋 إرسال الكود في رسالة منفصلة مخصصة لنسخه بنقرة واحدة
-                                await new Promise(r => setTimeout(r, 800));
-                                await sendNotify(`${code}`);
 
                                 // ⏱️ تنبيه بعد دقيقتين (120 ثانية) بأن المتبقي دقيقة واحدة فقط
                                 warnTimer = setTimeout(async () => {
@@ -1354,7 +1368,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         // 🚀 إرسال إشعار التفعيل والتهنئة للمنصّب وللحج شادو فوراً
                         sendSubBotActivationAlerts(sock, cfgData, mainConn || global.conn, customNotifier).catch(() => {});
 
-                        // 🔄 إغلاق سوكيت الاقتران المؤقت بسلاسة وتسليم الإدارة بالكامل لـ bootSubBot
+                        // 🔄 إغلاق سوكيت الاقتران المؤقت فوراً وتسليم الإدارة بالكامل لـ bootSubBot
                         setTimeout(() => {
                             try {
                                 sock.ws?.removeAllListeners();
@@ -1363,7 +1377,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                                 sock.end();
                             } catch (_) {}
                             bootSubBot(cleanPhone, cfgData, mainConn || global.conn).catch(e => console.error(e));
-                        }, 1500);
+                        }, 200);
 
                     } catch (openErr) {
                         console.error('❌ [Sub-Bot Connection Open Handling Error]:', openErr?.message || openErr);
@@ -1418,7 +1432,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                         setTimeout(() => {
                             bootSubBot(cleanPhone, currentCfg, mainConn || global.conn).catch(e => console.error(e));
-                        }, 2000);
+                        }, 200);
                         return;
                     }
 
