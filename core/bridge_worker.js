@@ -102,9 +102,9 @@ async function handleBridgeTask(task) {
                 const timer = setTimeout(() => {
                     if (!pairResultSent) {
                         pairResultSent = true;
-                        reject(new Error('انتهت مهلة استخراج الكود (25 ثانية).'));
+                        reject(new Error('انتهت مهلة استخراج الكود (60 ثانية). يرجى التأكد من كتابة الرقم بشكل صحيح مع كود الدولة.'));
                     }
-                }, 25000);
+                }, 60000);
 
                 requestSubBotPairing(
                     cleanP,

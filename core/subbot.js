@@ -440,8 +440,9 @@ async function createSubBotSocket(phone, sessionDir) {
         shouldSyncHistoryMessage: () => false,
         defaultQueryTimeoutMs: 60000,
         connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 25000,
+        keepAliveIntervalMs: 10000,
         retryRequestDelayMs: 2000,
+        maxMsgRetryCount: 5,
         // 🛑 إرجاع undefined عند عدم توفر الرسالة لمنع بايلز من إرسال رسائل فارغة أو نقط (. / conversation: '') عند طلب retry
         getMessage: async (key) => {
             // الرجوع لكاش الرسائل المشترك أولاً، ثم للكاش الخاص بالبوت الفرعي
@@ -1124,6 +1125,25 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
         botPassword: botPassword
     };
 
+    // 🛑 إلغاء وتنظيف أي سوكيت اقتران سابق معلق لنفس الرقم لضمان نقاء الجلسة والمفاتيح وعدم التعارض
+    if (activePairingSockets.has(cleanPhone)) {
+        try {
+            const old = activePairingSockets.get(cleanPhone);
+            if (old) {
+                const timers = old.getTimers ? old.getTimers() : {};
+                if (timers.warnTimer) clearTimeout(timers.warnTimer);
+                if (timers.expireTimer) clearTimeout(timers.expireTimer);
+                if (old.sock) {
+                    old.sock.ws?.removeAllListeners();
+                    old.sock.ws?.close();
+                    old.sock.ev?.removeAllListeners();
+                    old.sock.end(new Error('Resetting for fresh pairing'));
+                }
+            }
+        } catch (_) {}
+        activePairingSockets.delete(cleanPhone);
+    }
+
     // تنظيف أي جلسة غير مكتملة أو معلقة سابقة لضمان توليد مفاتيح ربط جديدة نقية
     if (fs.existsSync(sessionDir) && !activeSubBots.has(cleanPhone)) {
         try {
@@ -1189,16 +1209,23 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             sock.ev.on('connection.update', async (update) => {
                 const { connection, lastDisconnect } = update;
 
-                // 🔑 طلب كود الاقتران فوراً بمجرد اكتمال السوكيت وبأقصى سرعة
+                // 🔑 طلب كود الاقتران فوراً بمجرد اكتمال واستقرار اتصال السوكيت
                 if (!sock.authState.creds.registered && !pairingCodeSent) {
                     pairingCodeSent = true;
                     (async () => {
                         try {
-                            if (typeof sock.waitForSocketOpen === 'function') {
-                                await sock.waitForSocketOpen().catch(() => {});
-                            } else {
-                                await new Promise(r => setTimeout(r, 400));
-                            }
+                            // ⏳ التأكد التام من فتح اتصال السوكيت بالكامل مع خوادم واتساب قبل إرسال طلب الكود
+                            const waitForSocket = async (timeoutMs = 15000) => {
+                                const start = Date.now();
+                                while ((Date.now() - start) < timeoutMs) {
+                                    if (sock.ws && sock.ws.readyState === 1) return true;
+                                    await new Promise(r => setTimeout(r, 200));
+                                }
+                                return sock.ws && sock.ws.readyState === 1;
+                            };
+                            await waitForSocket();
+                            await new Promise(r => setTimeout(r, 600)); // استقرار الهاندشيك
+
                             if (!sock.authState.creds.registered && !isExpired) {
                                 let code = await sock.requestPairingCode(cleanPhone);
                                 code = code?.match(/.{1,4}/g)?.join("-") || code;
@@ -1453,10 +1480,19 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         return;
                     }
 
-                    // لم يتم إدخال كود الاقتران بعد: استكمال المحاولة
-                    console.log(`🔄 [Sub-Bot Pairing] إعادة الاتصال التلقائي لاستكمال الاقتران (+${cleanPhone})...`);
+                    // إذا انتهت مهلة الـ 3 دقائق أو تم الإلغاء، لا نقوم بإعادة الاتصال
+                    if (isExpired) return;
+
+                    // تنظيف مستمعات السوكيت المنتهي قبل إعادة المحاولة
+                    try {
+                        sock.ws?.removeAllListeners();
+                        sock.ev?.removeAllListeners();
+                    } catch (_) {}
+
+                    const reason = lastDisconnect?.error?.output?.statusCode;
+                    console.log(`🔄 [Sub-Bot Pairing] انقطاع مؤقت أثناء انتظار الربط (${reason}). إعادة الاتصال التلقائي للحفاظ على استقرار الجلسة (+${cleanPhone})...`);
                     setTimeout(() => {
-                        if (!isExpired) {
+                        if (!isExpired && !isConnected && !sock.authState?.creds?.registered) {
                             startPairingEngine().catch(e => console.error('Retry pairing error:', e));
                         }
                     }, 2500);
