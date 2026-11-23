@@ -1172,6 +1172,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
     let pairingCodeSent = false;
     let isConnected = false;
     let isExpired = false;
+    let isBooting = false;
     let warnTimer = null;
     let expireTimer = null;
 
@@ -1310,6 +1311,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                 }
 
                 if (connection === 'open') {
+                    if (isBooting) return;
+                    isBooting = true;
                     try {
                         activePairingSockets.delete(cleanPhone);
                         isConnected = true;
@@ -1453,7 +1456,8 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                     const isRegistered = Boolean(sock.authState?.creds?.registered);
 
                     // ⚡ إذا كان البوت مسجلاً ومقترناً بالهاتف (حتى لو انقطع مع كود 515 restart required): يتم تشغيله فوراً
-                    if (isRegistered || isConnected) {
+                    if ((isRegistered || isConnected) && !isBooting) {
+                        isBooting = true;
                         console.log(`🎉 [Sub-Bot Pairing] تم تأكيد اقتران وتسجيل البوت الفرعي (+${cleanPhone})! جاري تشغيله بالنظام الكامل...`);
                         const reg = loadSubBotsRegistry() || {};
                         const existing = reg[cleanPhone] || {};
