@@ -10,6 +10,7 @@ import {
     cleanPhoneNumber,
     getSubBotsList,
     activeSubBots,
+    activePairingSockets,
     findSubBotByPassword,
     updateSubBotSettings,
     generateSubBotPassword,
@@ -228,18 +229,14 @@ async function handleBridgeTask(task) {
         } else if (type === 'subbot-status') {
             const phone = payload.phone;
             const cleanP = cleanPhoneNumber(phone) || phone;
+            
+            // إذا كان الرقم حالياً في مرحلة انتظار إدخال الكود، فليس متصلاً بعد
+            const isStillPairing = activePairingSockets.has(cleanP);
+            
+            // يكون متصلاً فقط إذا اكتمل الاقتران وانتهى الربط وأصبح السوكيت متصلاً
             const hasSocket = activeSubBots.has(cleanP) && Boolean(activeSubBots.get(cleanP)?.sock?.user?.id);
-            let isPairedOnDisk = false;
-            try {
-                const credsPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanP, 'creds.json');
-                if (fs.existsSync(credsPath)) {
-                    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8') || '{}');
-                    if (creds && (creds.registered || creds.me?.id)) {
-                        isPairedOnDisk = true;
-                    }
-                }
-            } catch (_) {}
-            const isConn = hasSocket || isPairedOnDisk;
+            
+            const isConn = !isStillPairing && hasSocket;
             await resolveBridgeTask(id, true, { connected: isConn });
         }
     } catch (err) {

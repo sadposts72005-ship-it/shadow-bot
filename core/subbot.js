@@ -1100,7 +1100,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
         telegramChatId: telegramChatIdEarly,
         installPlatform: isWebInstallEarly ? 'web' : (isTelegramInstallEarly ? 'telegram' : 'whatsapp'),
         installedAt: new Date().toISOString(),
-        status: 'active',
+        status: 'pairing',
         sleep: false,
         muted: false,
         botPassword: botPassword
