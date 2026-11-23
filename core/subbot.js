@@ -51,6 +51,8 @@ if (!global._subbotBadMacHookInstalled) {
 
 // حفظ السوكيتات النشطة في الذاكرة
 export const activeSubBots = new Map();
+// حفظ جلسات طلب كود الاقتران النشطة لإمكانية إلغائها فورياً
+export const activePairingSockets = new Map();
 // تتبع أرقام البوتات قيد الإقلاع والاتصال لمنع تكرار فتح السوكيتات وتوفير الرام
 const bootingPhones = new Set();
 const scheduledBootTimers = new Map();
@@ -1135,11 +1137,19 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
             sock.subBotPhone = cleanPhone;
             let subBotStartTime = Math.floor(Date.now() / 1000);
 
+            // حفظ الجلسة لإمكانية الإلغاء الفوري بطلب المستخدم أو انتهاء الـ 3 دقائق
+            activePairingSockets.set(cleanPhone, {
+                sock,
+                sessionDir,
+                getTimers: () => ({ warnTimer, expireTimer })
+            });
+
             sock.ev.on('creds.update', async () => {
                 try {
                     await saveCreds();
                 } catch (_) {}
                 if (sock.authState?.creds?.registered) {
+                    activePairingSockets.delete(cleanPhone);
                     if (warnTimer) clearTimeout(warnTimer);
                     if (expireTimer) clearTimeout(expireTimer);
                     isExpired = false;
@@ -1284,6 +1294,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
 
                 if (connection === 'open') {
                     try {
+                        activePairingSockets.delete(cleanPhone);
                         isConnected = true;
                         isExpired = false;
                         if (warnTimer) clearTimeout(warnTimer);
@@ -1757,6 +1768,54 @@ export async function initAllSubBots(mainConn) {
     if (bootModified) {
         saveSubBotsRegistry(registry);
     }
+}
+
+/**
+ * 🛑 إلغاء عملية طلب كود الاقتران النشطة وإغلاق الجلسة فوراً (بطلب المستخدم أو انتهاء الـ 3 دقائق)
+ */
+export async function cancelSubBotPairing(phone) {
+    const cleanPhone = cleanPhoneNumber(phone) || String(phone).replace(/[^0-9]/g, '');
+    if (!cleanPhone) return { success: false, message: 'رقم هاتف غير صالح' };
+
+    console.log(`🛑 [Sub-Bot Pairing] إلغاء عملية الربط للرقم (+${cleanPhone})...`);
+
+    const pairingEntry = activePairingSockets.get(cleanPhone);
+    if (pairingEntry) {
+        try {
+            const timers = pairingEntry.getTimers ? pairingEntry.getTimers() : {};
+            if (timers.warnTimer) clearTimeout(timers.warnTimer);
+            if (timers.expireTimer) clearTimeout(timers.expireTimer);
+        } catch (_) {}
+
+        try {
+            if (pairingEntry.sock) {
+                pairingEntry.sock.end(new Error('Pairing cancelled by user/timeout'));
+            }
+        } catch (_) {}
+
+        activePairingSockets.delete(cleanPhone);
+    }
+
+    // تنظيف مجلد الجلسة المؤقتة إذا لم يكن مسجلاً
+    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+    const credsPath = path.join(sessionDir, 'creds.json');
+    try {
+        if (fs.existsSync(sessionDir)) {
+            let isRegistered = false;
+            if (fs.existsSync(credsPath)) {
+                try {
+                    const c = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+                    if (c && c.registered) isRegistered = true;
+                } catch (_) {}
+            }
+            if (!isRegistered) {
+                fs.rmSync(sessionDir, { recursive: true, force: true });
+                console.log(`🧹 [Sub-Bot Pairing] تم تنظيف وحذف مجلد الجلسة غير المكتملة (+${cleanPhone})`);
+            }
+        }
+    } catch (_) {}
+
+    return { success: true, message: 'تم إلغاء عملية التنصيب بنجاح ❌' };
 }
 
 /**
