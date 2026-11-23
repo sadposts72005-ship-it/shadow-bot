@@ -973,21 +973,19 @@ export async function handleAllMessages(mek, currentConn) {
         currentConn.isSubBot = Boolean(subBotConfig);
         currentConn.subBotConfig = subBotConfig;
 
-        // ⏱️ دالة التوقيت الذكية والسريعة لردود البوت التفاعلية مع دعم إعادة المحاولة
+        // ⏱️ دالة التوقيت الصارمة للحماية من حظر واتساب (محاكاة حركة بشرية)
         const respondWithStrictTiming = async (reactChar, actionFunction) => {
+            await delay(2500);
             try {
-                if (reactChar) {
-                    await delay(400);
-                    await currentConn.sendMessage(from, { react: { text: reactChar, key: mek.key } }).catch(() => {});
-                }
+                if (reactChar) await currentConn.sendMessage(from, { react: { text: reactChar, key: mek.key } }).catch(() => {});
             } catch (e) {}
-            await delay(600);
+            await delay(3000);
             try {
                 await actionFunction();
             } catch (err) {
                 console.error('❌ [Auto-Reply] خطأ في إرسال الرد، جاري إعادة المحاولة:', err?.message || err);
                 try {
-                    await delay(800);
+                    await delay(1000);
                     await actionFunction();
                 } catch (retryErr) {
                     console.error('❌ [Auto-Reply] فشلت إعادة المحاولة:', retryErr?.message || retryErr);
