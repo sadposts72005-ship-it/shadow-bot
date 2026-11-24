@@ -537,29 +537,273 @@ async function createSubBotSocket(phone, sessionDir) {
 }
 
 /**
- * بدء تشغيل بوت فرعي مسجل ومربوط مسبقاً
+ * ربط مستمعات الرسائل والأحداث بالسوكيت النشط فوراً دون إغلاقه أو إعادة فتحه (سرعة فائقة 0ms)
  */
-export async function bootSubBot(phone, cfg, mainConn = null) {
-    const cleanPhone = cleanPhoneNumber(phone);
-    if (!cleanPhone) return false;
-    unmarkDeletedSubBot(cleanPhone);
+export function attachSubBotActiveListeners(sock, cleanPhone, cfg, sessionDir, mainConn = null) {
+    sock.botName = cfg.botName || 'بوت فرعي';
+    sock.callName = cfg.callName || cfg.botName || 'فرعي';
+    sock.gender = cfg.gender || 'male';
+    sock.personality = cfg.personality || 'respectful';
 
-    // إذا كان شغالاً ومتصلاً بنجاح نتخطى، وإذا كان السوكيت مقطوعاً نقفله تماماً أولاً
-    if (activeSubBots.has(cleanPhone)) {
-        const active = activeSubBots.get(cleanPhone);
-        if (active && active.sock?.ws?.isOpen && active.sock?.user?.id) {
-            return true;
+    // ضمان تسجيل المالك ورقم الحج في قوائم المشرفين فور التحميل
+    if (cfg) {
+        if (!cfg.subHajjUsers) cfg.subHajjUsers = [];
+        if (!cfg.adminNumbers) cfg.adminNumbers = [];
+        if (!cfg.bannedUsers) cfg.bannedUsers = [];
+        const cleanAdm = cleanPhoneNumber(cfg.adminPhone) || cfg.adminPhone;
+        const admLocal = (cleanAdm && cleanAdm.startsWith('201') && cleanAdm.length === 12) ? ('01' + cleanAdm.slice(2)) : '';
+        if (cleanAdm) {
+            if (!cfg.subHajjUsers.includes(cleanAdm)) cfg.subHajjUsers.push(cleanAdm);
+            if (!cfg.adminNumbers.includes(cleanAdm)) cfg.adminNumbers.push(cleanAdm);
+            if (admLocal) {
+                if (!cfg.subHajjUsers.includes(admLocal)) cfg.subHajjUsers.push(admLocal);
+                if (!cfg.adminNumbers.includes(admLocal)) cfg.adminNumbers.push(admLocal);
+            }
         }
-        try {
-            active.sock?.ws?.removeAllListeners();
-            active.sock?.ws?.close();
-            active.sock?.ev?.removeAllListeners();
-            active.sock?.end();
-        } catch (_) {}
-        activeSubBots.delete(cleanPhone);
+        if (cfg.adminLid) {
+            const cLid = String(cfg.adminLid).replace(/[^0-9]/g, '');
+            if (cLid) {
+                if (!cfg.subHajjUsers.includes(cLid)) cfg.subHajjUsers.push(cLid);
+                if (!cfg.adminNumbers.includes(cLid)) cfg.adminNumbers.push(cLid);
+            }
+        }
     }
 
-    // إذا كان البوت قيد بدء التشغيل بالفعل، نتخطى لمنع تكرار فتح السوكيت ومضاعفة استهلاك الرام
+    sock.subBotConfig = cfg;
+    sock.isSubBot = true;
+    sock.subBotPhone = cleanPhone;
+    let subBotStartTime = Math.floor(Date.now() / 1000);
+    sock.subBotStartTime = subBotStartTime;
+
+    // ربط مستمع الرسائل بالـ Handler
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (!messages || messages.length === 0) return;
+
+        // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
+        for (const m of messages) {
+            if (m && m.message && m.key?.id) {
+                if (!sock._msgStore) sock._msgStore = new Map();
+                sock._msgStore.set(m.key.id, m.message);
+                if (sock._msgStore.size > 50) {
+                    const fk = sock._msgStore.keys().next().value;
+                    sock._msgStore.delete(fk);
+                }
+                if (global.mainMsgStore) {
+                    global.mainMsgStore.set(m.key.id, m.message);
+                    if (global.mainMsgStore.size > 200) {
+                        const firstK = global.mainMsgStore.keys().next().value;
+                        global.mainMsgStore.delete(firstK);
+                    }
+                }
+            }
+        }
+
+        if (type !== 'notify') return;
+        const nowSec = Math.floor(Date.now() / 1000);
+        const activeStart = sock.subBotStartTime || subBotStartTime || nowSec;
+
+        for (const m of messages) {
+            try {
+                if (!m.message) continue;
+
+                // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 3 دقائق) لمنع مشاكل فرق توقيت السيرفر
+                const msgTime = getMsgTimestamp(m);
+                if (msgTime > 0) {
+                    if (msgTime < (activeStart - 10) || (nowSec - msgTime) > 180) {
+                        continue;
+                    }
+                }
+
+                if (m.key.id && subBotSentMsgIds.has(m.key.id)) continue;
+                const from = m.key.remoteJid;
+                if (!from) continue;
+
+                if (from.endsWith('@g.us')) {
+                    if (!sock.subBotConfig) sock.subBotConfig = {};
+                    if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+                    if (!sock.subBotConfig.knownGroups.includes(from)) {
+                        sock.subBotConfig.knownGroups.push(from);
+                    }
+                }
+
+                await handleAllMessages(m, sock);
+            } catch (msgErr) {
+                console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, msgErr?.message || msgErr);
+            }
+        }
+    });
+
+    // 📥 تسجيل مجموعات البوت الفرعي تلقائياً فور انضمامه أو تحديثها لضمان إرسال الأذكار والصلوات
+    sock.ev.on('groups.upsert', async (groups) => {
+        try {
+            if (!sock.subBotConfig) sock.subBotConfig = {};
+            if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+            let updated = false;
+            for (const g of groups) {
+                const gid = g.id;
+                if (gid && gid.endsWith('@g.us') && !sock.subBotConfig.knownGroups.includes(gid)) {
+                    sock.subBotConfig.knownGroups.push(gid);
+                    updated = true;
+                }
+            }
+            if (updated) {
+                const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                if (fs.existsSync(path.dirname(cfgPath))) {
+                    fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
+                }
+            }
+        } catch (_) {}
+    });
+
+    // 🔥 الترحيب التلقائي وتسجيل الجروب بالبوت الفرعي
+    sock.ev.on('group-participants.update', async (update) => {
+        try {
+            if (update?.id && update.id.endsWith('@g.us')) {
+                if (!sock.subBotConfig) sock.subBotConfig = {};
+                if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
+                if (!sock.subBotConfig.knownGroups.includes(update.id)) {
+                    sock.subBotConfig.knownGroups.push(update.id);
+                    const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
+                    if (fs.existsSync(path.dirname(cfgPath))) {
+                        fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
+                    }
+                }
+            }
+            const datelsModule = await import('../plugins/datels.js');
+            const handler = datelsModule.default || datelsModule;
+            if (handler && typeof handler.participantsUpdate === 'function') {
+                await handler.participantsUpdate(update, sock);
+            }
+        } catch (_) {}
+    });
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
+
+        if (connection === 'open') {
+            bootingPhones.delete(cleanPhone);
+            subBotStartTime = Math.floor(Date.now() / 1000);
+            sock.subBotStartTime = subBotStartTime;
+            console.log(`🤖 [Sub-Bot] البوت الفرعي (${cfg.botName || cleanPhone}) متصل وشغال الآن! (+${cleanPhone})`);
+            subBot401Attempts.delete(cleanPhone);
+
+            if (typeof global.gc === 'function') {
+                try { global.gc(); } catch (_) {}
+            }
+
+            activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
+
+            // 📡 مزامنة مجموعات البوت الفرعي فور اتصاله لضمان إرسال الأذان والأذكار بها
+            if (typeof sock.groupFetchAllParticipating === 'function') {
+                sock.groupFetchAllParticipating().then(participatingGroups => {
+                    if (participatingGroups && typeof participatingGroups === 'object') {
+                        const gids = Object.keys(participatingGroups).filter(g => g.endsWith('@g.us'));
+                        if (!sock.subBotConfig) sock.subBotConfig = cfg || {};
+                        sock.subBotConfig.knownGroups = gids;
+                        if (cfg) cfg.knownGroups = gids;
+                        try {
+                            const registry = loadSubBotsRegistry();
+                            if (registry[cleanPhone]) {
+                                registry[cleanPhone].knownGroups = gids;
+                                saveSubBotsRegistry(registry);
+                            }
+                            const cfgPath = path.join(sessionDir, 'config.json');
+                            if (fs.existsSync(cfgPath)) {
+                                fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
+                            }
+                        } catch (_) {}
+                    }
+                }).catch(() => {});
+            }
+
+            // تشغيل الأذكار والأذان تلقائياً على هذا البوت الفرعي فور اتصاله
+            try {
+                const datelsModule = await import('../plugins/datels.js');
+                if (datelsModule?.startAutoReminders) datelsModule.startAutoReminders(sock);
+            } catch (_) {}
+        }
+
+        if (connection === 'close') {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            bootingPhones.delete(cleanPhone);
+            activeSubBots.delete(cleanPhone);
+            try {
+                sock.ws?.removeAllListeners();
+                sock.ws?.close();
+                sock.ev?.removeAllListeners();
+            } catch (_) {}
+            if (typeof global.gc === 'function') {
+                try { global.gc(); } catch (_) {}
+            }
+
+            console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
+
+            // 🔒 إذا كان كود 401: نتحقق بمحاولة واحدة أخيرة للتأكد هل تم تسجيل الخروج فعلاً من الهاتف أم أنه خطأ شبكة مؤقت
+            if (statusCode === 401 || statusCode === DisconnectReason.loggedOut) {
+                const attempts = (subBot401Attempts.get(cleanPhone) || 0) + 1;
+                subBot401Attempts.set(cleanPhone, attempts);
+                if (attempts === 1) {
+                    console.log(`⚠️ [Sub-Bot] استلام كود 401 للبوت (+${cleanPhone}) (فحص تأكيدي)، جاري إعادة المحاولة بعد ثانيتين لحماية الجلسة...`);
+                    setTimeout(() => {
+                        const reg = loadSubBotsRegistry() || {};
+                        const latestCfg = reg[cleanPhone] || cfg;
+                        if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned') {
+                            bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
+                        }
+                    }, 2000);
+                    return;
+                }
+            }
+
+            const isTerminal = statusCode === 403 || statusCode === 401 || statusCode === DisconnectReason.loggedOut;
+            if (isTerminal) {
+                console.log(`🗑️ [Sub-Bot Cleanup] تم تأكيد تسجيل خروج أو حظر رقم البوت الفرعي (+${cleanPhone}) بكود: ${statusCode}. جاري مسحه وحذفه نهائياً...`);
+                try {
+                    const registry = loadSubBotsRegistry() || {};
+                    delete registry[cleanPhone];
+                    saveSubBotsRegistry(registry);
+
+                    const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
+                    if (fs.existsSync(sessionDir)) {
+                        fs.rmSync(sessionDir, { recursive: true, force: true });
+                    }
+                } catch (_) {}
+                return;
+            }
+
+            // لا نقوم بحذف الجلسة مطلقاً، ونعيد الاتصال تلقائياً طالما لم يتم إيقافه يدوياً بأمر (ايقاف تنصيب)
+            const isManuallyStopped = cfg.status === 'stopped' || cfg.status === 'banned';
+            if (!isManuallyStopped) {
+                const delayMs = statusCode === 515 ? 300 : 2500;
+                console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي تلقائياً (+${cleanPhone}) بعد ${delayMs / 1000} ثوانٍ...`);
+                setTimeout(() => {
+                    const reg = loadSubBotsRegistry() || {};
+                    const latestCfg = reg[cleanPhone] || cfg;
+                    if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned') {
+                        bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
+                    }
+                }, delayMs);
+            }
+        }
+    });
+
+    activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
+}
+
+/**
+ * تشغيل البوت الفرعي المسجل عبر محرك Baileys
+ */
+export async function bootSubBot(cleanPhone, cfg, mainConn = null) {
+    if (!cleanPhone) return false;
+    const deletedList = loadDeletedSubBots();
+    if (deletedList.has(cleanPhone)) {
+        return false;
+    }
+
+    if (activeSubBots.has(cleanPhone)) {
+        return true;
+    }
+
     if (bootingPhones.has(cleanPhone)) {
         return true;
     }
@@ -569,302 +813,14 @@ export async function bootSubBot(phone, cfg, mainConn = null) {
     const credsPath = path.join(sessionDir, 'creds.json');
     if (!fs.existsSync(credsPath)) {
         console.log(`⚠️ جلسة البوت الفرعي (+${cleanPhone}) غير مكتملة، تم تجاهلها.`);
+        bootingPhones.delete(cleanPhone);
         return false;
     }
 
     try {
         const { sock, saveCreds } = await createSubBotSocket(cleanPhone, sessionDir);
-        sock.botName = cfg.botName || 'بوت فرعي';
-        sock.callName = cfg.callName || cfg.botName || 'فرعي';
-        sock.gender = cfg.gender || 'male';
-        sock.personality = cfg.personality || 'respectful';
-
-        // ضمان تسجيل المالك ورقم الحج في قوائم المشرفين فور التحميل
-        if (cfg) {
-            if (!cfg.subHajjUsers) cfg.subHajjUsers = [];
-            if (!cfg.adminNumbers) cfg.adminNumbers = [];
-            if (!cfg.bannedUsers) cfg.bannedUsers = [];
-            const cleanAdm = cleanPhoneNumber(cfg.adminPhone) || cfg.adminPhone;
-            const admLocal = (cleanAdm && cleanAdm.startsWith('201') && cleanAdm.length === 12) ? ('01' + cleanAdm.slice(2)) : '';
-            if (cleanAdm) {
-                if (!cfg.subHajjUsers.includes(cleanAdm)) cfg.subHajjUsers.push(cleanAdm);
-                if (!cfg.adminNumbers.includes(cleanAdm)) cfg.adminNumbers.push(cleanAdm);
-                if (admLocal) {
-                    if (!cfg.subHajjUsers.includes(admLocal)) cfg.subHajjUsers.push(admLocal);
-                    if (!cfg.adminNumbers.includes(admLocal)) cfg.adminNumbers.push(admLocal);
-                }
-            }
-            if (cfg.adminLid) {
-                const cLid = String(cfg.adminLid).replace(/[^0-9]/g, '');
-                if (cLid) {
-                    if (!cfg.subHajjUsers.includes(cLid)) cfg.subHajjUsers.push(cLid);
-                    if (!cfg.adminNumbers.includes(cLid)) cfg.adminNumbers.push(cLid);
-                }
-            }
-        }
-
-        sock.subBotConfig = cfg;
-        sock.isSubBot = true;
-        sock.subBotPhone = cleanPhone;
-        let subBotStartTime = Math.floor(Date.now() / 1000);
-
         sock.ev.on('creds.update', saveCreds);
-
-        // ربط مستمع الرسائل بالـ Handler
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (!messages || messages.length === 0) return;
-
-            // 📸 التقاط وتخزين رسائل الـ View-Once فور استلامها وقبل أي تصفية (notify أو append)
-            for (const m of messages) {
-                if (m && m.message && m.key?.id) {
-                    if (!sock._msgStore) sock._msgStore = new Map();
-                    sock._msgStore.set(m.key.id, m.message);
-                    if (sock._msgStore.size > 50) {
-                        const fk = sock._msgStore.keys().next().value;
-                        sock._msgStore.delete(fk);
-                    }
-                    if (global.mainMsgStore) {
-                        global.mainMsgStore.set(m.key.id, m.message);
-                        if (global.mainMsgStore.size > 200) {
-                            const firstK = global.mainMsgStore.keys().next().value;
-                            global.mainMsgStore.delete(firstK);
-                        }
-                    }
-
-                }
-            }
-
-            if (type !== 'notify') return;
-            const nowSec = Math.floor(Date.now() / 1000);
-            const activeStart = sock.subBotStartTime || subBotStartTime || nowSec;
-
-            for (const m of messages) {
-                try {
-                    if (!m.message) continue;
-
-                    // ⏰ تجاهل قاطع وفوري للرسائل القديمة جداً فقط (أكثر من 3 دقائق) لمنع مشاكل فرق توقيت السيرفر
-                    const msgTime = getMsgTimestamp(m);
-                    if (msgTime > 0) {
-                        if (msgTime < (activeStart - 10) || (nowSec - msgTime) > 180) {
-                            continue;
-                        }
-                    }
-
-                    if (m.key.id && subBotSentMsgIds.has(m.key.id)) continue;
-                    const from = m.key.remoteJid;
-                    if (!from) continue;
-
-                    if (from.endsWith('@g.us')) {
-                        if (!sock.subBotConfig) sock.subBotConfig = {};
-                        if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
-                        if (!sock.subBotConfig.knownGroups.includes(from)) {
-                            sock.subBotConfig.knownGroups.push(from);
-                        }
-                    }
-
-                    await handleAllMessages(m, sock);
-                } catch (msgErr) {
-                    console.error(`❌ خطأ في معالجة رسالة بالبوت الفرعي (+${cleanPhone}):`, msgErr?.message || msgErr);
-                }
-            }
-        });
-
-        // 📥 تسجيل مجموعات البوت الفرعي تلقائياً فور انضمامه أو تحديثها لضمان إرسال الأذكار والصلوات
-        sock.ev.on('groups.upsert', async (groups) => {
-            try {
-                if (!sock.subBotConfig) sock.subBotConfig = {};
-                if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
-                let updated = false;
-                for (const g of groups) {
-                    const gid = g.id;
-                    if (gid && gid.endsWith('@g.us') && !sock.subBotConfig.knownGroups.includes(gid)) {
-                        sock.subBotConfig.knownGroups.push(gid);
-                        updated = true;
-                    }
-                }
-                if (updated) {
-                    const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
-                    if (fs.existsSync(path.dirname(cfgPath))) {
-                        fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
-                    }
-                }
-            } catch (_) {}
-        });
-
-        // 🔥 الترحيب التلقائي وتسجيل الجروب بالبوت الفرعي
-        sock.ev.on('group-participants.update', async (update) => {
-            try {
-                if (update?.id && update.id.endsWith('@g.us')) {
-                    if (!sock.subBotConfig) sock.subBotConfig = {};
-                    if (!sock.subBotConfig.knownGroups) sock.subBotConfig.knownGroups = [];
-                    if (!sock.subBotConfig.knownGroups.includes(update.id)) {
-                        sock.subBotConfig.knownGroups.push(update.id);
-                        const cfgPath = path.join(BOT_ROOT, 'sessions', 'sub_bots', cleanPhone, 'config.json');
-                        if (fs.existsSync(path.dirname(cfgPath))) {
-                            fs.writeFileSync(cfgPath, JSON.stringify(sock.subBotConfig, null, 2), 'utf8');
-                        }
-                    }
-                }
-                const datelsModule = await import('../plugins/datels.js');
-                const handler = datelsModule.default || datelsModule;
-                if (handler && typeof handler.participantsUpdate === 'function') {
-                    await handler.participantsUpdate(update, sock);
-                }
-            } catch (_) {}
-        });
-
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
-
-            if (connection === 'open') {
-                bootingPhones.delete(cleanPhone);
-                subBotStartTime = Math.floor(Date.now() / 1000);
-                sock.subBotStartTime = subBotStartTime;
-                console.log(`🤖 [Sub-Bot] البوت الفرعي (${cfg.botName || cleanPhone}) متصل وشغال الآن! (+${cleanPhone})`);
-                subBot401Attempts.delete(cleanPhone);
-
-                if (typeof global.gc === 'function') {
-                    try { global.gc(); } catch (_) {}
-                }
-
-                // اكتشاف وتوثيق LID الحج الأساسي تلقائياً عند بدء التشغيل
-                if (!cfg.adminLid && cfg.adminPhone && cfg.adminPhone.length <= 13) {
-                    try {
-                        const waCheck = await sock.onWhatsApp(`${cfg.adminPhone}@s.whatsapp.net`);
-                        if (waCheck && waCheck[0]?.lid) {
-                            const fetchedLid = waCheck[0].lid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-                            if (fetchedLid) {
-                                cfg.adminLid = fetchedLid;
-                                if (!Array.isArray(cfg.adminNumbers)) cfg.adminNumbers = [];
-                                if (!cfg.adminNumbers.includes(fetchedLid)) cfg.adminNumbers.push(fetchedLid);
-                                if (!cfg.adminNumbers.includes(`${fetchedLid}@lid`)) cfg.adminNumbers.push(`${fetchedLid}@lid`);
-                                sock.subBotConfig = cfg;
-
-                                const registry = loadSubBotsRegistry();
-                                if (registry[cleanPhone]) {
-                                    registry[cleanPhone].adminLid = fetchedLid;
-                                    registry[cleanPhone].adminNumbers = cfg.adminNumbers;
-                                    saveSubBotsRegistry(registry);
-                                }
-                                try {
-                                    fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(cfg, null, 2), 'utf8');
-                                    const dbPath = path.join(BOT_ROOT, 'scramble_db.json');
-                                    if (fs.existsSync(dbPath)) {
-                                        const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-                                        if (!db.lidMap) db.lidMap = {};
-                                        db.lidMap[cfg.adminPhone] = fetchedLid;
-                                        db.lidMap[fetchedLid] = cfg.adminPhone;
-                                        fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
-                                    }
-                                } catch (_) {}
-                            }
-                        }
-                    } catch (_) {}
-                }
-
-                activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
-
-                // 📡 مزامنة مجموعات البوت الفرعي فور اتصاله لضمان إرسال الأذان والأذكار بها
-                if (typeof sock.groupFetchAllParticipating === 'function') {
-                    sock.groupFetchAllParticipating().then(participatingGroups => {
-                        if (participatingGroups && typeof participatingGroups === 'object') {
-                            const gids = Object.keys(participatingGroups).filter(g => g.endsWith('@g.us'));
-                            if (!sock.subBotConfig) sock.subBotConfig = cfg || {};
-                            sock.subBotConfig.knownGroups = gids;
-                            if (cfg) cfg.knownGroups = gids;
-                            try {
-                                const registry = loadSubBotsRegistry();
-                                if (registry[cleanPhone]) {
-                                    registry[cleanPhone].knownGroups = gids;
-                                    saveSubBotsRegistry(registry);
-                                }
-                                const cfgPath = path.join(sessionDir, 'config.json');
-                                if (fs.existsSync(cfgPath)) {
-                                    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2), 'utf8');
-                                }
-                            } catch (_) {}
-                            console.log(`📡 [Sub-Bot Sync] تم مزامنة ${gids.length} مجموعة للبوت الفرعي (+${cleanPhone}) بنجاح.`);
-                        }
-                    }).catch(() => {});
-                }
-
-                // تشغيل الأذكار والأذان تلقائياً على هذا البوت الفرعي فور اتصاله
-                try {
-                    const datelsModule = await import('../plugins/datels.js');
-                    if (datelsModule?.startAutoReminders) datelsModule.startAutoReminders(sock);
-                } catch (_) {}
-
-                // إرسال إشعارات التفعيل للمنصب وللحج شادو إن لم تكن أُرسلت
-                if (!cfg.notifiedSuccess) {
-                    sendSubBotActivationAlerts(sock, cfg, mainConn || global.conn).catch(e => console.error(e));
-                }
-            }
-
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                bootingPhones.delete(cleanPhone);
-                activeSubBots.delete(cleanPhone);
-                try {
-                    sock.ws?.removeAllListeners();
-                    sock.ws?.close();
-                    sock.ev?.removeAllListeners();
-                } catch (_) {}
-                if (typeof global.gc === 'function') {
-                    try { global.gc(); } catch (_) {}
-                }
-
-                console.log(`⚠️ [Sub-Bot] انقطع اتصال البوت الفرعي (+${cleanPhone}). الرمز: ${statusCode}`);
-
-                // 🔒 إذا كان كود 401: نتحقق بمحاولة واحدة أخيرة للتأكد هل تم تسجيل الخروج فعلاً من الهاتف أم أنه خطأ شبكة مؤقت
-                if (statusCode === 401 || statusCode === DisconnectReason.loggedOut) {
-                    const attempts = (subBot401Attempts.get(cleanPhone) || 0) + 1;
-                    subBot401Attempts.set(cleanPhone, attempts);
-                    if (attempts === 1) {
-                        console.log(`⚠️ [Sub-Bot] استلام كود 401 للبوت (+${cleanPhone}) (فحص تأكيدي)، جاري إعادة المحاولة بعد ثانيتين لحماية الجلسة...`);
-                        setTimeout(() => {
-                            const reg = loadSubBotsRegistry() || {};
-                            const latestCfg = reg[cleanPhone] || cfg;
-                            if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned') {
-                                bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
-                            }
-                        }, 2000);
-                        return;
-                    }
-                }
-
-                const isTerminal = statusCode === 403 || statusCode === 401 || statusCode === DisconnectReason.loggedOut;
-                if (isTerminal) {
-                    console.log(`🗑️ [Sub-Bot Cleanup] تم تأكيد تسجيل خروج أو حظر رقم البوت الفرعي (+${cleanPhone}) بكود: ${statusCode}. جاري مسحه وحذفه نهائياً...`);
-                    try {
-                        const registry = loadSubBotsRegistry() || {};
-                        delete registry[cleanPhone];
-                        saveSubBotsRegistry(registry);
-
-                        const sessionDir = path.join(SUB_BOTS_DIR, cleanPhone);
-                        if (fs.existsSync(sessionDir)) {
-                            fs.rmSync(sessionDir, { recursive: true, force: true });
-                        }
-                    } catch (_) {}
-                    return;
-                }
-
-                // لا نقوم بحذف الجلسة مطلقاً، ونعيد الاتصال تلقائياً طالما لم يتم إيقافه يدوياً بأمر (ايقاف تنصيب)
-                const isManuallyStopped = cfg.status === 'stopped' || cfg.status === 'banned';
-                if (!isManuallyStopped) {
-                    const delayMs = statusCode === 515 ? 300 : 3000;
-                    console.log(`🔄 [Sub-Bot] إعادة تشغيل البوت الفرعي تلقائياً (+${cleanPhone}) بعد ${delayMs / 1000} ثوانٍ...`);
-                    setTimeout(() => {
-                        const reg = loadSubBotsRegistry() || {};
-                        const latestCfg = reg[cleanPhone] || cfg;
-                        if (latestCfg.status !== 'stopped' && latestCfg.status !== 'banned') {
-                            bootSubBot(cleanPhone, latestCfg, mainConn || global.conn).catch(e => console.error(e));
-                        }
-                    }, delayMs);
-                }
-            }
-        });
-
-        activeSubBots.set(cleanPhone, { sock, cfg, startTime: subBotStartTime });
+        attachSubBotActiveListeners(sock, cleanPhone, cfg, sessionDir, mainConn);
         return true;
     } catch (err) {
         bootingPhones.delete(cleanPhone);
@@ -1386,16 +1342,10 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                         // 🚀 إرسال إشعار التفعيل والتهنئة للمنصّب وللحج شادو فوراً
                         sendSubBotActivationAlerts(sock, cfgData, mainConn || global.conn, customNotifier).catch(() => {});
 
-                        // 🔄 إغلاق سوكيت الاقتران المؤقت فوراً وتسليم الإدارة بالكامل لـ bootSubBot
-                        setTimeout(() => {
-                            try {
-                                sock.ws?.removeAllListeners();
-                                sock.ws?.close();
-                                sock.ev?.removeAllListeners();
-                                sock.end();
-                            } catch (_) {}
-                            bootSubBot(cleanPhone, cfgData, mainConn || global.conn).catch(e => console.error(e));
-                        }, 200);
+                        // ⚡ تفعيل البوت فوراً على نفس السوكيت المفتوح حالياً بدون إغلاق أو تأخير (0ms Transition!)
+                        // هذا يلغي أي بطء أو تعليق في شاشة الواتساب على الهاتف ويجعل الربط فورياً من أول ثانية
+                        sock.ev.removeAllListeners('connection.update');
+                        attachSubBotActiveListeners(sock, cleanPhone, cfgData, sessionDir, mainConn || global.conn);
 
                     } catch (openErr) {
                         console.error('❌ [Sub-Bot Connection Open Handling Error]:', openErr?.message || openErr);
@@ -1403,7 +1353,7 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                 }
 
                 if (connection === 'close') {
-                    if (isExpired) return;
+                    if (isExpired || isBooting) return;
                     const statusCode = lastDisconnect?.error?.output?.statusCode;
                     console.log(`⚠️ [Sub-Bot Pairing] انقطع اتصال السوكيت للرقم (+${cleanPhone}) بكود: ${statusCode}`);
                     activeSubBots.delete(cleanPhone);
@@ -1446,12 +1396,10 @@ export async function requestSubBotPairing(targetPhone, botName, callName, admin
                             fs.writeFileSync(path.join(sessionDir, 'config.json'), JSON.stringify(currentCfg, null, 2), 'utf8');
                         } catch (_) {}
 
-                        // 🚀 إرسال إشعار التفعيل والتهنئة للمنصّب وللحج شادو فوراً وبشكل مضمون بمجرد قبول الكود واكتمال الربط
+                        // 🚀 إرسال إشعار التفعيل والتهنئة للمنصّب وللحج شادو فوراً
                         sendSubBotActivationAlerts(sock, currentCfg, mainConn || global.conn, customNotifier).catch(() => {});
 
-                        setTimeout(() => {
-                            bootSubBot(cleanPhone, currentCfg, mainConn || global.conn).catch(e => console.error(e));
-                        }, 200);
+                        bootSubBot(cleanPhone, currentCfg, mainConn || global.conn).catch(e => console.error(e));
                         return;
                     }
 

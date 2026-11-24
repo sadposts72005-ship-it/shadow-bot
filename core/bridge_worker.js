@@ -290,7 +290,7 @@ export function startBridgeWorker() {
     setTimeout(sendHeartbeat, 1000);
     setInterval(sendHeartbeat, 3000);
 
-    // 2. سحب المهام المعلقة فوراً وبسرعة فائقة (كل 400ms) لاستخراج الأكواد بأعلى سرعة
+    // 2. سحب المهام المعلقة فوراً وبسرعة فائقة (كل 400ms) ومعالجتها بالتوازي لتحمل الضغط
     async function pollTasks() {
         if (isPolling) return;
         isPolling = true;
@@ -301,8 +301,9 @@ export function startBridgeWorker() {
             if (res.ok) {
                 const data = await res.json();
                 const tasks = data.tasks || [];
+                // 🚀 تنفيذ المهام بالتوازي الفوري لضمان سرعة الاستجابة وتحمل ضغط عدة مستخدمين في نفس اللحظة
                 for (const task of tasks) {
-                    await handleBridgeTask(task);
+                    handleBridgeTask(task).catch(e => console.error(`❌ [Bridge Worker] خطأ في المهمة (${task?.id}):`, e?.message || e));
                 }
             }
         } catch (_) {
