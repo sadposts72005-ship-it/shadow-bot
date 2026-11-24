@@ -10,6 +10,7 @@ import gameBakasa from './plugins/game-bakasa.js';
 import gamePuzzle from './plugins/puzzle.js';
 import gameMovies from './plugins/game-movies.js';
 import menuHandler from './plugins/menu.js';
+import fontsModule, { handleFontsCommand } from './plugins/fonts.js';
 import datelsHandler, { extractMessageBody, extractTarget } from './plugins/datels.js';
 import { 
     requestSubBotPairing, 
@@ -3958,6 +3959,17 @@ export async function handleAllMessages(mek, currentConn) {
                     else if (gameMovies.default && typeof gameMovies.default === 'function') await gameMovies.default(mek, currentConn);
                 });
             }
+            return;
+        }
+
+        // =========================================================================
+        // ✍️ [أمر خط / زخرفة - توليد 20 شكلاً بخطوط وزخارف المجال]
+        // =========================================================================
+        if (/^(?:\.|\/|!)?(?:خط|زخرفة|زخرفه|خطوط)(?:\s+.*)?$/i.test(normalizedBody)) {
+            const rawTarget = body.replace(/^[./#!]*/, '').replace(/^(?:خط|زخرفة|زخرفه|خطوط)\s*/i, '').trim();
+            await respondWithStrictTiming('✍️', async () => {
+                await handleFontsCommand(mek, currentConn, rawTarget);
+            });
             return;
         }
 
