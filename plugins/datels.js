@@ -602,8 +602,10 @@ export function isMuslimDisabledForBot(gid, botKey, localDB) {
     if (!gid || !localDB) return false;
     if (localDB.disabledMuslimBots && localDB.disabledMuslimBots[gid]) {
         if (localDB.disabledMuslimBots[gid].includes(botKey)) return true;
+        return false;
     }
-    if ((!localDB.disabledMuslimBots || !localDB.disabledMuslimBots[gid]) && Array.isArray(localDB.disabledMuslim)) {
+    // فحص التعطيل العام فقط إذا كان البوت هو البوت الأساسي
+    if (botKey === 'main_bot' && Array.isArray(localDB.disabledMuslim)) {
         if (localDB.disabledMuslim.includes(gid)) return true;
     }
     return false;
@@ -658,14 +660,6 @@ async function getParticipatingGroupIds(conn, localDB) {
                 }
             }
         } catch (_) {}
-        // إضافة كافة المجموعات المسجلة بقاعدة البيانات ليتمكن البوت الفرعي من الإرسال لجميع مجموعاته
-        if (localDB?.knownGroups && Array.isArray(localDB.knownGroups)) {
-            for (const gid of localDB.knownGroups) {
-                if (gid && gid.endsWith('@g.us') && !localDB.bannedGroups?.includes(gid) && !isMuslimDisabledForBot(gid, botKey, localDB)) {
-                    groupsSet.add(gid);
-                }
-            }
-        }
     } else {
         const dbSources = [
             localDB?.knownGroups,
@@ -776,19 +770,19 @@ async function broadcastReminders(messageGeneratorOrText, localDB) {
                 const subSock = subData?.sock;
                 if (!subSock || !subSock.user?.id || subSock.ws?.isOpen === false) continue;
 
-                // 🛑 منع إرسال الصلاة أو الأذكار فور ربط الرقم (مهلة أمان 15 دقيقة بعد اتصال البوت الفرعي)
+                // 🛑 مهلة أمان بسيطة (30 ثانية) بعد اتصال البوت الفرعي لضمان اكتمال تحميل السوكيت
                 const subStartTime = subData?.startTime || subSock.connectedAt || 0;
-                if (subStartTime > 0 && (now - subStartTime) < 15 * 60 * 1000) {
-                    continue; // تخطي البوت الفرعي إذا كان حديث الربط
+                if (subStartTime > 0 && (now - subStartTime) < 30 * 1000) {
+                    continue; // تخطي البوت الفرعي في أول 30 ثانية فقط بعد الاتصال
                 }
 
                 subSock.isSubBot = true;
                 if (!subSock.subBotConfig && subData.cfg) subSock.subBotConfig = subData.cfg;
                 const subGroups = await getParticipatingGroupIds(subSock, localDB);
-                const subSentGids = new Set();
                 const subMsg = typeof messageGeneratorOrText === 'function' ? messageGeneratorOrText(subSock) : messageGeneratorOrText;
                 if (subGroups.length > 0) {
-                    await sendRemindersWithDelay(subSock, subGroups, subMsg, localDB, subSentGids);
+                    // مشاركة sentGids لمنع إرسال نفس التذكير مرتين لنفس الجروب إطلاقاً
+                    await sendRemindersWithDelay(subSock, subGroups, subMsg, localDB, sentGids);
                 }
             }
         }

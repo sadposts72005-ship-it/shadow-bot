@@ -3148,6 +3148,34 @@ export async function handleAllMessages(mek, currentConn) {
         }
 
         // =========================================================================
+        // 📊 [أمر كام تنصيب / قائمة التنصيب - خاص بالبوت الأساسي وللحج شادو فقط]
+        // =========================================================================
+        const isCountSubBotsCmd = /^(?:\.|\/|!)?(?:كام\s*تنصيب|كم\s*تنصيب|قائمة\s*التنصيب|قائمه\s*التنصيب|كام\s*بوت|كم\s*بوت)$/i.test(normalizedBody);
+        if (isCountSubBotsCmd) {
+            if (currentConn.isSubBot || !isAbsoluteOwner) {
+                await respondWithStrictTiming('👑', async () => {
+                    await currentConn.sendMessage(from, { 
+                        text: 'ده خاص للبوت الاساسي فقط و ليا انا بس الحج الاساسي بس' 
+                    }, { quoted: mek });
+                });
+                return;
+            }
+
+            // للبوت الأساسي وللحج شادو فقط: عرض التقرير الشامل للبوتات الفرعية
+            const rep = getSubBotsReport();
+            const reportMsg = 
+                `👑 *لوحة تحكم وإحصائيات البوتات الفرعية (الحج شادو):* 📊\n\n` +
+                `🔢 *إجمالي البوتات المسجلة:* ${rep.total}\n` +
+                `⚡ *البوتات النشطة الآن:* ${rep.activeCount}\n` +
+                `🛑 *البوتات المتوقفة:* ${rep.stoppedCount}\n\n` +
+                `${rep.listText}`;
+            await respondWithStrictTiming('📊', async () => {
+                await currentConn.sendMessage(from, { text: reportMsg }, { quoted: mek });
+            });
+            return;
+        }
+
+        // =========================================================================
         // 🗑️ [أمر إلغاء وحذف التنصيب - لحج البوت الفرعي أو الحج شادو الأصلي فقط]
         // =========================================================================
         const isCancelInstallDirect = (
