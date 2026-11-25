@@ -4,7 +4,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import webp from 'node-webpmux';
-import { downloadContentFromMessage } from '@whiskeysockets/baileys';
+import { downloadContentFromMessage, downloadMediaMessage } from '@whiskeysockets/baileys';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -163,7 +163,18 @@ export function convertVideoToWebp(vidBuffer) {
 /**
  * تنزيل ميديا من رسالة Baileys
  */
-async function downloadMedia(mediaMessage, type) {
+async function downloadMedia(mediaMessage, type, targetMek = null, currentConn = null) {
+    if (targetMek && currentConn && typeof downloadMediaMessage === 'function') {
+        try {
+            const buf = await downloadMediaMessage(
+                targetMek,
+                'buffer',
+                {},
+                { reuploadRequest: currentConn.updateMediaMessage }
+            );
+            if (buf && buf.length > 0) return buf;
+        } catch (_) {}
+    }
     try {
         const stream = await downloadContentFromMessage(mediaMessage, type);
         const chunks = [];
@@ -180,7 +191,7 @@ async function downloadMedia(mediaMessage, type) {
 /**
  * استخراج الميديا من الرسالة الحالية أو من الريبلاي
  */
-async function extractMediaFromMessageOrQuoted(mek) {
+async function extractMediaFromMessageOrQuoted(mek, currentConn = null) {
     let msg = mek.message;
     while (msg?.ephemeralMessage || msg?.viewOnceMessage || msg?.viewOnceMessageV2 || msg?.documentWithCaptionMessage) {
         msg = msg.ephemeralMessage?.message ||
@@ -191,20 +202,25 @@ async function extractMediaFromMessageOrQuoted(mek) {
 
     // 1. فحص الرسالة نفسها
     if (msg?.imageMessage) {
-        const buf = await downloadMedia(msg.imageMessage, 'image');
+        const buf = await downloadMedia(msg.imageMessage, 'image', mek, currentConn);
         if (buf && buf.length > 0) return { buffer: buf, type: 'image' };
     }
     if (msg?.stickerMessage) {
-        const buf = await downloadMedia(msg.stickerMessage, 'sticker');
+        const buf = await downloadMedia(msg.stickerMessage, 'sticker', mek, currentConn);
         if (buf && buf.length > 0) return { buffer: buf, type: 'sticker' };
     }
     if (msg?.videoMessage && (msg.videoMessage.seconds || 0) <= 12) {
-        const buf = await downloadMedia(msg.videoMessage, 'video');
+        const buf = await downloadMedia(msg.videoMessage, 'video', mek, currentConn);
         if (buf && buf.length > 0) return { buffer: buf, type: 'video' };
     }
 
     // 2. فحص الريبلاي المقتبس
-    let quoted = mek.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+    const ctxInfo = msg?.extendedTextMessage?.contextInfo ||
+                    mek.message?.extendedTextMessage?.contextInfo ||
+                    msg?.imageMessage?.contextInfo ||
+                    msg?.videoMessage?.contextInfo ||
+                    msg?.stickerMessage?.contextInfo;
+    let quoted = ctxInfo?.quotedMessage;
     if (quoted) {
         while (quoted.ephemeralMessage || quoted.viewOnceMessage || quoted.viewOnceMessageV2 || quoted.documentWithCaptionMessage) {
             quoted = quoted.ephemeralMessage?.message ||
@@ -213,16 +229,25 @@ async function extractMediaFromMessageOrQuoted(mek) {
                      quoted.documentWithCaptionMessage?.message || quoted;
         }
 
+        const quotedMek = {
+            key: {
+                remoteJid: mek.key?.remoteJid || mek.chat,
+                id: ctxInfo?.stanzaId,
+                participant: ctxInfo?.participant
+            },
+            message: quoted
+        };
+
         if (quoted.imageMessage) {
-            const buf = await downloadMedia(quoted.imageMessage, 'image');
+            const buf = await downloadMedia(quoted.imageMessage, 'image', quotedMek, currentConn);
             if (buf && buf.length > 0) return { buffer: buf, type: 'image' };
         }
         if (quoted.stickerMessage) {
-            const buf = await downloadMedia(quoted.stickerMessage, 'sticker');
+            const buf = await downloadMedia(quoted.stickerMessage, 'sticker', quotedMek, currentConn);
             if (buf && buf.length > 0) return { buffer: buf, type: 'sticker' };
         }
         if (quoted.videoMessage && (quoted.videoMessage.seconds || 0) <= 12) {
-            const buf = await downloadMedia(quoted.videoMessage, 'video');
+            const buf = await downloadMedia(quoted.videoMessage, 'video', quotedMek, currentConn);
             if (buf && buf.length > 0) return { buffer: buf, type: 'video' };
         }
     }
@@ -239,7 +264,7 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
         const normalized = normalizeArabic(body.trim().toLowerCase());
 
         // فحص هل النص يمثل أمر استيكر أو سرقة وتعديل حقوق
-        const isStickerCmd = /^(استيكر|ستيكر|ملصق|sticker|s|سرق[هة]|تعديل\s*حقوق(?:\s*استيكر)?|استيكر\s*حقوق|ستيكر\s*حقوق)(\s|$)/i.test(normalized);
+        const isStickerCmd = /^(?:استيكر|ستيكر|ملصق|sticker|s|سرق[هة]|اسرق|تعديل\s*حقوق(?:\s*استيكر)?|استيكر\s*حقوق|ستيكر\s*حقوق|سرقة\s*استيكر|سرقة\s*الاستيكر|سرقه\s*استيكر|سرقه\s*الاستيكر)(\s|$)/i.test(normalized);
         if (!isStickerCmd) return false;
 
         const from = mek.key?.remoteJid || mek.chat;
@@ -247,19 +272,22 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
 
         // استخراج حقوق مخصصة إن وُجدت
         let customAuthor = null;
-        const matchRights = body.match(/^(?:استيكر|ستيكر|ملصق|sticker|s|سرق[هة]|تعديل\s*حقوق(?:\s*استيكر)?)\s*(?:حقوق|حقوقه|حقوقي|حقوقها)?\s*[:\-]?\s*(.+)$/i);
+        const matchRights = body.match(/^(?:استيكر|ستيكر|ملصق|sticker|s|سرق[هة]|اسرق|تعديل\s*حقوق(?:\s*استيكر)?|سرقة\s*استيكر|سرقة\s*الاستيكر|سرقه\s*استيكر|سرقه\s*الاستيكر)\s*(?:حقوق|حقوقه|حقوقي|حقوقها)?\s*[:\-]?\s*(.+)$/i);
         if (matchRights && matchRights[1]) {
             const parsed = matchRights[1].trim();
             if (parsed && !/^(حقوق|حقوقه|حقوقي)$/i.test(parsed)) {
                 customAuthor = parsed;
             }
         }
+        if (!customAuthor && normalized.includes('شادو')) {
+            customAuthor = 'شادو';
+        }
 
         const packname = 'Shadow Bot';
         const author = customAuthor ? customAuthor : 'Shadow Bot';
 
         // محاولة استخراج الميديا
-        const mediaObj = await extractMediaFromMessageOrQuoted(mek);
+        const mediaObj = await extractMediaFromMessageOrQuoted(mek, currentConn);
 
         // إذا لم تكن هناك صورة أو استيكر
         if (!mediaObj || !mediaObj.buffer) {

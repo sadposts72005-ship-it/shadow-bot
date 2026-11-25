@@ -11,6 +11,8 @@ import gamePuzzle from './plugins/puzzle.js';
 import gameMovies from './plugins/game-movies.js';
 import menuHandler from './plugins/menu.js';
 import fontsModule, { handleFontsCommand } from './plugins/fonts.js';
+import translateModule, { handleTranslateCommand, checkTranslateSession } from './plugins/translate.js';
+import downloaderModule, { handleConvertCommand } from './plugins/downloader.js';
 import datelsHandler, { extractMessageBody, extractTarget } from './plugins/datels.js';
 import { 
     requestSubBotPairing, 
@@ -3868,6 +3870,12 @@ export async function handleAllMessages(mek, currentConn) {
         }
         if (sarahaHandled) return;
 
+        // 🌐 فحص جلسة اختيار لغة الترجمة التفاعلية النشطة
+        if (typeof checkTranslateSession === 'function') {
+            const translateHandled = await checkTranslateSession(mek, currentConn, body, cleanSender, from);
+            if (translateHandled) return;
+        }
+
         // =========================================================================
         // 🛑 [الألعاب وأنظمة التسلية - تشغيل الأوامر الأساسية لفتح الجيم]
         // =========================================================================
@@ -3969,6 +3977,26 @@ export async function handleAllMessages(mek, currentConn) {
             const rawTarget = body.replace(/^[./#!]*/, '').replace(/^(?:خط|زخرفة|زخرفه|خطوط)\s*/i, '').trim();
             await respondWithStrictTiming('✍️', async () => {
                 await handleFontsCommand(mek, currentConn, rawTarget);
+            });
+            return;
+        }
+
+        // =========================================================================
+        // 🌐 [أمر ترجمه / ترجمة - مترجم شادو بوت الذكي والتفاعلي]
+        // =========================================================================
+        if (/^(?:\.|\/|!)?(?:ترجم[هة]|ترجم|translate)(?:\s+.*)?$/i.test(normalizedBody)) {
+            await respondWithStrictTiming('🌐', async () => {
+                await handleTranslateCommand(mek, currentConn, body, cleanSender);
+            });
+            return;
+        }
+
+        // =========================================================================
+        // 📥 [أمر تحويل / تنزيل - تحميل وتنزيل الفيديوهات والصور والأغاني]
+        // =========================================================================
+        if (/^(?:\.|\/|!)?(?:تحويل|تحميل|تنزيل|download)(?:\s+.*)?$/i.test(normalizedBody)) {
+            await respondWithStrictTiming('📥', async () => {
+                await handleConvertCommand(mek, currentConn, body);
             });
             return;
         }

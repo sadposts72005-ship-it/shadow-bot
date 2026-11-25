@@ -1296,7 +1296,9 @@ const datelsHandler = {
                 }
             }
             // فحص من النهاية (مثال: اقفل ترحيبات شادو / قفل الاذان يا شادو / قفل الروم شادو)
-            if (!matchedBotName) {
+            // ملاحظة: استثناء الأوامر التي تأخذ نصوصاً ومدخلات مثل (خط شادو / سرقه شادو / قول شادو / انطق شادو) لمنع قص الاسم المطلوب
+            const isContentTakingCmd = /^(?:خط|زخرفة|زخرفه|خطوط|سرق[هة]|اسرق|استيكر|ستيكر|قول|انطق|اغني[هة]|اغنية|شغل|ترجم[هة]|تحويل|تحميل)(\s|$)/i.test(normalizedBody);
+            if (!matchedBotName && !isContentTakingCmd) {
                 for (const my of cleanMyNames) {
                     if (normalizedBody.endsWith(' يا ' + my)) {
                         matchedBotName = { type: 'end', len: (' يا ' + my).length, name: my };
