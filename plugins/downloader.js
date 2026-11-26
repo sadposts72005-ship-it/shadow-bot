@@ -50,16 +50,92 @@ async function fetchBufferFromUrl(url, customHeaders = {}) {
 async function resolveRedirectUrl(url) {
     try {
         const headRes = await axios.head(url, {
-            maxRedirects: 5,
-            timeout: 8000,
+            maxRedirects: 8,
+            timeout: 10000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
         return headRes.request?.res?.responseUrl || url;
     } catch (_) {
+        try {
+            const f = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+            if (f.url) return f.url;
+        } catch (_) {}
         return url;
     }
+}
+
+/**
+ * إرسال فيديو بشكل آمن ومقاوم للأخطاء (محاولة البث المباشر ثم البافر كبديل تلقائي)
+ */
+async function sendVideoSafely(currentConn, from, result, caption, mek) {
+    if (!result) return false;
+
+    // 1. إذا كان البافر جاهزاً مسبقاً
+    if (result.buffer) {
+        try {
+            await currentConn.sendMessage(from, { video: result.buffer, caption }, { quoted: mek });
+            return true;
+        } catch (e) {
+            console.log('⚠️ [Send buffer video error]:', e.message);
+        }
+    }
+
+    // 2. إذا كان الرابط المباشر متوفراً
+    if (result.directUrl) {
+        // محاولة إرساله كبث مباشر فوري (بدون استهلاك رام)
+        try {
+            await currentConn.sendMessage(from, { video: { url: result.directUrl }, caption }, { quoted: mek });
+            return true;
+        } catch (e) {
+            console.log('⚠️ [Baileys direct url streaming failed, fetching buffer...]:', e.message);
+        }
+
+        // في حال تعذر على بايلز سحبه كـ URL، نجلبه كبافر ونرسله
+        const bufRes = await fetchBufferFromUrl(result.directUrl, { 'User-Agent': 'Mozilla/5.0' });
+        if (bufRes?.buffer) {
+            try {
+                await currentConn.sendMessage(from, { video: bufRes.buffer, caption }, { quoted: mek });
+                return true;
+            } catch (e) {
+                console.log('⚠️ [Send fetched buffer video error]:', e.message);
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * إرسال مقطع صوتي بشكل آمن ومقاوم للأخطاء
+ */
+async function sendAudioSafely(currentConn, from, result, mek) {
+    if (!result) return false;
+
+    if (result.buffer) {
+        try {
+            await currentConn.sendMessage(from, { audio: result.buffer, mimetype: 'audio/mpeg' }, { quoted: mek });
+            return true;
+        } catch (_) {}
+    }
+
+    if (result.directUrl) {
+        try {
+            await currentConn.sendMessage(from, { audio: { url: result.directUrl }, mimetype: 'audio/mpeg' }, { quoted: mek });
+            return true;
+        } catch (_) {}
+
+        const bufRes = await fetchBufferFromUrl(result.directUrl);
+        if (bufRes?.buffer) {
+            try {
+                await currentConn.sendMessage(from, { audio: bufRes.buffer, mimetype: 'audio/mpeg' }, { quoted: mek });
+                return true;
+            } catch (_) {}
+        }
+    }
+
+    return false;
 }
 
 /**
@@ -68,10 +144,40 @@ async function resolveRedirectUrl(url) {
 async function downloadTikTok(url) {
     const finalUrl = (url.includes('vt.tiktok.com') || url.includes('vm.tiktok.com')) ? await resolveRedirectUrl(url) : url;
 
-    // المحاولة 1: TikWM API الأساسي
+    // المحاولة 1: مزود SiputzX Douyin/TikTok عالي السرعة مع فك التوكن المباشر
     try {
-        const apiUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(finalUrl)}`;
-        const res = await axios.get(apiUrl, { timeout: 12000 });
+        const apiUrl = `https://api.siputzx.my.id/api/d/douyin?url=${encodeURIComponent(finalUrl)}`;
+        const res = await axios.get(apiUrl, { timeout: 15000 });
+        if (res.data?.status && res.data?.data?.downloads?.length > 0) {
+            const dl = res.data.data.downloads[0].url;
+            let finalVideoUrl = dl;
+            if (dl.includes('token=')) {
+                try {
+                    const token = dl.split('token=')[1];
+                    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
+                    if (payload?.url) finalVideoUrl = payload.url;
+                } catch (_) {}
+            }
+            const title = res.data.data.title || 'فيديو تيك توك';
+            return { type: 'video', directUrl: finalVideoUrl, title };
+        }
+    } catch (e) {
+        console.error('⚠️ [TikTok Douyin Provider Error]:', e.message);
+    }
+
+    // المحاولة 2: محرك TikWM المحسن بهيدرز الموبايل والكوكيز
+    try {
+        const form = new URLSearchParams();
+        form.set('url', finalUrl);
+        form.set('hd', '1');
+        const res = await axios.post('https://www.tikwm.com/api/', form.toString(), {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'Cookie': 'current_language=en',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Mobile Safari/537.36'
+            },
+            timeout: 15000
+        });
         const data = res.data;
         if (data && data.code === 0 && data.data) {
             const videoUrl = data.data.play || data.data.wmplay;
@@ -80,10 +186,6 @@ async function downloadTikTok(url) {
             const images = data.data.images;
 
             if (videoUrl) {
-                const bufRes = await fetchBufferFromUrl(videoUrl, { 'Referer': 'https://www.tiktok.com/' });
-                if (bufRes?.buffer) {
-                    return { type: 'video', buffer: bufRes.buffer, title, musicUrl, directUrl: videoUrl };
-                }
                 return { type: 'video', directUrl: videoUrl, title, musicUrl };
             } else if (images && Array.isArray(images) && images.length > 0) {
                 return { type: 'images', list: images, title };
@@ -93,7 +195,7 @@ async function downloadTikTok(url) {
         console.error('⚠️ [TikTok TikWM Error]:', e.message);
     }
 
-    // المحاولة 2: SiputzX TikTok API المباشر مع فك التوكن
+    // المحاولة 3: SiputzX TikTok API
     try {
         const apiUrl = `https://api.siputzx.my.id/api/d/tiktok?url=${encodeURIComponent(finalUrl)}`;
         const res = await axios.get(apiUrl, { timeout: 15000 });
@@ -110,10 +212,6 @@ async function downloadTikTok(url) {
                         if (payload?.url) finalVideoUrl = payload.url;
                     } catch (_) {}
                 }
-                const bufRes = await fetchBufferFromUrl(finalVideoUrl);
-                if (bufRes?.buffer) {
-                    return { type: 'video', buffer: bufRes.buffer, title: d.title || 'فيديو تيك توك', directUrl: finalVideoUrl };
-                }
                 return { type: 'video', directUrl: finalVideoUrl, title: d.title || 'فيديو تيك توك' };
             }
         }
@@ -121,7 +219,7 @@ async function downloadTikTok(url) {
         console.error('⚠️ [TikTok SiputzX Error]:', e.message);
     }
 
-    // المحاولة 3: SaveFrom الاحتياطي
+    // المحاولة 4: SaveFrom الاحتياطي مع فك التوجيه المباشر
     try {
         const res = await axios.get(`https://api.siputzx.my.id/api/d/savefrom?url=${encodeURIComponent(finalUrl)}`, { timeout: 15000 });
         const items = res.data?.data?.[0]?.data || res.data?.data;
@@ -130,11 +228,12 @@ async function downloadTikTok(url) {
             const title = item.meta?.title || 'فيديو تيك توك';
             const dl = item.url?.[0]?.url;
             if (dl) {
-                const bufRes = await fetchBufferFromUrl(dl);
-                if (bufRes?.buffer) {
-                    return { type: 'video', buffer: bufRes.buffer, title, directUrl: dl };
-                }
-                return { type: 'video', directUrl: dl, title };
+                let finalDl = dl;
+                try {
+                    const head = await fetch(dl, { method: 'HEAD', redirect: 'follow' });
+                    if (head.url && !head.url.includes('convert?')) finalDl = head.url;
+                } catch (_) {}
+                return { type: 'video', directUrl: finalDl, title };
             }
         }
     } catch (e) {
@@ -166,22 +265,19 @@ async function downloadInstagram(url) {
                     const first = media[0];
                     const targetUrl = typeof first === 'string' ? first : (first.url || first.downloadUrl);
                     if (targetUrl) {
-                        const bufRes = await fetchBufferFromUrl(targetUrl);
                         const isVideo = (typeof first === 'object' && first.type === 'video') ||
                                         targetUrl.includes('.mp4') ||
-                                        bufRes?.contentType?.includes('video');
+                                        targetUrl.includes('video');
 
                         if (isVideo) {
                             return {
                                 type: 'video',
-                                buffer: bufRes?.buffer,
                                 directUrl: targetUrl,
                                 title
                             };
                         } else {
                             return {
                                 type: 'image',
-                                buffer: bufRes?.buffer,
                                 directUrl: targetUrl,
                                 title
                             };
@@ -203,11 +299,14 @@ async function downloadInstagram(url) {
             const title = item.meta?.title || 'فيديو إنستغرام';
             const dl = item.url?.[0]?.url;
             if (dl) {
-                const bufRes = await fetchBufferFromUrl(dl);
+                let finalDl = dl;
+                try {
+                    const head = await fetch(dl, { method: 'HEAD', redirect: 'follow' });
+                    if (head.url && !head.url.includes('convert?')) finalDl = head.url;
+                } catch (_) {}
                 return {
                     type: 'video',
-                    buffer: bufRes?.buffer,
-                    directUrl: dl,
+                    directUrl: finalDl,
                     title
                 };
             }
@@ -242,11 +341,7 @@ async function downloadFacebook(url) {
                 } catch (_) {}
             }
 
-            const bufRes = await fetchBufferFromUrl(finalVideoUrl);
             const title = data.data.title || 'فيديو فيسبوك';
-            if (bufRes?.buffer) {
-                return { type: 'video', buffer: bufRes.buffer, title, directUrl: finalVideoUrl };
-            }
             return { type: 'video', directUrl: finalVideoUrl, title };
         }
     } catch (e) {
@@ -262,8 +357,12 @@ async function downloadFacebook(url) {
             const title = item.meta?.title || 'فيديو فيسبوك';
             const dl = item.url?.[0]?.url;
             if (dl) {
-                const bufRes = await fetchBufferFromUrl(dl);
-                return { type: 'video', buffer: bufRes?.buffer, directUrl: dl, title };
+                let finalDl = dl;
+                try {
+                    const head = await fetch(dl, { method: 'HEAD', redirect: 'follow' });
+                    if (head.url && !head.url.includes('convert?')) finalDl = head.url;
+                } catch (_) {}
+                return { type: 'video', directUrl: finalDl, title };
             }
         }
     } catch (e) {
@@ -277,7 +376,24 @@ async function downloadFacebook(url) {
  * 4. 🎬 تحميل يوتيوب (فيديو عالي الجودة أو صوت)
  */
 async function downloadYouTube(url, preferAudio = false) {
-    // المحاولة 1: SaveFrom المباشر السريع وعالي الجودة
+    // المحاولة 1 (الأساسية المباشرة والسريعة): مكتبة ytdl-lite
+    try {
+        if (preferAudio) {
+            const res = await ytmp3(url);
+            if (res && res.status && res.url) {
+                return { type: 'audio', directUrl: res.url, title: res.title || 'صوت يوتيوب' };
+            }
+        } else {
+            const res = await ytmp4(url, '360');
+            if (res && res.status && res.url) {
+                return { type: 'video', directUrl: res.url, title: res.title || 'فيديو يوتيوب' };
+            }
+        }
+    } catch (e) {
+        console.error('⚠️ [YouTube ytdl-lite Error]:', e.message);
+    }
+
+    // المحاولة 2: SaveFrom المباشر مع فك التوجيه للرابط النهائي السريع
     try {
         const res = await axios.get(`https://api.siputzx.my.id/api/d/savefrom?url=${encodeURIComponent(url)}`, { timeout: 15000 });
         const firstGroup = res.data?.data?.[0];
@@ -289,38 +405,27 @@ async function downloadYouTube(url, preferAudio = false) {
             if (preferAudio) {
                 const audioObj = urls.find(u => u.type === 'mp3' || u.ext === 'mp3' || u.audio === true) || urls[0];
                 if (audioObj?.url) {
-                    const bufRes = await fetchBufferFromUrl(audioObj.url);
-                    return { type: 'audio', buffer: bufRes?.buffer, directUrl: audioObj.url, title };
+                    let finalDl = audioObj.url;
+                    try {
+                        const h = await fetch(audioObj.url, { method: 'HEAD', redirect: 'follow' });
+                        if (h.url && !h.url.includes('convert?')) finalDl = h.url;
+                    } catch (_) {}
+                    return { type: 'audio', directUrl: finalDl, title };
                 }
             } else {
                 const videoObj = urls.find(u => u.quality === '720' || u.quality === '480' || u.quality === '360') || urls[0];
                 if (videoObj?.url) {
-                    const bufRes = await fetchBufferFromUrl(videoObj.url);
-                    return { type: 'video', buffer: bufRes?.buffer, directUrl: videoObj.url, title };
+                    let finalDl = videoObj.url;
+                    try {
+                        const h = await fetch(videoObj.url, { method: 'HEAD', redirect: 'follow' });
+                        if (h.url && !h.url.includes('convert?')) finalDl = h.url;
+                    } catch (_) {}
+                    return { type: 'video', directUrl: finalDl, title };
                 }
             }
         }
     } catch (e) {
         console.error('⚠️ [YouTube SaveFrom Error]:', e.message);
-    }
-
-    // المحاولة 2: مكتبة ytdl-lite
-    try {
-        if (preferAudio) {
-            const res = await ytmp3(url);
-            if (res && res.status && res.url) {
-                const bufRes = await fetchBufferFromUrl(res.url);
-                return { type: 'audio', buffer: bufRes?.buffer, directUrl: res.url, title: res.title || 'صوت يوتيوب' };
-            }
-        } else {
-            const res = await ytmp4(url, '360');
-            if (res && res.status && res.url) {
-                const bufRes = await fetchBufferFromUrl(res.url);
-                return { type: 'video', buffer: bufRes?.buffer, directUrl: res.url, title: res.title || 'فيديو يوتيوب' };
-            }
-        }
-    } catch (e) {
-        console.error('⚠️ [YouTube ytdl Error]:', e.message);
     }
 
     // المحاولة 3: 9xbuddy
@@ -334,15 +439,13 @@ async function downloadYouTube(url, preferAudio = false) {
                 const a = formats.find(f => f.type === 'audio' && f.url);
                 if (a) {
                     const dlUrl = a.url.startsWith('//') ? 'https:' + a.url : a.url;
-                    const bufRes = await fetchBufferFromUrl(dlUrl);
-                    return { type: 'audio', buffer: bufRes?.buffer, directUrl: dlUrl, title };
+                    return { type: 'audio', directUrl: dlUrl, title };
                 }
             } else {
                 const v = formats.find(f => f.type === 'video' && f.url && !f.external);
                 if (v) {
                     const dlUrl = v.url.startsWith('/') ? 'https://9xbuddy.com' + v.url : v.url;
-                    const bufRes = await fetchBufferFromUrl(dlUrl);
-                    return { type: 'video', buffer: bufRes?.buffer, directUrl: dlUrl, title };
+                    return { type: 'video', directUrl: dlUrl, title };
                 }
             }
         }
@@ -364,10 +467,7 @@ async function downloadYouTube(url, preferAudio = false) {
                     const dData = await dRes.json();
                     const preview = dData.data?.[0]?.preview;
                     if (preview) {
-                        const bufRes = await fetchBufferFromUrl(preview);
-                        if (bufRes?.buffer) {
-                            return { type: 'audio', buffer: bufRes.buffer, title: songTitle };
-                        }
+                        return { type: 'audio', directUrl: preview, title: songTitle };
                     }
                 }
             }
@@ -453,22 +553,14 @@ export async function handleConvertCommand(mek, currentConn, rawBody) {
             if (tiktokResult) {
                 if (tiktokResult.type === 'video') {
                     const caption = `🎬 *تم تحميل فيديو تيك توك بنجاح!* ✨\n\n📌 *العنوان:* ${tiktokResult.title}\n\n🤖 *Shadow Bot*`;
-                    if (tiktokResult.buffer) {
-                        await currentConn.sendMessage(from, {
-                            video: tiktokResult.buffer,
-                            caption: caption
-                        }, { quoted: mek });
-                    } else if (tiktokResult.directUrl) {
-                        await currentConn.sendMessage(from, {
-                            video: { url: tiktokResult.directUrl },
-                            caption: caption
-                        }, { quoted: mek });
+                    const ok = await sendVideoSafely(currentConn, from, tiktokResult, caption, mek);
+                    if (ok) {
+                        await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
+                        return true;
                     }
-                    await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
-                    return true;
                 } else if (tiktokResult.type === 'images' && tiktokResult.list) {
                     for (const imgUrl of tiktokResult.list.slice(0, 5)) {
-                        await currentConn.sendMessage(from, { image: { url: imgUrl } }, { quoted: mek });
+                        await currentConn.sendMessage(from, { image: { url: imgUrl } }, { quoted: mek }).catch(() => {});
                     }
                     await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
                     return true;
@@ -482,30 +574,16 @@ export async function handleConvertCommand(mek, currentConn, rawBody) {
             if (igResult) {
                 const caption = `📸 *تم تحميل ميديا إنستغرام بنجاح!* ✨\n\n📌 *العنوان:* ${igResult.title}\n\n🤖 *Shadow Bot*`;
                 if (igResult.type === 'video') {
-                    if (igResult.buffer) {
-                        await currentConn.sendMessage(from, {
-                            video: igResult.buffer,
-                            caption: caption
-                        }, { quoted: mek });
-                    } else if (igResult.directUrl) {
-                        await currentConn.sendMessage(from, {
-                            video: { url: igResult.directUrl },
-                            caption: caption
-                        }, { quoted: mek });
+                    const ok = await sendVideoSafely(currentConn, from, igResult, caption, mek);
+                    if (ok) {
+                        await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
+                        return true;
                     }
-                    await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
-                    return true;
                 } else if (igResult.type === 'image') {
                     if (igResult.buffer) {
-                        await currentConn.sendMessage(from, {
-                            image: igResult.buffer,
-                            caption: caption
-                        }, { quoted: mek });
+                        await currentConn.sendMessage(from, { image: igResult.buffer, caption }, { quoted: mek });
                     } else if (igResult.directUrl) {
-                        await currentConn.sendMessage(from, {
-                            image: { url: igResult.directUrl },
-                            caption: caption
-                        }, { quoted: mek });
+                        await currentConn.sendMessage(from, { image: { url: igResult.directUrl }, caption }, { quoted: mek });
                     }
                     await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
                     return true;
@@ -518,19 +596,11 @@ export async function handleConvertCommand(mek, currentConn, rawBody) {
             const fbResult = await downloadFacebook(targetUrl);
             if (fbResult) {
                 const caption = `📽️ *تم تحميل فيديو فيسبوك بنجاح!* ✨\n\n📌 *العنوان:* ${fbResult.title}\n\n🤖 *Shadow Bot*`;
-                if (fbResult.buffer) {
-                    await currentConn.sendMessage(from, {
-                        video: fbResult.buffer,
-                        caption: caption
-                    }, { quoted: mek });
-                } else if (fbResult.directUrl) {
-                    await currentConn.sendMessage(from, {
-                        video: { url: fbResult.directUrl },
-                        caption: caption
-                    }, { quoted: mek });
+                const ok = await sendVideoSafely(currentConn, from, fbResult, caption, mek);
+                if (ok) {
+                    await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
+                    return true;
                 }
-                await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
-                return true;
             }
         }
 
@@ -541,33 +611,17 @@ export async function handleConvertCommand(mek, currentConn, rawBody) {
             if (ytResult) {
                 if (ytResult.type === 'video') {
                     const caption = `🎬 *تم تحميل فيديو يوتيوب بنجاح!* ✨\n\n📌 *العنوان:* ${ytResult.title}\n\n🤖 *Shadow Bot*`;
-                    if (ytResult.buffer) {
-                        await currentConn.sendMessage(from, {
-                            video: ytResult.buffer,
-                            caption: caption
-                        }, { quoted: mek });
-                    } else if (ytResult.directUrl) {
-                        await currentConn.sendMessage(from, {
-                            video: { url: ytResult.directUrl },
-                            caption: caption
-                        }, { quoted: mek });
+                    const ok = await sendVideoSafely(currentConn, from, ytResult, caption, mek);
+                    if (ok) {
+                        await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
+                        return true;
                     }
-                    await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
-                    return true;
                 } else if (ytResult.type === 'audio') {
-                    if (ytResult.buffer) {
-                        await currentConn.sendMessage(from, {
-                            audio: ytResult.buffer,
-                            mimetype: 'audio/mpeg'
-                        }, { quoted: mek });
-                    } else if (ytResult.directUrl) {
-                        await currentConn.sendMessage(from, {
-                            audio: { url: ytResult.directUrl },
-                            mimetype: 'audio/mpeg'
-                        }, { quoted: mek });
+                    const ok = await sendAudioSafely(currentConn, from, ytResult, mek);
+                    if (ok) {
+                        await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
+                        return true;
                     }
-                    await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
-                    return true;
                 }
             }
         }

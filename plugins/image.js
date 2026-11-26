@@ -35,6 +35,47 @@ function normalizeArabic(text) {
 }
 
 /**
+ * فحص صارم لكشف أي محتوى إباحي، جنسي، أو غير لائق (عربي وإنجليزي)
+ */
+function isExplicitContent(text) {
+    if (!text) return false;
+    const clean = normalizeArabic(text);
+    const compact = clean.replace(/\s+/g, ''); // لكشف الكلمات المفصولة بحروف مثل: س ك س
+
+    // 1. كلمات إباحية وصريحة جداً (عربي ومصري)
+    const arabicPatterns = [
+        /(?:^|\s)(?:سكس|بورن|بورنو|اباحي|اباحيه|سكسي|نيك|ينيك|منيوك|تنايك|شرموط|شرموطه|شرموطة|قحب|قحبه|قحبة)(?:\s|$)/i,
+        /(?:^|\s)(?:طيز|كس|بزاز|بزازها|طياز|فخاذ|صدر\s*عاري|مؤخرة\s*عارية|مؤخره\s*عاريه|عريان|عريانه|عريانة|عاري|عارية|عاريه|ملط|مفصخ|مفصخه|مفصخة)(?:\s|$)/i,
+        /(?:^|\s)(?:شيميل|خنيث|لواط|سحاق|سحاقيات|مثليين|اوضاع\s*جنسيه|اوضاع\s*جنسية|افلام\s*سكس|مقاطع\s*سكس|فيديو\s*سكس|صور\s*سكس)(?:\s|$)/i,
+        /(?:^|\s)(?:بدون\s*ملابس|بلا\s*ملابس|خلع\s*ملابس|تعري|استمناء|نيكني|مص\s*قضيب)(?:\s|$)/i
+    ];
+
+    for (const pat of arabicPatterns) {
+        if (pat.test(clean)) return true;
+    }
+
+    // فحص النص المضغوط بدون مسافات للكلمات الإباحية المباشرة (مثل س ك س أو ب و ر ن)
+    if (/(?:سكس|بورن|اباحي|شرموط|شيميل|عريان|منيوك)/.test(compact)) {
+        return true;
+    }
+
+    // 2. كلمات إباحية بالإنجليزية (English NSFW / Explicit)
+    const lower = text.toLowerCase();
+    const englishPatterns = [
+        /\b(?:porn|porno|pornography|xxx|nude|nudes|naked|nudity|nsfw|sex|sexy|erotic)\b/i,
+        /\b(?:boobs|tits|pussy|vagina|penis|dick|cock|blowjob|deepthroat|dildo|anal)\b/i,
+        /\b(?:hentai|milf|shemale|escort|onlyfans|stripper|rule34|cum|masturbat\w*)\b/i,
+        /\b(?:topless|bottomless|undressed|naked girl|naked woman|nude photo)\b/i
+    ];
+
+    for (const pat of englishPatterns) {
+        if (pat.test(lower)) return true;
+    }
+
+    return false;
+}
+
+/**
  * تنظيف العبارة واستخراج الكلمات المفتاحية الحقيقية والصافية للبحث
  */
 function cleanImageQuery(rawText) {
@@ -97,7 +138,7 @@ async function searchBingImages(query) {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
-                'Cookie': 'SRCHHPGUSR=ADLT=OFF; _EDGE_S=F=1'
+                'Cookie': 'SRCHHPGUSR=ADLT=STRICT; _EDGE_S=F=1'
             },
             timeout: 6000
         });
@@ -122,7 +163,7 @@ async function searchBingImages(query) {
  */
 async function searchYahooImages(query) {
     try {
-        const yUrl = `https://images.search.yahoo.com/search/images?p=${encodeURIComponent(query)}`;
+        const yUrl = `https://images.search.yahoo.com/search/images?p=${encodeURIComponent(query)}&vm=r`;
         const res = await axios.get(yUrl, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -175,7 +216,7 @@ async function searchDuckDuckGoImages(query) {
         if (!vqdMatch) return [];
         const vqd = vqdMatch[1];
 
-        const imgRes = await axios.get(`https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${vqd}&f=,,,`, {
+        const imgRes = await axios.get(`https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${encodeURIComponent(query)}&vqd=${vqd}&f=,,1,`, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 'Referer': 'https://duckduckgo.com/'
@@ -197,7 +238,7 @@ async function searchDuckDuckGoImages(query) {
  */
 async function searchGoogleImages(query) {
     try {
-        const url = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}&hl=ar&gl=eg`;
+        const url = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(query)}&safe=active&hl=ar&gl=eg`;
         const res = await axios.get(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -240,7 +281,7 @@ async function searchGoogleImages(query) {
  */
 async function searchYandexImages(query) {
     try {
-        const url = `https://yandex.com/images/search?text=${encodeURIComponent(query)}`;
+        const url = `https://yandex.com/images/search?text=${encodeURIComponent(query)}&family=yes`;
         const res = await axios.get(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -356,7 +397,16 @@ async function fetchWorldwideImageUrls(cleanQuery) {
  * توليد صورة بالذكاء الاصطناعي عبر Pollinations AI
  */
 async function generateAiImage(rawPrompt) {
+    if (isExplicitContent(rawPrompt)) {
+        console.log(`🛡️ [AI Image Engine] تم حظر الطلب لمخالفته سياسة الأمان: "${rawPrompt}"`);
+        return null;
+    }
+
     const englishPrompt = await translateToEnglish(rawPrompt);
+    if (isExplicitContent(englishPrompt)) {
+        console.log(`🛡️ [AI Image Engine] تم حظر الطلب المترجم لمخالفته سياسة الأمان: "${englishPrompt}"`);
+        return null;
+    }
     console.log(`🎨 [AI Image Engine] الأصل: "${rawPrompt}" -> الإنجليزية: "${englishPrompt}"`);
 
     const visualEnhancers = 'highly detailed, photorealistic, cinematic lighting, masterpiece, 8k resolution, sharp focus';
@@ -426,6 +476,19 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
 
         // استخراج وتنظيف نص البحث الصافي
         let query = cleanImageQuery(body);
+
+        // 🛡️ فحص أمان صارم لمنع أي محتوى إباحي، جنسي، أو غير لائق
+        if (isExplicitContent(query) || isExplicitContent(body)) {
+            await delay(600);
+            try { await currentConn.sendMessage(from, { react: { text: '🚫', key: mek.key } }); } catch (_) {}
+            const safetyMsg = 
+                `⚠️ *عذراً يا غالي، لا يمكن تنفيذ هذا الطلب!* 🚫\n\n` +
+                `📌 *سياسة الأمان والآداب:* البوت يمنع تماماً البحث عن أو توليد أي صور إباحية، مخلة بالآداب، أو غير لائقة.\n\n` +
+                `👑 *Shadow Bot*`;
+            await delay(600);
+            await currentConn.sendMessage(from, { text: safetyMsg }, { quoted: mek });
+            return true;
+        }
 
         // إذا كتب المستخدم الأمر بدون نص، عرض الدليل الإرشادي
         if (!query) {
