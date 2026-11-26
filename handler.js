@@ -12,7 +12,7 @@ import gameMovies from './plugins/game-movies.js';
 import menuHandler from './plugins/menu.js';
 import fontsModule, { handleFontsCommand } from './plugins/fonts.js';
 import translateModule, { handleTranslateCommand, checkTranslateSession } from './plugins/translate.js';
-import downloaderModule, { handleConvertCommand } from './plugins/downloader.js';
+import downloaderModule, { handleConvertCommand, checkConvertSession } from './plugins/downloader.js';
 import datelsHandler, { extractMessageBody, extractTarget } from './plugins/datels.js';
 import { 
     requestSubBotPairing, 
@@ -3876,6 +3876,12 @@ export async function handleAllMessages(mek, currentConn) {
             if (translateHandled) return;
         }
 
+        // 📥 فحص جلسة اختيار صيغة التحويل النشطة (فيديو MP4 أو صوت MP3)
+        if (typeof checkConvertSession === 'function') {
+            const convertHandled = await checkConvertSession(mek, currentConn, body, cleanSender, from);
+            if (convertHandled) return;
+        }
+
         // =========================================================================
         // 🛑 [الألعاب وأنظمة التسلية - تشغيل الأوامر الأساسية لفتح الجيم]
         // =========================================================================
@@ -3996,7 +4002,7 @@ export async function handleAllMessages(mek, currentConn) {
         // =========================================================================
         if (/^(?:\.|\/|!)?(?:تحويل|تحميل|تنزيل|download)(?:\s+.*)?$/i.test(normalizedBody)) {
             await respondWithStrictTiming('📥', async () => {
-                await handleConvertCommand(mek, currentConn, body);
+                await handleConvertCommand(mek, currentConn, body, cleanSender);
             });
             return;
         }
