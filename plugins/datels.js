@@ -1633,6 +1633,7 @@ const datelsHandler = {
 
             if (isJoinCommand) {
                 if (!isBotOwner) {
+                    if (isGroup) return true;
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
@@ -2041,19 +2042,21 @@ const datelsHandler = {
             }
 
             if (isLeaveMatch) {
-                // إذا كتب الأمر شخص ليس مالك هذا البوت وليس الحج شادو
-                if (!isBotOwner) {
-                    await handleCommandTiming('❌');
-                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
-                    return true;
-                }
-
                 const matchesThisBot = (
                     specifiedName === normalizedBotName || 
                     (normalizedCallName && specifiedName === normalizedCallName) || 
                     specifiedName === 'الكل' ||
                     (!currentConn.isSubBot && (specifiedName === 'شادو' || specifiedName === 'الرئيسي'))
                 );
+
+                // إذا كتب الأمر شخص ليس مالك هذا البوت وليس الحج شادو
+                if (!isBotOwner) {
+                    if (specifiedName && !matchesThisBot) return true;
+                    if (isGroup) return true;
+                    await handleCommandTiming('❌');
+                    await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
+                    return true;
+                }
 
                 // لو المُرسل هو مالك البوت الفرعي (isSubBotAdmin وليس شادو):
                 if (isSubBotAdmin && !isAbsoluteOwner) {
@@ -3189,6 +3192,7 @@ const datelsHandler = {
                 if (normalizedBody.startsWith('الغي التنبيهات') || normalizedBody.startsWith('الغاء التنبيهات') || normalizedBody.startsWith('صفر التنبيهات') || normalizedBody.startsWith('تصفير التنبيهات') || normalizedBody.startsWith('حذف التنبيهات') || normalizedBody.startsWith('مسح التنبيهات') || normalizedBody.startsWith('الغي الانذارات') || normalizedBody.startsWith('صفر الانذارات') || normalizedBody.startsWith('حذف الانذارات')) {
                     const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
                     if (!canManageWarn) {
+                        if (isGroup) return true;
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                         return true;
@@ -3220,6 +3224,7 @@ const datelsHandler = {
             if (normalizedBody.startsWith('رفع تنبيه') || normalizedBody.startsWith('ترقية تنبيه')) {
                 const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
                 if (!canManageWarn) {
+                    if (isGroup) return true;
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
@@ -3250,6 +3255,7 @@ const datelsHandler = {
             if (normalizedBody.startsWith('نزل تنبيه') || normalizedBody.startsWith('تنزيل تنبيه')) {
                 const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
                 if (!canManageWarn) {
+                    if (isGroup) return true;
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
@@ -3277,6 +3283,7 @@ const datelsHandler = {
             if (normalizedBody.startsWith('رفع حج') && !normalizedBody.includes('اساسي')) {
                 const canManageHajj = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
                 if (!canManageHajj) {
+                    if (isGroup) return true;
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
@@ -3288,6 +3295,23 @@ const datelsHandler = {
                     return true;
                 }
                 let targetNum = getCleanNumber(target);
+
+                // إذا كان على بوت فرعي: الرفع يخص هذا البوت الفرعي فقط ولا يمس السيستم العام لباقي البوتات
+                if (currentConn.isSubBot) {
+                    const subCfg = currentConn.subBotConfig || {};
+                    const currentSubHajjs = subCfg.subHajjUsers || [];
+                    if (currentSubHajjs.includes(targetNum) || (subCfg.adminNumbers && subCfg.adminNumbers.includes(targetNum))) {
+                        await handleCommandTiming('⚠️');
+                        await currentConn.sendMessage(from, { text: `⚠️ الشخص @${targetNum} مرفوع كحج بالفعل في هذا البوت الفرعي! 🕋`, mentions: [target] }, { quoted: mek });
+                        return true;
+                    }
+                    updateSubBotHajj(myBotNum, targetNum, 'add');
+                    await handleCommandTiming('👑');
+                    await currentConn.sendMessage(from, { text: `🕋👑 *أمر ملكي من صاحب البوت:* \nتم ترقية @${targetNum} إلى رتبة [ حج ] في هذا البوت فقط بكامل الصلاحيات! 🎉✨`, mentions: [target] }, { quoted: mek });
+                    return true;
+                }
+
+                // إذا كان على البوت الأساسي (للحج شادو الأصلي فقط)
                 if (isUserInList(target, localDB.hajjUsers) || isUserInList(target, localDB.mainHajjUsers)) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { text: `⚠️ الشخص @${targetNum} مرفوع كحج بالفعل بالسستم! 🕋`, mentions: [target] }, { quoted: mek });
@@ -3311,8 +3335,9 @@ const datelsHandler = {
 
             // رفع حج أساسي
             if (normalizedBody.startsWith('رفع حج اساسي') || normalizedBody.startsWith('رفع حج أساسي')) {
-                const isSubBotOwner = currentConn.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin);
-                if (!isAbsoluteOwner && !isSubBotOwner) {
+                const canManageMainHajj = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
+                if (!canManageMainHajj) {
+                    if (isGroup) return true;
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
@@ -3325,8 +3350,8 @@ const datelsHandler = {
                 }
                 let targetNum = getCleanNumber(target);
 
-                // إذا كان مالك البوت الفرعي هو الذي يرفع
-                if (isSubBotOwner && !isAbsoluteOwner) {
+                // إذا كنا في بوت فرعي: ترقية الحج الأساسي تخص هذا البوت الفرعي فقط ولا تلمس السيستم العام لباقي البوتات
+                if (currentConn.isSubBot) {
                     const subCfg = currentConn.subBotConfig || {};
                     const currentSubHajjs = subCfg.subHajjUsers || [];
                     if (currentSubHajjs.includes(targetNum) || (subCfg.adminNumbers && subCfg.adminNumbers.includes(targetNum))) {
@@ -3336,11 +3361,11 @@ const datelsHandler = {
                     }
                     updateSubBotHajj(myBotNum, targetNum, 'add');
                     await handleCommandTiming('👑');
-                    await currentConn.sendMessage(from, { text: `👑🕋 *أمر ملكي من صاحب البوت الفرعي:* \nتم ترقية @${targetNum} لرتبة [ حج أساسي ] في هذا البوت بنجاح! 👑⚡\nالآن يقدر ينيم ويصحي البوت ويأمره بأي أمر بكامل الصلاحيات!`, mentions: [target] }, { quoted: mek });
+                    await currentConn.sendMessage(from, { text: `👑🕋 *أمر ملكي معتمد:* \nتم ترقية @${targetNum} لرتبة [ حج أساسي ] في هذا البوت الفرعي بنجاح! 👑⚡\nالآن يقدر ينيم ويصحي البوت ويأمره بأي أمر بكامل الصلاحيات!`, mentions: [target] }, { quoted: mek });
                     return true;
                 }
 
-                // إذا كان الحج شادو الأصلي
+                // إذا كان الحج شادو الأصلي في البوت الأساسي
                 if (isUserInList(target, localDB.mainHajjUsers)) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { text: `⚠️ الشخص @${targetNum} مرفوع حج أساسي بالفعل بالسستم! 👑`, mentions: [target] }, { quoted: mek });
@@ -3360,9 +3385,6 @@ const datelsHandler = {
                     localDB.users[cleanTargetJid].level = 999;
                 }
                 saveLocalDB(localDB);
-                if (currentConn.isSubBot) {
-                    updateSubBotHajj(myBotNum, targetNum, 'add');
-                }
 
                 await handleCommandTiming('👑');
                 await currentConn.sendMessage(from, { text: `👑🕋 *أمر ملكي مطلق من الحج الأصلي:* \nتم ترقية @${targetNum} مباشرة لرتبة [ حج أساسي ] بالسستم! 👑❤️`, mentions: [target] }, { quoted: mek });
@@ -3371,8 +3393,9 @@ const datelsHandler = {
 
             // تنزيل حج أو حج أساسي
             if (normalizedBody.startsWith('نزل حج') || normalizedBody.startsWith('تنزيل حج') || normalizedBody.startsWith('نزل حج اساسي') || normalizedBody.startsWith('تنزيل حج اساسي') || normalizedBody.startsWith('نزل حج أساسي') || normalizedBody.startsWith('تنزيل حج أساسي')) {
-                const isSubBotOwner = currentConn.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin);
-                if (!isAbsoluteOwner && !isSubBotOwner) {
+                const canDemoteHajj = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
+                if (!canDemoteHajj) {
+                    if (isGroup) return true;
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
@@ -3390,8 +3413,8 @@ const datelsHandler = {
                     return true;
                 }
 
-                // إذا كان صاحب البوت الفرعي
-                if (isSubBotOwner && !isAbsoluteOwner) {
+                // إذا كان على بوت فرعي: التنزيل يتم من هذا البوت الفرعي فقط
+                if (currentConn.isSubBot) {
                     const subCfg = currentConn.subBotConfig || {};
                     if (targetNum === subCfg.adminPhone || targetNum === subCfg.adminLid) {
                         await handleCommandTiming('❌');
@@ -3404,7 +3427,7 @@ const datelsHandler = {
                     return true;
                 }
 
-                // إذا كان الحج شادو الأصلي
+                // إذا كان على البوت الأساسي
                 if (!isUserInList(target, localDB.hajjUsers) && !isUserInList(target, localDB.mainHajjUsers)) {
                     await handleCommandTiming('⚠️');
                     await currentConn.sendMessage(from, { text: `⚠️ الشخص @${targetNum} ليس مسجلاً كحج بالفعل بالسستم! 📉`, mentions: [target] }, { quoted: mek });
@@ -3420,9 +3443,6 @@ const datelsHandler = {
                     return clean !== targetNum && (!mapped || clean !== mapped);
                 });
                 saveLocalDB(localDB);
-                if (currentConn.isSubBot) {
-                    updateSubBotHajj(myBotNum, targetNum, 'remove');
-                }
 
                 await handleCommandTiming('📉');
                 await currentConn.sendMessage(from, { text: `📉 تم تنزيل @${targetNum} من رتبة الحج وسحب صلاحياته بنجاح!`, mentions: [target] }, { quoted: mek });
@@ -3432,8 +3452,9 @@ const datelsHandler = {
             // حظر مستخدم
             if (normalizedBody.startsWith('حظر مستخدم') || normalizedBody.startsWith('حظر عضو')) {
                 const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
-                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotAdminUser);
+                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotAdminUser) || (!currentConn?.isSubBot && isMainHajj);
                 if (!canBan) {
+                    if (isGroup) return true;
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;
@@ -3520,8 +3541,9 @@ const datelsHandler = {
             // فك حظر مستخدم
             if (normalizedBody.startsWith('فك حظر مستخدم') || normalizedBody.startsWith('فك حظر عضو') || normalizedBody.startsWith('فك حظر')) {
                 const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
-                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotAdminUser);
+                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotAdminUser) || (!currentConn?.isSubBot && isMainHajj);
                 if (!canBan) {
+                    if (isGroup) return true;
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                     return true;

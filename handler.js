@@ -1008,9 +1008,9 @@ export async function handleAllMessages(mek, currentConn) {
 
         // 👑 تحديد المسموح له بالتحكم بالنوم والصمت (نام / اصحي / اسكت):
         // في البوت الأساسي: الحج شادو الأصلي فقط
-        // في البوت الفرعي: الحج شادو أو مالك البوت الفرعي الأساسي فقط
+        // في البوت الفرعي: الحج شادو أو مالك البوت الفرعي الأساسي والحجاج المرفوعين فيه فقط
         const isSleepOwner = currentConn.isSubBot
-            ? (isAbsoluteOwner || isSubBotMainOwner)
+            ? (isAbsoluteOwner || isSubBotMainOwner || isSubBotHajj)
             : isAbsoluteOwner;
 
         // 🤫 1. فحص هل الجروب أو الشات الخاص في وضع الصمت التام (اسكت / اخرس / اسكت خاص 100%)
@@ -1108,6 +1108,7 @@ export async function handleAllMessages(mek, currentConn) {
 
             if (isMuteAll || isNamedMute) {
                 if (!isSleepOwner && !mek.key?.fromMe) {
+                    if (isRealGroup) return; // صامت في الجروبات لعدم التضارب
                     await respondWithStrictTiming('❌', async () => {
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج وأصحاب البوت فقط! 👑' }, { quoted: mek });
                     });
@@ -1153,6 +1154,7 @@ export async function handleAllMessages(mek, currentConn) {
 
         if (isGeneralSleepCmd || isNamedSleepCmd) {
             if (!isSleepOwner) {
+                if (isRealGroup) return; // صامت في الجروبات لعدم التضارب
                 await respondWithStrictTiming('❌', async () => {
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
@@ -1212,6 +1214,7 @@ export async function handleAllMessages(mek, currentConn) {
 
         if (isGeneralWakeCmd || isNamedWakeCmd) {
             if (!isSleepOwner && !mek.key?.fromMe) {
+                if (isRealGroup) return; // صامت في الجروبات لعدم التضارب
                 await respondWithStrictTiming('❌', async () => {
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج وأصحاب البوت فقط! 👑' }, { quoted: mek });
                 });
@@ -3478,8 +3481,9 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('اعطاء ') || normalizedBody.startsWith('اعطاء') ||
             normalizedBody.startsWith('زيد ') || normalizedBody.startsWith('زيد')
         ) {
-            const canGivePoints = isAbsoluteOwner || (currentConn.isSubBot && isSubBotMainOwner);
+            const canGivePoints = isAbsoluteOwner || (currentConn.isSubBot && (isSubBotMainOwner || isSubBotHajj)) || (!currentConn.isSubBot && isMainHajj);
             if (!canGivePoints) {
+                if (isRealGroup) return; // صامت في الجروب لعدم التضارب مع البوتات الأخرى
                 await respondWithStrictTiming('❌', async () => {
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
@@ -3579,8 +3583,9 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('سحب ') || normalizedBody.startsWith('سحب') ||
             normalizedBody.startsWith('اخصم ') || normalizedBody.startsWith('اخصم')
         ) {
-            const canWithdrawPoints = isAbsoluteOwner || (currentConn.isSubBot && isSubBotMainOwner);
+            const canWithdrawPoints = isAbsoluteOwner || (currentConn.isSubBot && (isSubBotMainOwner || isSubBotHajj)) || (!currentConn.isSubBot && isMainHajj);
             if (!canWithdrawPoints) {
+                if (isRealGroup) return; // صامت في الجروب لعدم التضارب مع البوتات الأخرى
                 await respondWithStrictTiming('❌', async () => {
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
                 });
