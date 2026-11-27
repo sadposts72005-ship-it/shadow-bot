@@ -728,11 +728,22 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
         if (!conn || !conn.user?.id) break;
 
         try {
-            // 👥 منشن خفي لجميع أعضاء الجروب دون كتابة أي يوزرات في نص الرسالة
-            const meta = await getCachedGroupMetadata(conn, gid);
-            const mentions = (meta?.participants && Array.isArray(meta.participants))
-                ? meta.participants.map(p => p.id).filter(Boolean)
-                : [];
+            // 👥 منشن خفي لجميع أعضاء الجروب مع فحص كاش سريع جداً (1.5 ثانية كحد أقصى) لعدم تأخير الأذان
+            const cached = groupMetaCache.get(gid);
+            let mentions = [];
+            if (cached?.data?.participants && Array.isArray(cached.data.participants)) {
+                mentions = cached.data.participants.map(p => p.id).filter(Boolean);
+            } else {
+                try {
+                    const metaPromise = conn.groupMetadata(gid);
+                    const fastTimeout = new Promise(resolve => setTimeout(() => resolve(null), 1500));
+                    const meta = await Promise.race([metaPromise, fastTimeout]);
+                    if (meta?.participants && Array.isArray(meta.participants)) {
+                        groupMetaCache.set(gid, { data: meta, timestamp: Date.now() });
+                        mentions = meta.participants.map(p => p.id).filter(Boolean);
+                    }
+                } catch (_) {}
+            }
 
             const sentRes = await conn.sendMessage(gid, { 
                 text: messageToSend,
@@ -744,7 +755,7 @@ async function sendRemindersWithDelay(conn, groupIds, messageToSend, localDB, se
                 sentGids.add(gid);
             }
         } catch (_) {}
-        await delay(5000); // ⏱️ تأخير 5 ثوانٍ كاملة بين كل جروب والتاني لمنع الحظر وبطلب الحج شادو
+        await delay(3000); // ⏱️ تأخير 3 ثوانٍ فقط بين كل جروب والتاني حسب طلب الحج شادو لسرعة وصول الأذان
     }
 }
 
@@ -1616,11 +1627,9 @@ const datelsHandler = {
             // =========================================================================
             // 📥 1️⃣ [أمر ادخل جروب / انضمام للحج الأساسي حصرياً]
             // =========================================================================
-            const isJoinCommand = normalizedBody.startsWith('ادخل جروب') ||
-                                  normalizedBody.startsWith('ادخل') ||
-                                  normalizedBody.startsWith('انضم جروب') ||
-                                  normalizedBody.startsWith('انضمام') ||
-                                  normalizedBody.startsWith('انضم');
+            const isJoinGroupExplicit = /^(?:ادخل\s+جروب|ادخل\s+الجروب|ادخل\s+روم|ادخل\s+الروم|انضم\s+جروب|انضم\s+لجروب|انضم\s+لروم)(?:\s+.*)?$/i.test(normalizedBody);
+            const isJoinWithLink = (/^(?:ادخل|انضم|انضمام)(?:\s+.*)$/i.test(normalizedBody) && body.match(waGroupRegex));
+            const isJoinCommand = isJoinGroupExplicit || isJoinWithLink;
 
             if (isJoinCommand) {
                 if (!isBotOwner) {
@@ -3178,7 +3187,7 @@ const datelsHandler = {
 
                 // تصفير وإلغاء التنبيهات
                 if (normalizedBody.startsWith('الغي التنبيهات') || normalizedBody.startsWith('الغاء التنبيهات') || normalizedBody.startsWith('صفر التنبيهات') || normalizedBody.startsWith('تصفير التنبيهات') || normalizedBody.startsWith('حذف التنبيهات') || normalizedBody.startsWith('مسح التنبيهات') || normalizedBody.startsWith('الغي الانذارات') || normalizedBody.startsWith('صفر الانذارات') || normalizedBody.startsWith('حذف الانذارات')) {
-                    const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot ? isSubBotOwner : isMainHajj);
+                    const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
                     if (!canManageWarn) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
@@ -3209,7 +3218,7 @@ const datelsHandler = {
             // =========================================================================
             // رفع أدمن تنبيه
             if (normalizedBody.startsWith('رفع تنبيه') || normalizedBody.startsWith('ترقية تنبيه')) {
-                const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot ? isSubBotOwner : isMainHajj);
+                const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
                 if (!canManageWarn) {
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
@@ -3239,7 +3248,7 @@ const datelsHandler = {
 
             // تنزيل أدمن تنبيه
             if (normalizedBody.startsWith('نزل تنبيه') || normalizedBody.startsWith('تنزيل تنبيه')) {
-                const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot ? isSubBotOwner : isMainHajj);
+                const canManageWarn = isAbsoluteOwner || (currentConn.isSubBot && isSubBotOwner);
                 if (!canManageWarn) {
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
@@ -3423,7 +3432,7 @@ const datelsHandler = {
             // حظر مستخدم
             if (normalizedBody.startsWith('حظر مستخدم') || normalizedBody.startsWith('حظر عضو')) {
                 const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
-                const canBan = isAbsoluteOwner || (currentConn?.isSubBot ? isSubBotAdminUser : isMainHajj);
+                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotAdminUser);
                 if (!canBan) {
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
@@ -3511,7 +3520,7 @@ const datelsHandler = {
             // فك حظر مستخدم
             if (normalizedBody.startsWith('فك حظر مستخدم') || normalizedBody.startsWith('فك حظر عضو') || normalizedBody.startsWith('فك حظر')) {
                 const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
-                const canBan = isAbsoluteOwner || (currentConn?.isSubBot ? isSubBotAdminUser : isMainHajj);
+                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotAdminUser);
                 if (!canBan) {
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });

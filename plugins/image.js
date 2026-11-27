@@ -42,12 +42,13 @@ function isExplicitContent(text) {
     const clean = normalizeArabic(text);
     const compact = clean.replace(/\s+/g, ''); // لكشف الكلمات المفصولة بحروف مثل: س ك س
 
-    // 1. كلمات إباحية وصريحة جداً (عربي ومصري)
+    // 1. كلمات إباحية وصريحة جداً (عربي ومصري) + منع طلب صور البنات والنساء
     const arabicPatterns = [
         /(?:^|\s)(?:سكس|بورن|بورنو|اباحي|اباحيه|سكسي|نيك|ينيك|منيوك|تنايك|شرموط|شرموطه|شرموطة|قحب|قحبه|قحبة)(?:\s|$)/i,
         /(?:^|\s)(?:طيز|كس|بزاز|بزازها|طياز|فخاذ|صدر\s*عاري|مؤخرة\s*عارية|مؤخره\s*عاريه|عريان|عريانه|عريانة|عاري|عارية|عاريه|ملط|مفصخ|مفصخه|مفصخة)(?:\s|$)/i,
         /(?:^|\s)(?:شيميل|خنيث|لواط|سحاق|سحاقيات|مثليين|اوضاع\s*جنسيه|اوضاع\s*جنسية|افلام\s*سكس|مقاطع\s*سكس|فيديو\s*سكس|صور\s*سكس)(?:\s|$)/i,
-        /(?:^|\s)(?:بدون\s*ملابس|بلا\s*ملابس|خلع\s*ملابس|تعري|استمناء|نيكني|مص\s*قضيب)(?:\s|$)/i
+        /(?:^|\s)(?:بدون\s*ملابس|بلا\s*ملابس|خلع\s*ملابس|تعري|استمناء|نيكني|مص\s*قضيب)(?:\s|$)/i,
+        /(?:^|\s)(?:بنات|بنت|نسوان|حريم|ستات|مزه|مزز|مزّة|فتاة|فتيات|صبايا|صدايا|نسوانجي|بنات\s*حلوه|بنات\s*حلوة|بنت\s*حلوه|بنت\s*حلوة|بنات\s*مصر|بنات\s*تيك\s*توك|موديل\s*بنات|صور\s*بنات|صورة\s*بنت|صوره\s*بنت|بنت\s*جميله|بنت\s*جميلة|بنات\s*جميلات|نساء|نسائيه|نسائية)(?:\s|$)/i
     ];
 
     for (const pat of arabicPatterns) {
@@ -59,13 +60,14 @@ function isExplicitContent(text) {
         return true;
     }
 
-    // 2. كلمات إباحية بالإنجليزية (English NSFW / Explicit)
+    // 2. كلمات إباحية وصور نساء بالإنجليزية (English NSFW / Girls / Explicit)
     const lower = text.toLowerCase();
     const englishPatterns = [
         /\b(?:porn|porno|pornography|xxx|nude|nudes|naked|nudity|nsfw|sex|sexy|erotic)\b/i,
         /\b(?:boobs|tits|pussy|vagina|penis|dick|cock|blowjob|deepthroat|dildo|anal)\b/i,
         /\b(?:hentai|milf|shemale|escort|onlyfans|stripper|rule34|cum|masturbat\w*)\b/i,
-        /\b(?:topless|bottomless|undressed|naked girl|naked woman|nude photo)\b/i
+        /\b(?:topless|bottomless|undressed|naked girl|naked woman|nude photo|bikini|lingerie|cleavage|babes?)\b/i,
+        /\b(?:girls?|hot\s*girls?|pretty\s*girls?|sexy\s*girls?|cute\s*girls?|wom[ae]n|female\s*photo|girl\s*photo|women\s*photo|lady|ladies)\b/i
     ];
 
     for (const pat of englishPatterns) {
@@ -483,7 +485,7 @@ export async function handleImageCommand(mek, currentConn, rawBody) {
             try { await currentConn.sendMessage(from, { react: { text: '🚫', key: mek.key } }); } catch (_) {}
             const safetyMsg = 
                 `⚠️ *عذراً يا غالي، لا يمكن تنفيذ هذا الطلب!* 🚫\n\n` +
-                `📌 *سياسة الأمان والآداب:* البوت يمنع تماماً البحث عن أو توليد أي صور إباحية، مخلة بالآداب، أو غير لائقة.\n\n` +
+                `📌 *سياسة الأمان والآداب:* البوت يمنع تماماً البحث عن أو توليد صور البنات أو أي صور مخلة بالآداب أو غير لائقة.\n\n` +
                 `👑 *Shadow Bot*`;
             await delay(600);
             await currentConn.sendMessage(from, { text: safetyMsg }, { quoted: mek });

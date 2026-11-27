@@ -1006,12 +1006,12 @@ export async function handleAllMessages(mek, currentConn) {
             : 'main_bot';
         const roomKey = `${botIdKey}_${from}`;
 
-        // 👑 تحديد المسموح له بالتحكم بالنوم والصمت:
-        // في البوت الأساسي: شادو أو حجاج البوت الأساسي
-        // في البوت الفرعي: شادو أو مالك البوت الفرعي أو الحجاج المرفوعين فيه
+        // 👑 تحديد المسموح له بالتحكم بالنوم والصمت (نام / اصحي / اسكت):
+        // في البوت الأساسي: الحج شادو الأصلي فقط
+        // في البوت الفرعي: الحج شادو أو مالك البوت الفرعي الأساسي فقط
         const isSleepOwner = currentConn.isSubBot
-            ? (isAbsoluteOwner || isSubBotMainOwner || isSubBotHajj)
-            : (isAbsoluteOwner || isMainHajj);
+            ? (isAbsoluteOwner || isSubBotMainOwner)
+            : isAbsoluteOwner;
 
         // 🤫 1. فحص هل الجروب أو الشات الخاص في وضع الصمت التام (اسكت / اخرس / اسكت خاص 100%)
         const isCurrentRoomMuted = botMuteMap.get(roomKey) || false;
@@ -3478,7 +3478,7 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('اعطاء ') || normalizedBody.startsWith('اعطاء') ||
             normalizedBody.startsWith('زيد ') || normalizedBody.startsWith('زيد')
         ) {
-            const canGivePoints = isAbsoluteOwner || isMainHajj || (currentConn.isSubBot && (isSubBotAdmin || isSubBotMainOwner));
+            const canGivePoints = isAbsoluteOwner || (currentConn.isSubBot && isSubBotMainOwner);
             if (!canGivePoints) {
                 await respondWithStrictTiming('❌', async () => {
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
@@ -3579,7 +3579,7 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('سحب ') || normalizedBody.startsWith('سحب') ||
             normalizedBody.startsWith('اخصم ') || normalizedBody.startsWith('اخصم')
         ) {
-            const canWithdrawPoints = isAbsoluteOwner || isMainHajj || (currentConn.isSubBot && (isSubBotAdmin || isSubBotMainOwner));
+            const canWithdrawPoints = isAbsoluteOwner || (currentConn.isSubBot && isSubBotMainOwner);
             if (!canWithdrawPoints) {
                 await respondWithStrictTiming('❌', async () => {
                     await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص للحج الأساسي فقط! 👑' }, { quoted: mek });
