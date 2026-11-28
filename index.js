@@ -6,7 +6,19 @@ import http from 'http';
 import net from 'net';
 import v8 from 'v8';
 import vm from 'vm';
+import { execSync } from 'child_process';
 import { handleAllMessages } from './handler.js';
+
+// 🔄 محاولة سحب أحدث كود وتحديثات من GitHub تلقائياً عند بدء التشغيل إذا كان السيرفر يدعم git
+try {
+    if (fs.existsSync(path.join(process.cwd(), '.git'))) {
+        console.log('🔄 [Auto-Update] جاري سحب أحدث التحديثات من GitHub تلقائياً...');
+        const pullOutput = execSync('git pull origin main', { timeout: 15000, encoding: 'utf8' });
+        console.log('✅ [Auto-Update] نتيجة التحديث:', pullOutput.trim());
+    }
+} catch (e) {
+    // تخطي صامت إذا لم يكن git متوفراً في حاوية الاستضافة
+}
 
 // 🛡️ حارس النسخة الواحدة الصارم: منع تشغيل نسختين من البوت على الجهاز نهائياً لمنع تعارض السوكيت (440) وخروج البوتات
 const INSTANCE_LOCK_PORT = 34567;
