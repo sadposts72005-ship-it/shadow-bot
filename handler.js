@@ -630,8 +630,8 @@ export async function handleAllMessages(mek, currentConn) {
             const localDB = loadLocalDB();
             if (isUserMuted(sender, from, localDB, myBotNum, myBotName)) {
                 const cleanSender = getCleanNumber(sender);
-                const ownerPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
-                const isOwner = ownerPhoneList.includes(cleanSender) || ownerPhoneList.includes(localDB.lidMap?.[cleanSender]) || mek.key.fromMe;
+                const ownerPhoneList = ['201129249396', '01129249396', '194961618301016'];
+                const isOwner = (cleanSender && (ownerPhoneList.includes(cleanSender) || ownerPhoneList.includes(localDB.lidMap?.[cleanSender]))) || mek.key?.fromMe;
                 if (!isOwner) {
                     currentConn.sendMessage(from, { delete: mek.key }).catch(() => {});
                     return;
@@ -641,8 +641,8 @@ export async function handleAllMessages(mek, currentConn) {
             // 🛡️ درع حماية الجروب: مسح كروت جهات الاتصال (Contacts / vCard) فوراً حتى لو أُرسلت بدون نص
             if (localDB.groupProtection?.[from]) {
                 const cleanSender = getCleanNumber(sender);
-                const ownerPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
-                const isOwner = ownerPhoneList.includes(cleanSender) || ownerPhoneList.includes(localDB.lidMap?.[cleanSender]) || mek.key.fromMe;
+                const ownerPhoneList = ['201129249396', '01129249396', '194961618301016'];
+                const isOwner = (cleanSender && (ownerPhoneList.includes(cleanSender) || ownerPhoneList.includes(localDB.lidMap?.[cleanSender]))) || mek.key?.fromMe;
                 if (!isOwner) {
                     let mObj = mek.message;
                     if (mObj?.ephemeralMessage) mObj = mObj.ephemeralMessage.message;
@@ -691,7 +691,7 @@ export async function handleAllMessages(mek, currentConn) {
         // 👑 المالك المطلق (الحج شادو الحقيقي الأصلي)
         const ownerPhone = '201129249396';
         const ownerLid = '194961618301016';
-        const ownerAltPhone = '201229409956';
+        const ownerAltPhone = '';
         let localDB = loadLocalDB();
 
         // 🏷️ استخراج اسم البوت وإعدادات البوت الفرعي (Sub-Bot) بأعلى دقة وشمولية
@@ -801,19 +801,17 @@ export async function handleAllMessages(mek, currentConn) {
 
         // الحج الأصلي شادو (متحكم مطلق في البوت الرئيسي وجميع البوتات الفرعية)
         const ownerPhoneList = [
-            '201129249396', '01129249396', '194961618301016',
-            '201229409956', '01229409956'
+            '201129249396', '01129249396', '194961618301016'
         ];
-        const isAbsoluteOwner = (
-            ownerPhoneList.includes(cleanSender) ||
-            ownerPhoneList.includes(localDB.lidMap?.[cleanSender]) ||
-            cleanSender === ownerPhone ||
-            cleanSender === ownerLid ||
-            cleanSender === ownerAltPhone ||
-            localDB.lidMap?.[cleanSender] === ownerPhone ||
-            localDB.lidMap?.[cleanSender] === ownerLid ||
-            localDB.lidMap?.[cleanSender] === ownerAltPhone ||
-            (!currentConn.isSubBot && ownerPhoneList.includes(myNumber) && mek.key.fromMe)
+        const isAbsoluteOwner = Boolean(
+            cleanSender && (
+                ownerPhoneList.includes(cleanSender) ||
+                cleanSender === ownerPhone ||
+                cleanSender === ownerLid ||
+                (localDB.lidMap?.[cleanSender] && ownerPhoneList.includes(localDB.lidMap[cleanSender])) ||
+                (localDB.lidMap?.[cleanSender] && (localDB.lidMap[cleanSender] === ownerPhone || localDB.lidMap[cleanSender] === ownerLid))
+            ) ||
+            (!currentConn.isSubBot && ownerPhoneList.includes(myNumber) && mek.key?.fromMe)
         );
 
         // صاحب البوت الفرعي هو الحج الأساسي على بوته فقط (فحص شامل بالرقم الدولي والمحلي وLID ومعرف JID وسجل المشرفين)
@@ -943,7 +941,7 @@ export async function handleAllMessages(mek, currentConn) {
         const isHajj = isMainHajj || isAssistantHajj;
         const isBotOwner = currentConn.isSubBot 
             ? (isAbsoluteOwner || isSubBotAdmin)
-            : (isAbsoluteOwner || isMainHajj);
+            : isAbsoluteOwner;
 
         // فحص إشراف المرسل داخل المجموعة
         let isSenderAdmin = false;
@@ -954,8 +952,11 @@ export async function handleAllMessages(mek, currentConn) {
                     const adminUser = groupMeta.participants.find(p => {
                         const pNum = getCleanNumber(p.id);
                         const pLid = p.lid ? getCleanNumber(p.lid) : '';
-                        return (p.admin === 'admin' || p.admin === 'superadmin') && 
-                               (pNum === cleanSender || pLid === cleanSender || localDB.lidMap?.[cleanSender] === pNum);
+                        return (p.admin === 'admin' || p.admin === 'superadmin') && Boolean(cleanSender) && (
+                            (pNum && pNum === cleanSender) || 
+                            (pLid && pLid === cleanSender) || 
+                            (localDB.lidMap?.[cleanSender] && localDB.lidMap[cleanSender] === pNum)
+                        );
                     });
                     if (adminUser) isSenderAdmin = true;
                 }
@@ -3605,7 +3606,7 @@ export async function handleAllMessages(mek, currentConn) {
             let targetNumberOnly = getCleanNumber(targetUser);
             let cleanDBUser = cleanUserJid(targetUser);
 
-            const isTargetOriginalHajj = (targetNumberOnly === ownerPhone || targetNumberOnly === ownerLid || targetNumberOnly === ownerAltPhone);
+            const isTargetOriginalHajj = Boolean(targetNumberOnly && (targetNumberOnly === ownerPhone || targetNumberOnly === ownerLid));
             if (isTargetOriginalHajj) {
                 await respondWithStrictTiming('❌', async () => {
                     await currentConn.sendMessage(from, { text: `❌ هوب هوب يا فنان! دا بابا المجال الحج شادو الأصلي.. محدش يقدر يقرب لنقاطه أو يسحب منه نهائيًا! 👑🛡️` }, { quoted: mek });
@@ -4254,12 +4255,9 @@ export async function handleAllMessages(mek, currentConn) {
             let mappedNum = localDB.lidMap?.[targetCleanNum];
             let cleanDBUser = cleanUserJid(targetUser);
 
-            const isTargetOriginalHajj = (
-                targetCleanNum === ownerPhone ||
-                targetCleanNum === ownerLid ||
-                targetCleanNum === ownerAltPhone ||
-                mappedNum === ownerPhone ||
-                mappedNum === ownerLid ||
+            const isTargetOriginalHajj = Boolean(
+                (targetCleanNum && (targetCleanNum === ownerPhone || targetCleanNum === ownerLid)) ||
+                (mappedNum && (mappedNum === ownerPhone || mappedNum === ownerLid)) ||
                 (targetUser === sender && mek.key.fromMe)
             );
             const isTargetMainHajj = isTargetOriginalHajj || isUserInList(targetUser, localDB.mainHajjUsers);

@@ -248,7 +248,7 @@ handler.before = async (m, conn) => {
     // ➕ أمر إضافة فيلم حقيقي (للمطور والمالك)
     const rawText = body.trim();
     if (/^(اضف\s+فيلم|اضافة\s+فيلم)/i.test(rawText)) {
-        const owners = ['201129249396', '201229409956', '194961618301016'];
+        const owners = ['201129249396', '194961618301016'];
         const cleanSenderNum = sender.replace(/[^0-9]/g, '');
         const isOwner = owners.includes(cleanSenderNum) || m.key.fromMe;
         if (!isOwner) {

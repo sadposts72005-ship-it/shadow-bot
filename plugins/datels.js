@@ -1138,7 +1138,7 @@ const datelsHandler = {
             // 👑 التحقق من المطور الرئيسي والحجاج
             const ownerPhone = '201129249396';
             const ownerLid = '194961618301016';
-            const ownerAltPhone = '201229409956';
+            const ownerAltPhone = '';
             const ownerFullJid = `${ownerPhone}@s.whatsapp.net`;
 
             let localDB = loadLocalDB();
@@ -1176,16 +1176,16 @@ const datelsHandler = {
                 }
             }
 
-            const ownerPhoneList = ['201129249396', '01129249396', '194961618301016', '201229409956', '01229409956'];
-            const isAbsoluteOwner = (
-                ownerPhoneList.includes(cleanSenderNum) ||
-                cleanSenderNum === ownerPhone ||
-                cleanSenderNum === ownerLid ||
-                cleanSenderNum === ownerAltPhone ||
-                localDB.lidMap?.[cleanSenderNum] === ownerPhone ||
-                localDB.lidMap?.[cleanSenderNum] === ownerLid ||
-                ownerPhoneList.includes(localDB.lidMap?.[cleanSenderNum]) ||
-                (!isSubBot && ownerPhoneList.includes(myBotNum) && mek.key.fromMe)
+            const ownerPhoneList = ['201129249396', '01129249396', '194961618301016'];
+            const isAbsoluteOwner = Boolean(
+                cleanSenderNum && (
+                    ownerPhoneList.includes(cleanSenderNum) ||
+                    cleanSenderNum === ownerPhone ||
+                    cleanSenderNum === ownerLid ||
+                    (localDB.lidMap?.[cleanSenderNum] && ownerPhoneList.includes(localDB.lidMap[cleanSenderNum])) ||
+                    (localDB.lidMap?.[cleanSenderNum] && (localDB.lidMap[cleanSenderNum] === ownerPhone || localDB.lidMap[cleanSenderNum] === ownerLid))
+                ) ||
+                (!isSubBot && ownerPhoneList.includes(myBotNum) && mek.key?.fromMe)
             );
 
             // 🤖 استخراج هويات البوتات الأخرى في النظام لمنع تداخل الأوامر في نفس الروم
@@ -1251,7 +1251,7 @@ const datelsHandler = {
             }
             const isBotOwner = isSubBot 
                 ? (isAbsoluteOwner || isSubBotOwner || isSubBotAdmin)
-                : (isAbsoluteOwner || isMainHajj);
+                : isAbsoluteOwner;
 
             // استخراج النص من الرسالة
             let body = extractMessageBody(mek);
@@ -1396,15 +1396,17 @@ const datelsHandler = {
                                (currentConn.subBotConfig?.phone && groupAdmins.includes(cleanPhoneNumber(currentConn.subBotConfig.phone)));
 
             let isSenderAdmin = Boolean(mek.isSenderAdmin) || 
-                                groupAdmins.includes(cleanSenderNum) || 
-                                (localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum])) ||
+                                (cleanSenderNum && groupAdmins.includes(cleanSenderNum)) || 
+                                (cleanSenderNum && localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum])) ||
                                 (mappedSender && groupAdmins.includes(mappedSender)) ||
                                 (senderCleanPhone && groupAdmins.includes(senderCleanPhone));
+            const groupOwner = groupMetadata?.owner || groupMetadata?.subjectOwner || '';
             let creatorMember = participants.find(p => p.admin === 'superadmin');
-            let groupCreatorRaw = creatorMember ? getCleanNumber(creatorMember.id) : '';
+            let groupCreatorRaw = groupOwner ? getCleanNumber(groupOwner) : (creatorMember ? getCleanNumber(creatorMember.id) : '');
+            const isGroupCreator = Boolean(groupCreatorRaw && cleanSenderNum && cleanSenderNum === groupCreatorRaw);
 
             // أوامر الإشراف للمشرفين، مالك البوت، والحج الأساسي
-            const isActualRoomAdminOrOwner = isAbsoluteOwner || isMainHajj || isHajj || isBotOwner || (cleanSenderNum === groupCreatorRaw) || isSenderAdmin;
+            const isActualRoomAdminOrOwner = isAbsoluteOwner || isMainHajj || isHajj || isBotOwner || isGroupCreator || isSenderAdmin;
 
             // فحص أدمن التنبيه المعين في هذا الجروب
             const groupWarnGivers = localDB.warnGivers?.[from] || {};
@@ -2404,7 +2406,7 @@ const datelsHandler = {
                         return true;
                     }
                     let targetNum = getCleanNumber(target);
-                    if (targetNum === ownerPhone || targetNum === ownerLid || targetNum === ownerAltPhone || localDB.lidMap?.[targetNum] === ownerPhone) {
+                    if (targetNum === ownerPhone || targetNum === ownerLid || localDB.lidMap?.[targetNum] === ownerPhone) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ لا يمكنك تنزيل الحج شادو الأصلي صاحب البوت! 👑🛡️' }, { quoted: mek });
                         return true;
@@ -2498,7 +2500,7 @@ const datelsHandler = {
                     }
                     let targetNum = getCleanNumber(target);
                     const subCfg = currentConn.subBotConfig || {};
-                    const isProtectedTarget = targetNum === ownerPhone || targetNum === ownerLid || targetNum === ownerAltPhone || targetNum === groupCreatorRaw || isUserInList(target, localDB.mainHajjUsers) || (Array.isArray(subCfg.subHajjUsers) && subCfg.subHajjUsers.includes(targetNum)) || (subCfg.adminPhone && targetNum === subCfg.adminPhone) || (Array.isArray(subCfg.adminNumbers) && subCfg.adminNumbers.includes(targetNum));
+                    const isProtectedTarget = targetNum === ownerPhone || targetNum === ownerLid || (isGroupCreator && targetNum === groupCreatorRaw) || isUserInList(target, localDB.mainHajjUsers) || (Array.isArray(subCfg.subHajjUsers) && subCfg.subHajjUsers.includes(targetNum)) || (subCfg.adminPhone && targetNum === subCfg.adminPhone) || (Array.isArray(subCfg.adminNumbers) && subCfg.adminNumbers.includes(targetNum));
                     if (isProtectedTarget) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ لا يمكن طرد الحج شادو أو منشئ المجموعة أو الحجاج المعتمدين!' }, { quoted: mek });
@@ -3147,7 +3149,7 @@ const datelsHandler = {
                         return true;
                     }
                     let targetNum = getCleanNumber(target);
-                    if (targetNum === ownerPhone || targetNum === ownerLid || targetNum === ownerAltPhone) {
+                    if (targetNum === ownerPhone || targetNum === ownerLid) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هوب هوب يا فنان! ده الحج شادو الأصلي صاحب البوت ومحدش يقدر يديله أي تنبيه نهائياً! 👑🛡️' }, { quoted: mek });
                         return true;
@@ -3409,7 +3411,7 @@ const datelsHandler = {
                     return true;
                 }
                 let targetNum = getCleanNumber(target);
-                if (targetNum === ownerPhone || targetNum === ownerLid || targetNum === ownerAltPhone || localDB.lidMap?.[targetNum] === ownerPhone) {
+                if (targetNum === ownerPhone || targetNum === ownerLid || localDB.lidMap?.[targetNum] === ownerPhone) {
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هوب هوب يا فنان! ده الحج شادو الأصلي صاحب البوت ومحدش يقدر ينزله من رتبته نهائياً! 👑🛡️' }, { quoted: mek });
                     return true;
@@ -3467,7 +3469,7 @@ const datelsHandler = {
                     return true;
                 }
                 let targetNum = getCleanNumber(target);
-                if (targetNum === ownerPhone || targetNum === ownerLid || targetNum === ownerAltPhone || localDB.lidMap?.[targetNum] === ownerPhone) {
+                if (targetNum === ownerPhone || targetNum === ownerLid || localDB.lidMap?.[targetNum] === ownerPhone) {
                     await handleCommandTiming('❌');
                     await currentConn.sendMessage(from, { text: '❌ هوب هوب يا فنان! ده الحج شادو الأصلي صاحب البوت ومحدش يقدر يحظره نهائياً! 👑🛡️' }, { quoted: mek });
                     return true;
