@@ -4,7 +4,38 @@ import os from 'os';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
 import webp from 'node-webpmux';
-import { downloadContentFromMessage, downloadMediaMessage } from '@whiskeysockets/baileys';
+import { 
+    downloadContentFromMessage, 
+    downloadMediaMessage, 
+    prepareWAMessageMedia, 
+    generateWAMessageFromContent, 
+    proto 
+} from '@whiskeysockets/baileys';
+
+// 🔊 تفعيل تشفير ملصقات الصوت الرسمية (Sound Stickers) في بروتوكول بايلز
+if (proto?.Message?.StickerMessage && !proto.Message.StickerMessage._audioPatched) {
+    const origStickerEncode = proto.Message.StickerMessage.encode;
+    proto.Message.StickerMessage.encode = function encode(m, w) {
+        w = origStickerEncode.call(this, m, w);
+        if (m.audioMessage != null) {
+            proto.Message.AudioMessage.encode(m.audioMessage, w.uint32(210).fork()).ldelim();
+        }
+        return w;
+    };
+    proto.Message.StickerMessage._audioPatched = true;
+}
+
+if (proto?.Message && !proto.Message._audioStickerPatched) {
+    const origMessageEncode = proto.Message.encode;
+    proto.Message.encode = function encode(m, w) {
+        w = origMessageEncode.call(this, m, w);
+        if (m.audioStickerMessage != null) {
+            proto.Message.FutureProofMessage.encode(m.audioStickerMessage, w.uint32(1074).fork()).ldelim();
+        }
+        return w;
+    };
+    proto.Message._audioStickerPatched = true;
+}
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -391,17 +422,47 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
 
             await delay(1500);
 
-            // إرسال الستيكر
-            const sentStk = await currentConn.sendMessage(from, { sticker: stampedSticker }, { quoted: mek });
+            // إرسال الاستيكر نفسه مدمجاً به الصوت الأصلي (Official WhatsApp Sound Sticker - ملصق بصوت مدمج بدون فويس منفصل)
+            let sentSuccessfully = false;
+            if (audioBuf && audioBuf.length > 0 && typeof currentConn.waUploadToServer === 'function' && typeof currentConn.relayMessage === 'function') {
+                try {
+                    const [resStk, resAud] = await Promise.all([
+                        prepareWAMessageMedia({ sticker: stampedSticker }, { upload: currentConn.waUploadToServer }),
+                        prepareWAMessageMedia({ audio: audioBuf, mimetype: 'audio/ogg; codecs=opus', ptt: true }, { upload: currentConn.waUploadToServer })
+                    ]);
 
-            // إرسال الصوت الخاص بالفيديو مرفقاً بالستيكر فوراً
-            if (audioBuf && audioBuf.length > 0) {
-                await delay(1000);
-                await currentConn.sendMessage(from, { 
-                    audio: audioBuf, 
-                    mimetype: 'audio/ogg; codecs=opus', 
-                    ptt: true 
-                }, { quoted: sentStk || mek });
+                    if (resStk?.stickerMessage && resAud?.audioMessage) {
+                        const stickerMsg = {
+                            ...resStk.stickerMessage,
+                            isAnimated: true,
+                            audioMessage: resAud.audioMessage
+                        };
+
+                        const soundStickerContent = {
+                            stickerMessage: stickerMsg,
+                            audioStickerMessage: {
+                                message: {
+                                    stickerMessage: stickerMsg
+                                }
+                            }
+                        };
+
+                        const waMsg = generateWAMessageFromContent(from, soundStickerContent, {
+                            quoted: mek,
+                            userJid: currentConn.user?.id
+                        });
+
+                        await currentConn.relayMessage(from, waMsg.message, { messageId: waMsg.key.id });
+                        sentSuccessfully = true;
+                    }
+                } catch (relayErr) {
+                    console.error('⚠️ [Sound Sticker native packaging error]:', relayErr.message);
+                }
+            }
+
+            // في حال عدم توفر الصوت أو فشل التغليف المركب، يتم إرسال الاستيكر بشكل اعتيادي
+            if (!sentSuccessfully) {
+                await currentConn.sendMessage(from, { sticker: stampedSticker }, { quoted: mek });
             }
 
             await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
