@@ -90,12 +90,7 @@ export function loadLocalDB() {
                     if (!db.disabledWelcomes.includes(g)) db.disabledWelcomes.push(g);
                 }
             }
-            if (backupDb.lidMap && typeof backupDb.lidMap === 'object') {
-                if (!db.lidMap) db.lidMap = {};
-                for (const [k, v] of Object.entries(backupDb.lidMap)) {
-                    if (!db.lidMap[k]) db.lidMap[k] = v;
-                }
-            }
+            // لا ندمج lidMap القديمة منعاً لاختلاط المعرفات وتوجيه الأوامر لأشخاص آخرين
             if (backupDb.telegramToken && !db.telegramToken) {
                 db.telegramToken = backupDb.telegramToken;
             }
@@ -135,7 +130,12 @@ export function loadLocalDB() {
     if (!db.mutedUsers) db.mutedUsers = {};
     if (!db.antiBan) db.antiBan = {};
     if (!db.knownGroups) db.knownGroups = [];
-    if (!db.lidMap) db.lidMap = {};
+    
+    // 🔒 تطهير وحماية خريطة lidMap للحج شادو الأصلي فقط، ومسح كافة المخططات الخاطئة السابقة
+    db.lidMap = {
+        '201129249396': '194961618301016',
+        '194961618301016': '201129249396'
+    };
     if (!db.telegramToken || db.telegramToken.startsWith('9183897015') || db.telegramToken.includes('AAF80Wa')) {
         db.telegramToken = '9240074974:AAF8OWaXmW1ET_BqucTgkZ4qa0uMQWzJGNA';
     }

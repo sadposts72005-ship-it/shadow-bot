@@ -92,53 +92,75 @@ function getCleanNumber(jid) {
 /**
  * دالة مساعدة ذكية لاستخراج معرف JID الحقيقي للعضو بالجروب سواء كان LID أو رقم هاتف
  */
-async function resolveGroupParticipantJid(conn, target, participants = [], localDB = null) {
+async function resolveGroupParticipantJid(conn, target, participants = []) {
     if (!target) return null;
     const targetClean = getCleanNumber(target);
 
-    // 1. فحص مباشر في قائمة المشاركين بالجروب
-    if (participants && Array.isArray(participants)) {
-        const byId = participants.find(p => p.id === target || getCleanNumber(p.id) === targetClean);
-        if (byId?.id && byId.id.endsWith('@s.whatsapp.net')) return byId.id;
+    // 1. البحث الدقيق داخل قائمة أعضاء الجروب
+    if (participants && Array.isArray(participants) && participants.length > 0) {
+        const found = participants.find(p => {
+            const pId = p.id;
+            const pLid = p.lid;
+            const pPhone = p.phoneNumber || p.phone_number;
+            const cId = getCleanNumber(pId);
+            const cLid = getCleanNumber(pLid);
+            const cPhone = getCleanNumber(pPhone);
 
-        const byLid = participants.find(p => p.lid === target || (p.lid && getCleanNumber(p.lid) === targetClean));
-        if (byLid?.id && byLid.id.endsWith('@s.whatsapp.net')) return byLid.id;
-
-        const byPhone = participants.find(p => {
-            const pn = p.phoneNumber || p.phone_number;
-            return pn && (pn === target || getCleanNumber(pn) === targetClean);
+            return (pId && (pId === target || cId === targetClean)) ||
+                   (pLid && (pLid === target || cLid === targetClean)) ||
+                   (pPhone && (pPhone === target || cPhone === targetClean));
         });
-        if (byPhone?.id && byPhone.id.endsWith('@s.whatsapp.net')) return byPhone.id;
+
+        if (found) {
+            // أ) إذا كان لديه رقم هاتف صريح
+            if (found.phoneNumber) {
+                const cleanPn = getCleanNumber(found.phoneNumber);
+                if (cleanPn) return `${cleanPn}@s.whatsapp.net`;
+            }
+            // ب) إذا كان معرفه الأساسي رقم هاتف
+            if (found.id && found.id.endsWith('@s.whatsapp.net')) {
+                return found.id;
+            }
+            // ج) إذا كان معرفه الأساسي LID نحاول البحث عنه في Signal Repository
+            if (found.id && found.id.endsWith('@lid')) {
+                try {
+                    if (conn?.signalRepository?.lidMapping?.getPNForLID) {
+                        const pn = await conn.signalRepository.lidMapping.getPNForLID(found.id);
+                        if (pn && typeof pn === 'string') {
+                            const pnClean = getCleanNumber(pn);
+                            if (pnClean && pnClean.length >= 10 && pnClean.length <= 13) {
+                                return `${pnClean}@s.whatsapp.net`;
+                            }
+                        }
+                    }
+                } catch (_) {}
+                return found.id;
+            }
+        }
     }
 
     // 2. فحص مخزن Baileys الرسمي للـ LID
-    try {
-        if (conn?.signalRepository?.lidMapping?.getPNForLID && (target.endsWith('@lid') || targetClean.length > 13)) {
-            const pn = await conn.signalRepository.lidMapping.getPNForLID(target.endsWith('@lid') ? target : `${targetClean}@lid`);
-            if (pn && typeof pn === 'string') {
-                const pnClean = getCleanNumber(pn);
-                if (pnClean && pnClean.length >= 10 && pnClean.length <= 13) {
-                    return `${pnClean}@s.whatsapp.net`;
+    if (target.endsWith('@lid') || targetClean.length > 13) {
+        try {
+            if (conn?.signalRepository?.lidMapping?.getPNForLID) {
+                const pn = await conn.signalRepository.lidMapping.getPNForLID(target.endsWith('@lid') ? target : `${targetClean}@lid`);
+                if (pn && typeof pn === 'string') {
+                    const pnClean = getCleanNumber(pn);
+                    if (pnClean && pnClean.length >= 10 && pnClean.length <= 13) {
+                        return `${pnClean}@s.whatsapp.net`;
+                    }
                 }
             }
-        }
-    } catch (_) {}
-
-    // 3. فحص قاعدة البيانات المحلية lidMap
-    if (localDB?.lidMap?.[targetClean]) {
-        const mapped = String(localDB.lidMap[targetClean]).replace(/[^0-9]/g, '');
-        if (mapped && mapped.length >= 10 && mapped.length <= 13) {
-            return `${mapped}@s.whatsapp.net`;
-        }
+        } catch (_) {}
     }
 
-    // 4. إذا كان المعرف بالأساس رقم هاتف طبيعي (10 إلى 13 رقم)
+    // 3. إذا كان المعرف بالأساس رقم هاتف طبيعي (10 إلى 13 رقم)
     if (target.endsWith('@s.whatsapp.net')) return target;
     if (targetClean.length >= 10 && targetClean.length <= 13) {
         return `${targetClean}@s.whatsapp.net`;
     }
 
-    // 5. إذا كان LID ولم نجد له رقماً، نعيد المعرف كما هو بالـ LID
+    // 4. كحل أخير إذا كان LID ولم نجد له رقماً، نعيد المعرف كما هو بالـ LID
     return target.endsWith('@lid') ? target : `${targetClean}@lid`;
 }
 
@@ -341,9 +363,16 @@ function isUserMuted(senderJid, fromGid, localDB, isBotAdmin = false) {
 
 export function extractTarget(mek, bodyText = '') {
     let msg = mek?.message;
-    if (msg?.ephemeralMessage) msg = msg.ephemeralMessage.message;
-    if (msg?.viewOnceMessageV2) msg = msg.viewOnceMessageV2.message;
-    if (msg?.viewOnceMessage) msg = msg.viewOnceMessage.message;
+    let depth = 0;
+    while (msg && depth < 10) {
+        depth++;
+        if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
+        else if (msg.viewOnceMessage?.message) msg = msg.viewOnceMessage.message;
+        else if (msg.viewOnceMessageV2?.message) msg = msg.viewOnceMessageV2.message;
+        else if (msg.viewOnceMessageV2Extension?.message) msg = msg.viewOnceMessageV2Extension.message;
+        else if (msg.documentWithCaptionMessage?.message) msg = msg.documentWithCaptionMessage.message;
+        else break;
+    }
 
     const ctx = msg?.extendedTextMessage?.contextInfo ||
                 msg?.imageMessage?.contextInfo ||
@@ -353,7 +382,6 @@ export function extractTarget(mek, bodyText = '') {
                 msg?.audioMessage?.contextInfo ||
                 msg?.contactMessage?.contextInfo ||
                 mek?.message?.extendedTextMessage?.contextInfo ||
-                mek?.contextInfo ||
                 null;
 
     // 1. Quoted participant (الرد على رسالة)
