@@ -1381,23 +1381,18 @@ const datelsHandler = {
                     if (c1) groupAdminsSet.add(c1);
                     if (c2) groupAdminsSet.add(c2);
                     if (c3) groupAdminsSet.add(c3);
-                    if (c1 && localDB.lidMap?.[c1]) groupAdminsSet.add(localDB.lidMap[c1]);
-                    if (c2 && localDB.lidMap?.[c2]) groupAdminsSet.add(localDB.lidMap[c2]);
-                    if (c3 && localDB.lidMap?.[c3]) groupAdminsSet.add(localDB.lidMap[c3]);
                 }
             }
             const groupAdmins = Array.from(groupAdminsSet);
 
             const isBotAdmin = groupAdmins.includes(myBotNum) || 
                                (currentConn.user?.lid && groupAdmins.includes(getCleanNumber(currentConn.user.lid))) ||
-                               (localDB.lidMap?.[myBotNum] && groupAdmins.includes(localDB.lidMap[myBotNum])) ||
                                (currentConn.subBotConfig?.phone && groupAdmins.includes(cleanPhoneNumber(currentConn.subBotConfig.phone)));
 
             let isSenderAdmin = Boolean(mek.isSenderAdmin) || 
-                                (cleanSenderNum && groupAdmins.includes(cleanSenderNum)) || 
-                                (cleanSenderNum && localDB.lidMap?.[cleanSenderNum] && groupAdmins.includes(localDB.lidMap[cleanSenderNum])) ||
-                                (mappedSender && groupAdmins.includes(mappedSender)) ||
-                                (senderCleanPhone && groupAdmins.includes(senderCleanPhone));
+                                (cleanSenderNum && groupAdminsSet.has(cleanSenderNum)) || 
+                                (senderCleanPhone && groupAdminsSet.has(senderCleanPhone)) ||
+                                (mappedSender && groupAdminsSet.has(mappedSender));
             const groupOwner = groupMetadata?.owner || groupMetadata?.subjectOwner || '';
             let creatorMember = participants.find(p => p.admin === 'superadmin');
             let groupCreatorRaw = groupOwner ? getCleanNumber(groupOwner) : (creatorMember ? getCleanNumber(creatorMember.id) : '');
@@ -2379,14 +2374,29 @@ const datelsHandler = {
                         return true;
                     }
                     let targetNum = getCleanNumber(target);
-                    if (groupAdmins.includes(targetNum) || (localDB.lidMap?.[targetNum] && groupAdmins.includes(localDB.lidMap[targetNum]))) {
+                    const targetParticipant = participants.find(p => {
+                        const pId = getCleanNumber(p.id);
+                        const pLid = getCleanNumber(p.lid);
+                        const pPhone = getCleanNumber(p.phoneNumber || p.phone_number);
+                        return (pId && pId === targetNum) || (pLid && pLid === targetNum) || (pPhone && pPhone === targetNum) || (target.endsWith('@s.whatsapp.net') && p.id === target) || (target.endsWith('@lid') && p.lid === target);
+                    });
+
+                    const isTargetAdmin = targetParticipant 
+                        ? (targetParticipant.admin === 'admin' || targetParticipant.admin === 'superadmin')
+                        : groupAdminsSet.has(targetNum);
+
+                    if (isTargetAdmin) {
                         await handleCommandTiming('⚠️');
                         await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} مشرف بالفعل في المجموعة! 🛡️`, mentions: [target] }, { quoted: mek });
                         return true;
                     }
                     await handleCommandTiming('👑');
                     try {
-                        await currentConn.groupParticipantsUpdate(from, [target], 'promote');
+                        const targetJidToUpdate = (targetParticipant?.id && targetParticipant.id.endsWith('@s.whatsapp.net'))
+                            ? targetParticipant.id
+                            : (target.endsWith('@s.whatsapp.net') ? target : `${targetNum}@s.whatsapp.net`);
+
+                        await currentConn.groupParticipantsUpdate(from, [targetJidToUpdate], 'promote');
                         groupMetaCache.delete(from);
                         await currentConn.sendMessage(from, { text: `👑 *تمت الترقية بنجاح!* \nتم رفع @${targetNum} مشرفاً في المجموعة. 🛡️`, mentions: [target] }, { quoted: mek });
                     } catch (e) {
@@ -2419,14 +2429,30 @@ const datelsHandler = {
                         await currentConn.sendMessage(from, { text: '❌ لا يمكنك تنزيل منشئ المجموعة!' }, { quoted: mek });
                         return true;
                     }
-                    if (!groupAdmins.includes(targetNum) && (!localDB.lidMap?.[targetNum] || !groupAdmins.includes(localDB.lidMap[targetNum]))) {
+
+                    const targetParticipant = participants.find(p => {
+                        const pId = getCleanNumber(p.id);
+                        const pLid = getCleanNumber(p.lid);
+                        const pPhone = getCleanNumber(p.phoneNumber || p.phone_number);
+                        return (pId && pId === targetNum) || (pLid && pLid === targetNum) || (pPhone && pPhone === targetNum) || (target.endsWith('@s.whatsapp.net') && p.id === target) || (target.endsWith('@lid') && p.lid === target);
+                    });
+
+                    const isTargetAdmin = targetParticipant 
+                        ? (targetParticipant.admin === 'admin' || targetParticipant.admin === 'superadmin')
+                        : groupAdminsSet.has(targetNum);
+
+                    if (!isTargetAdmin) {
                         await handleCommandTiming('⚠️');
                         await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} ليس مشرفاً بالفعل في المجموعة! 📉`, mentions: [target] }, { quoted: mek });
                         return true;
                     }
                     await handleCommandTiming('📉');
                     try {
-                        await currentConn.groupParticipantsUpdate(from, [target], 'demote');
+                        const targetJidToUpdate = (targetParticipant?.id && targetParticipant.id.endsWith('@s.whatsapp.net'))
+                            ? targetParticipant.id
+                            : (target.endsWith('@s.whatsapp.net') ? target : `${targetNum}@s.whatsapp.net`);
+
+                        await currentConn.groupParticipantsUpdate(from, [targetJidToUpdate], 'demote');
                         groupMetaCache.delete(from);
                         await currentConn.sendMessage(from, { text: `📉 *تم تنزيل الرتبة بنجاح!* \nتم سحب الإشراف من @${targetNum}.`, mentions: [target] }, { quoted: mek });
                     } catch (e) {
@@ -2511,7 +2537,17 @@ const datelsHandler = {
                     }
                     await handleCommandTiming('👋');
                     try {
-                        await currentConn.groupParticipantsUpdate(from, [target], 'remove');
+                        const targetParticipant = participants.find(p => {
+                            const pId = getCleanNumber(p.id);
+                            const pLid = getCleanNumber(p.lid);
+                            const pPhone = getCleanNumber(p.phoneNumber || p.phone_number);
+                            return (pId && pId === targetNum) || (pLid && pLid === targetNum) || (pPhone && pPhone === targetNum) || (target.endsWith('@s.whatsapp.net') && p.id === target) || (target.endsWith('@lid') && p.lid === target);
+                        });
+                        const targetJidToUpdate = (targetParticipant?.id && targetParticipant.id.endsWith('@s.whatsapp.net'))
+                            ? targetParticipant.id
+                            : (target.endsWith('@s.whatsapp.net') ? target : `${targetNum}@s.whatsapp.net`);
+
+                        await currentConn.groupParticipantsUpdate(from, [targetJidToUpdate], 'remove');
                         groupMetaCache.delete(from);
                         await currentConn.sendMessage(from, { text: `👋 *تم الطرد بنجاح!* \nمع السلامة يا @${targetNum}، الجروب أنظف من غيرك. 🚪`, mentions: [target] }, { quoted: mek });
                     } catch (e) {
