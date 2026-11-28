@@ -2242,8 +2242,8 @@ const datelsHandler = {
                     return true;
                 }
 
-                // 🕌 تشغيل الأذكار والأذان (تشغيل مسلم)
-                const isEnableMuslim = /^(?:\.|\/|!)?(?:(?:تشغيل|تفعيل|فتح|افتح)\s*(?:مسلم|المسلم|الاذان|الأذان|الاذكار|الأذكار|اذان|اذكار)|تشغيلو|تشغيله|تشغيله\s*مسلم)$/i.test(normalizedBody);
+                // 🕌 تشغيل الأذكار والأذان (تشغيل مسلم / تشغيل مصلم / تشغيلو)
+                const isEnableMuslim = /^(?:\.|\/|!)?(?:(?:تشغيل|تفعيل|فتح|افتح)\s*(?:مسلم|مصلم|المسلم|المصلم|الاذان|الأذان|الاذكار|الأذكار|اذان|اذكار)|تشغيلو|تشغيله|تشغيله\s*(?:مسلم|مصلم)|تشغيلو\s*(?:مسلم|مصلم))$/i.test(normalizedBody);
                 if (isEnableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
@@ -2268,8 +2268,8 @@ const datelsHandler = {
                     return true;
                 }
 
-                // 🛑 إيقاف الأذكار والأذان (وقف مسلم / قفل الاذان / قفل الاذكار)
-                const isDisableMuslim = /^(?:\.|\/|!)?(?:(?:وقف|وقفو|وقفه|قفل|اقفل|تعطيل|ايقاف|إيقاف|الغاء|إلغاء)\s*(?:مسلم|المسلم|الاذان|الأذان|الاذكار|الأذكار|اذان|اذكار)?)$/i.test(normalizedBody) && (normalizedBody.includes('مسلم') || normalizedBody.includes('اذان') || normalizedBody.includes('اذكار') || normalizedBody === 'وقفو' || normalizedBody === 'وقفه');
+                // 🛑 إيقاف الأذكار والأذان (وقف مسلم / وقف مصلم / قفل الاذان / قفل الاذكار)
+                const isDisableMuslim = /^(?:\.|\/|!)?(?:(?:وقف|وقفو|وقفه|قفل|اقفل|تعطيل|ايقاف|إيقاف|الغاء|إلغاء)\s*(?:مسلم|مصلم|المسلم|المصلم|الاذان|الأذان|الاذكار|الأذكار|اذان|اذكار)?)$/i.test(normalizedBody) && (normalizedBody.includes('مسلم') || normalizedBody.includes('مصلم') || normalizedBody.includes('اذان') || normalizedBody.includes('اذكار') || normalizedBody === 'وقفو' || normalizedBody === 'وقفه');
                 if (isDisableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');

@@ -1005,9 +1005,9 @@ export async function handleAllMessages(mek, currentConn) {
 
         // 👑 تحديد المسموح له بالتحكم بالنوم والصمت (نام / اصحي / اسكت):
         // في البوت الأساسي: الحج شادو الأصلي فقط
-        // في البوت الفرعي: الحج شادو أو مالك البوت الفرعي الأساسي والحجاج المرفوعين فيه فقط
+        // في البوت الفرعي: الحج شادو الأصلي أو الحج الأساسي صاحب البوت الفرعي فقط
         const isSleepOwner = currentConn.isSubBot
-            ? (isAbsoluteOwner || isSubBotMainOwner || isSubBotHajj)
+            ? (isAbsoluteOwner || isSubBotMainOwner)
             : isAbsoluteOwner;
 
         // 🤫 1. فحص هل الجروب أو الشات الخاص في وضع الصمت التام (اسكت / اخرس / اسكت خاص 100%)
@@ -3478,7 +3478,7 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('اعطاء ') || normalizedBody.startsWith('اعطاء') ||
             normalizedBody.startsWith('زيد ') || normalizedBody.startsWith('زيد')
         ) {
-            const canGivePoints = isAbsoluteOwner || (currentConn.isSubBot && (isSubBotMainOwner || isSubBotHajj));
+            const canGivePoints = isAbsoluteOwner || (currentConn.isSubBot && isSubBotMainOwner);
             if (!canGivePoints) {
                 if (isRealGroup) return; // صامت في الجروب لعدم التضارب مع البوتات الأخرى
                 await respondWithStrictTiming('❌', async () => {
@@ -3580,7 +3580,7 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('سحب ') || normalizedBody.startsWith('سحب') ||
             normalizedBody.startsWith('اخصم ') || normalizedBody.startsWith('اخصم')
         ) {
-            const canWithdrawPoints = isAbsoluteOwner || (currentConn.isSubBot && (isSubBotMainOwner || isSubBotHajj));
+            const canWithdrawPoints = isAbsoluteOwner || (currentConn.isSubBot && isSubBotMainOwner);
             if (!canWithdrawPoints) {
                 if (isRealGroup) return; // صامت في الجروب لعدم التضارب مع البوتات الأخرى
                 await respondWithStrictTiming('❌', async () => {
