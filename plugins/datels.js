@@ -1156,9 +1156,7 @@ const datelsHandler = {
             if (!mappedSender && (sender.endsWith('@lid') || cleanSenderNum.length > 13)) {
                 const altJids = [
                     mek.key?.participantAlt,
-                    mek.key?.remoteJidAlt,
-                    mek.message?.extendedTextMessage?.contextInfo?.participantAlt,
-                    mek.message?.extendedTextMessage?.contextInfo?.remoteJidAlt
+                    (!isGroup ? mek.key?.remoteJidAlt : null)
                 ];
                 for (const alt of altJids) {
                     if (alt && typeof alt === 'string' && alt.endsWith('@s.whatsapp.net')) {
@@ -2332,6 +2330,11 @@ const datelsHandler = {
 
                 // المواعيد الوقتية
                 if (/^(?:\.|\/)?(?:المواعيد|مواعيد|الموعيد|موعيد)\s*(?:الوقتية|الوقتيه|وقتية|وقتيه)$/i.test(normalizedBody)) {
+                    if (!isActualRoomAdminOrOwner) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     const config = localDB.timedGroupControls?.[from];
                     await handleCommandTiming('📋');
                     if (!config || (!config.closeTime && !config.openTime)) {

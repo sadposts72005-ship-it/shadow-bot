@@ -510,10 +510,8 @@ async function resolveUserPhoneNumber(mek, currentConn, localDB) {
 
     // 1. فحص remoteJidAlt أو participantAlt المرفقة مع الرسالة من بايلز (المصدر المباشر لرقم الشريحة)
     const altJids = [
-        mek.key?.remoteJidAlt,
         mek.key?.participantAlt,
-        mek.message?.extendedTextMessage?.contextInfo?.participantAlt,
-        mek.message?.extendedTextMessage?.contextInfo?.remoteJidAlt
+        (!from.endsWith('@g.us') ? mek.key?.remoteJidAlt : null)
     ];
     for (const alt of altJids) {
         if (alt && typeof alt === 'string' && alt.endsWith('@s.whatsapp.net')) {
@@ -832,9 +830,7 @@ export async function handleAllMessages(mek, currentConn) {
             if (!mappedSender && (sender.endsWith('@lid') || cleanSender.length > 13)) {
                 const altJids = [
                     mek.key?.participantAlt,
-                    mek.key?.remoteJidAlt,
-                    mek.message?.extendedTextMessage?.contextInfo?.participantAlt,
-                    mek.message?.extendedTextMessage?.contextInfo?.remoteJidAlt
+                    (!isRealGroup ? mek.key?.remoteJidAlt : null)
                 ];
                 for (const alt of altJids) {
                     if (alt && typeof alt === 'string' && alt.endsWith('@s.whatsapp.net')) {
