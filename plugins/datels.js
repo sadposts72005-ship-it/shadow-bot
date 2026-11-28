@@ -90,6 +90,59 @@ function getCleanNumber(jid) {
 }
 
 /**
+ * دالة مساعدة ذكية لاستخراج معرف JID الحقيقي للعضو بالجروب سواء كان LID أو رقم هاتف
+ */
+async function resolveGroupParticipantJid(conn, target, participants = [], localDB = null) {
+    if (!target) return null;
+    const targetClean = getCleanNumber(target);
+
+    // 1. فحص مباشر في قائمة المشاركين بالجروب
+    if (participants && Array.isArray(participants)) {
+        const byId = participants.find(p => p.id === target || getCleanNumber(p.id) === targetClean);
+        if (byId?.id && byId.id.endsWith('@s.whatsapp.net')) return byId.id;
+
+        const byLid = participants.find(p => p.lid === target || (p.lid && getCleanNumber(p.lid) === targetClean));
+        if (byLid?.id && byLid.id.endsWith('@s.whatsapp.net')) return byLid.id;
+
+        const byPhone = participants.find(p => {
+            const pn = p.phoneNumber || p.phone_number;
+            return pn && (pn === target || getCleanNumber(pn) === targetClean);
+        });
+        if (byPhone?.id && byPhone.id.endsWith('@s.whatsapp.net')) return byPhone.id;
+    }
+
+    // 2. فحص مخزن Baileys الرسمي للـ LID
+    try {
+        if (conn?.signalRepository?.lidMapping?.getPNForLID && (target.endsWith('@lid') || targetClean.length > 13)) {
+            const pn = await conn.signalRepository.lidMapping.getPNForLID(target.endsWith('@lid') ? target : `${targetClean}@lid`);
+            if (pn && typeof pn === 'string') {
+                const pnClean = getCleanNumber(pn);
+                if (pnClean && pnClean.length >= 10 && pnClean.length <= 13) {
+                    return `${pnClean}@s.whatsapp.net`;
+                }
+            }
+        }
+    } catch (_) {}
+
+    // 3. فحص قاعدة البيانات المحلية lidMap
+    if (localDB?.lidMap?.[targetClean]) {
+        const mapped = String(localDB.lidMap[targetClean]).replace(/[^0-9]/g, '');
+        if (mapped && mapped.length >= 10 && mapped.length <= 13) {
+            return `${mapped}@s.whatsapp.net`;
+        }
+    }
+
+    // 4. إذا كان المعرف بالأساس رقم هاتف طبيعي (10 إلى 13 رقم)
+    if (target.endsWith('@s.whatsapp.net')) return target;
+    if (targetClean.length >= 10 && targetClean.length <= 13) {
+        return `${targetClean}@s.whatsapp.net`;
+    }
+
+    // 5. إذا كان LID ولم نجد له رقماً، نعيد المعرف كما هو بالـ LID
+    return target.endsWith('@lid') ? target : `${targetClean}@lid`;
+}
+
+/**
  * التحقق مما إذا كان المعرف أو الرقم مصرياً (+20 / 201...)
  */
 export function isEgyptianNumber(numOrJid) {
@@ -1154,21 +1207,40 @@ const datelsHandler = {
 
             // استخراج وتوثيق معرفات بديلة من رسالة بايلز مباشرة
             if (!mappedSender && (sender.endsWith('@lid') || cleanSenderNum.length > 13)) {
-                const altJids = [
-                    mek.key?.participantAlt,
-                    (!isGroup ? mek.key?.remoteJidAlt : null)
-                ];
-                for (const alt of altJids) {
-                    if (alt && typeof alt === 'string' && alt.endsWith('@s.whatsapp.net')) {
-                        const p = cleanPhoneNumber(getCleanNumber(alt));
-                        if (p && p.length >= 10 && p.length <= 13) {
-                            mappedSender = p;
-                            senderCleanPhone = p;
-                            if (!localDB.lidMap) localDB.lidMap = {};
-                            localDB.lidMap[cleanSenderNum] = p;
-                            localDB.lidMap[p] = cleanSenderNum;
-                            saveLocalDB(localDB);
-                            break;
+                try {
+                    if (currentConn?.signalRepository?.lidMapping?.getPNForLID) {
+                        const pn = await currentConn.signalRepository.lidMapping.getPNForLID(sender);
+                        if (pn) {
+                            const p = cleanPhoneNumber(getCleanNumber(pn));
+                            if (p && p.length >= 10 && p.length <= 13) {
+                                mappedSender = p;
+                                senderCleanPhone = p;
+                                if (!localDB.lidMap) localDB.lidMap = {};
+                                localDB.lidMap[cleanSenderNum] = p;
+                                localDB.lidMap[p] = cleanSenderNum;
+                                saveLocalDB(localDB);
+                            }
+                        }
+                    }
+                } catch (_) {}
+
+                if (!mappedSender) {
+                    const altJids = [
+                        mek.key?.participantAlt,
+                        (!isGroup ? mek.key?.remoteJidAlt : null)
+                    ];
+                    for (const alt of altJids) {
+                        if (alt && typeof alt === 'string' && alt.endsWith('@s.whatsapp.net')) {
+                            const p = cleanPhoneNumber(getCleanNumber(alt));
+                            if (p && p.length >= 10 && p.length <= 13) {
+                                mappedSender = p;
+                                senderCleanPhone = p;
+                                if (!localDB.lidMap) localDB.lidMap = {};
+                                localDB.lidMap[cleanSenderNum] = p;
+                                localDB.lidMap[p] = cleanSenderNum;
+                                saveLocalDB(localDB);
+                                break;
+                            }
                         }
                     }
                 }
@@ -2367,6 +2439,11 @@ const datelsHandler = {
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
+                    if (!isBotAdmin) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ البوت نفسه ليس مشرفاً (Admin) في هذه المجموعة! يجب ترقية البوت لمشرف أولاً ليتمكن من ترقية وتنزيل المشرفين. 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
@@ -2374,33 +2451,65 @@ const datelsHandler = {
                         return true;
                     }
                     let targetNum = getCleanNumber(target);
+                    const targetResolvedJid = await resolveGroupParticipantJid(currentConn, target, participants, localDB);
+                    const targetResolvedClean = getCleanNumber(targetResolvedJid || target);
+
                     const targetParticipant = participants.find(p => {
                         const pId = getCleanNumber(p.id);
                         const pLid = getCleanNumber(p.lid);
                         const pPhone = getCleanNumber(p.phoneNumber || p.phone_number);
-                        return (pId && pId === targetNum) || (pLid && pLid === targetNum) || (pPhone && pPhone === targetNum) || (target.endsWith('@s.whatsapp.net') && p.id === target) || (target.endsWith('@lid') && p.lid === target);
+                        return (pId && (pId === targetNum || pId === targetResolvedClean)) ||
+                               (pLid && (pLid === targetNum || pLid === targetResolvedClean)) ||
+                               (pPhone && (pPhone === targetNum || pPhone === targetResolvedClean));
                     });
 
                     const isTargetAdmin = targetParticipant 
                         ? (targetParticipant.admin === 'admin' || targetParticipant.admin === 'superadmin')
-                        : groupAdminsSet.has(targetNum);
+                        : (groupAdminsSet.has(targetNum) || (targetResolvedClean && groupAdminsSet.has(targetResolvedClean)));
 
                     if (isTargetAdmin) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} مشرف بالفعل في المجموعة! 🛡️`, mentions: [target] }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetResolvedClean || targetNum} مشرف بالفعل في المجموعة! 🛡️`, mentions: [targetResolvedJid || target] }, { quoted: mek });
                         return true;
                     }
                     await handleCommandTiming('👑');
-                    try {
-                        const targetJidToUpdate = (targetParticipant?.id && targetParticipant.id.endsWith('@s.whatsapp.net'))
-                            ? targetParticipant.id
-                            : (target.endsWith('@s.whatsapp.net') ? target : `${targetNum}@s.whatsapp.net`);
 
-                        await currentConn.groupParticipantsUpdate(from, [targetJidToUpdate], 'promote');
+                    const candidatesToPromote = [targetResolvedJid, target].filter(Boolean);
+                    const uniqueCandidates = [...new Set(candidatesToPromote)];
+                    let success = false;
+                    let lastErr = null;
+
+                    for (const cand of uniqueCandidates) {
+                        try {
+                            const res = await currentConn.groupParticipantsUpdate(from, [cand], 'promote');
+                            const st = res?.[0]?.status;
+                            if (st === '200' || st === 200) {
+                                success = true;
+                                break;
+                            } else if (st === '403' || st === 403) {
+                                lastErr = 'bot_not_admin';
+                                break;
+                            } else if (st === '406' || st === 406) {
+                                lastErr = 'already_admin';
+                                break;
+                            }
+                        } catch (e) {
+                            if (String(e).includes('not an admin') || String(e).includes('403')) {
+                                lastErr = 'bot_not_admin';
+                                break;
+                            }
+                        }
+                    }
+
+                    if (success) {
                         groupMetaCache.delete(from);
-                        await currentConn.sendMessage(from, { text: `👑 *تمت الترقية بنجاح!* \nتم رفع @${targetNum} مشرفاً في المجموعة. 🛡️`, mentions: [target] }, { quoted: mek });
-                    } catch (e) {
-                        await currentConn.sendMessage(from, { text: '❌ تعذر رفع المشرف. تأكد أن البوت مشرف ولديه الصلاحيات الكافية!' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `👑 *تمت الترقية بنجاح!* \nتم رفع @${targetResolvedClean || targetNum} مشرفاً في المجموعة. 🛡️`, mentions: [targetResolvedJid || target] }, { quoted: mek });
+                    } else if (lastErr === 'bot_not_admin') {
+                        await currentConn.sendMessage(from, { text: '❌ تعذر ترقية المشرف: البوت نفسه ليس لديه صلاحيات كافية كأدمن في المجموعة!' }, { quoted: mek });
+                    } else if (lastErr === 'already_admin') {
+                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetResolvedClean || targetNum} مشرف بالفعل في المجموعة! 🛡️`, mentions: [targetResolvedJid || target] }, { quoted: mek });
+                    } else {
+                        await currentConn.sendMessage(from, { text: '❌ تعذر رفع المشرف. تأكد أن العضو موجود في الجروب وأن البوت مشرف ولديه الصلاحيات الكافية!' }, { quoted: mek });
                     }
                     return true;
                 }
@@ -2412,6 +2521,11 @@ const datelsHandler = {
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
+                    if (!isBotAdmin) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ البوت نفسه ليس مشرفاً (Admin) في هذه المجموعة! يجب ترقية البوت لمشرف أولاً ليتمكن من تنزيل المشرفين. 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
@@ -2419,12 +2533,15 @@ const datelsHandler = {
                         return true;
                     }
                     let targetNum = getCleanNumber(target);
-                    if (targetNum === ownerPhone || targetNum === ownerLid || localDB.lidMap?.[targetNum] === ownerPhone) {
+                    const targetResolvedJid = await resolveGroupParticipantJid(currentConn, target, participants, localDB);
+                    const targetResolvedClean = getCleanNumber(targetResolvedJid || target);
+
+                    if (targetNum === ownerPhone || targetNum === ownerLid || targetResolvedClean === ownerPhone || localDB?.lidMap?.[targetNum] === ownerPhone) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ لا يمكنك تنزيل الحج شادو الأصلي صاحب البوت! 👑🛡️' }, { quoted: mek });
                         return true;
                     }
-                    if (targetNum === groupCreatorRaw) {
+                    if (targetNum === groupCreatorRaw || targetResolvedClean === groupCreatorRaw) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ لا يمكنك تنزيل منشئ المجموعة!' }, { quoted: mek });
                         return true;
@@ -2434,28 +2551,52 @@ const datelsHandler = {
                         const pId = getCleanNumber(p.id);
                         const pLid = getCleanNumber(p.lid);
                         const pPhone = getCleanNumber(p.phoneNumber || p.phone_number);
-                        return (pId && pId === targetNum) || (pLid && pLid === targetNum) || (pPhone && pPhone === targetNum) || (target.endsWith('@s.whatsapp.net') && p.id === target) || (target.endsWith('@lid') && p.lid === target);
+                        return (pId && (pId === targetNum || pId === targetResolvedClean)) ||
+                               (pLid && (pLid === targetNum || pLid === targetResolvedClean)) ||
+                               (pPhone && (pPhone === targetNum || pPhone === targetResolvedClean));
                     });
 
                     const isTargetAdmin = targetParticipant 
                         ? (targetParticipant.admin === 'admin' || targetParticipant.admin === 'superadmin')
-                        : groupAdminsSet.has(targetNum);
+                        : (groupAdminsSet.has(targetNum) || (targetResolvedClean && groupAdminsSet.has(targetResolvedClean)));
 
                     if (!isTargetAdmin) {
                         await handleCommandTiming('⚠️');
-                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetNum} ليس مشرفاً بالفعل في المجموعة! 📉`, mentions: [target] }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `⚠️ العضو @${targetResolvedClean || targetNum} ليس مشرفاً بالفعل في المجموعة! 📉`, mentions: [targetResolvedJid || target] }, { quoted: mek });
                         return true;
                     }
                     await handleCommandTiming('📉');
-                    try {
-                        const targetJidToUpdate = (targetParticipant?.id && targetParticipant.id.endsWith('@s.whatsapp.net'))
-                            ? targetParticipant.id
-                            : (target.endsWith('@s.whatsapp.net') ? target : `${targetNum}@s.whatsapp.net`);
 
-                        await currentConn.groupParticipantsUpdate(from, [targetJidToUpdate], 'demote');
+                    const candidatesToDemote = [targetResolvedJid, target].filter(Boolean);
+                    const uniqueCandidates = [...new Set(candidatesToDemote)];
+                    let success = false;
+                    let lastErr = null;
+
+                    for (const cand of uniqueCandidates) {
+                        try {
+                            const res = await currentConn.groupParticipantsUpdate(from, [cand], 'demote');
+                            const st = res?.[0]?.status;
+                            if (st === '200' || st === 200) {
+                                success = true;
+                                break;
+                            } else if (st === '403' || st === 403) {
+                                lastErr = 'bot_not_admin';
+                                break;
+                            }
+                        } catch (e) {
+                            if (String(e).includes('not an admin') || String(e).includes('403')) {
+                                lastErr = 'bot_not_admin';
+                                break;
+                            }
+                        }
+                    }
+
+                    if (success) {
                         groupMetaCache.delete(from);
-                        await currentConn.sendMessage(from, { text: `📉 *تم تنزيل الرتبة بنجاح!* \nتم سحب الإشراف من @${targetNum}.`, mentions: [target] }, { quoted: mek });
-                    } catch (e) {
+                        await currentConn.sendMessage(from, { text: `📉 *تم تنزيل الرتبة بنجاح!* \nتم سحب الإشراف من @${targetResolvedClean || targetNum}.`, mentions: [targetResolvedJid || target] }, { quoted: mek });
+                    } else if (lastErr === 'bot_not_admin') {
+                        await currentConn.sendMessage(from, { text: '❌ تعذر تنزيل المشرف: البوت نفسه ليس لديه صلاحيات كافية كأدمن في المجموعة!' }, { quoted: mek });
+                    } else {
                         await currentConn.sendMessage(from, { text: '❌ تعذر تنزيل المشرف. تأكد من صلاحيات البوت!' }, { quoted: mek });
                     }
                     return true;
@@ -2521,6 +2662,11 @@ const datelsHandler = {
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
                         return true;
                     }
+                    if (!isBotAdmin) {
+                        await handleCommandTiming('❌');
+                        await currentConn.sendMessage(from, { text: '❌ البوت نفسه ليس مشرفاً (Admin) في المجموعة ولا يمكنه طرد الأعضاء! 🛡️' }, { quoted: mek });
+                        return true;
+                    }
                     let target = extractTarget(mek, body);
                     if (!target) {
                         await handleCommandTiming('⚠️');
@@ -2528,30 +2674,38 @@ const datelsHandler = {
                         return true;
                     }
                     let targetNum = getCleanNumber(target);
+                    const targetResolvedJid = await resolveGroupParticipantJid(currentConn, target, participants, localDB);
+                    const targetResolvedClean = getCleanNumber(targetResolvedJid || target);
+
                     const subCfg = currentConn.subBotConfig || {};
-                    const isProtectedTarget = targetNum === ownerPhone || targetNum === ownerLid || (isGroupCreator && targetNum === groupCreatorRaw) || isUserInList(target, localDB.mainHajjUsers) || (Array.isArray(subCfg.subHajjUsers) && subCfg.subHajjUsers.includes(targetNum)) || (subCfg.adminPhone && targetNum === subCfg.adminPhone) || (Array.isArray(subCfg.adminNumbers) && subCfg.adminNumbers.includes(targetNum));
+                    const isProtectedTarget = targetNum === ownerPhone || targetNum === ownerLid || targetResolvedClean === ownerPhone || (isGroupCreator && (targetNum === groupCreatorRaw || targetResolvedClean === groupCreatorRaw)) || isUserInList(target, localDB.mainHajjUsers) || isUserInList(targetResolvedJid, localDB.mainHajjUsers) || (Array.isArray(subCfg.subHajjUsers) && (subCfg.subHajjUsers.includes(targetNum) || subCfg.subHajjUsers.includes(targetResolvedClean))) || (subCfg.adminPhone && (targetNum === subCfg.adminPhone || targetResolvedClean === subCfg.adminPhone)) || (Array.isArray(subCfg.adminNumbers) && (subCfg.adminNumbers.includes(targetNum) || subCfg.adminNumbers.includes(targetResolvedClean)));
                     if (isProtectedTarget) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ لا يمكن طرد الحج شادو أو منشئ المجموعة أو الحجاج المعتمدين!' }, { quoted: mek });
                         return true;
                     }
                     await handleCommandTiming('👋');
-                    try {
-                        const targetParticipant = participants.find(p => {
-                            const pId = getCleanNumber(p.id);
-                            const pLid = getCleanNumber(p.lid);
-                            const pPhone = getCleanNumber(p.phoneNumber || p.phone_number);
-                            return (pId && pId === targetNum) || (pLid && pLid === targetNum) || (pPhone && pPhone === targetNum) || (target.endsWith('@s.whatsapp.net') && p.id === target) || (target.endsWith('@lid') && p.lid === target);
-                        });
-                        const targetJidToUpdate = (targetParticipant?.id && targetParticipant.id.endsWith('@s.whatsapp.net'))
-                            ? targetParticipant.id
-                            : (target.endsWith('@s.whatsapp.net') ? target : `${targetNum}@s.whatsapp.net`);
 
-                        await currentConn.groupParticipantsUpdate(from, [targetJidToUpdate], 'remove');
+                    const candidatesToRemove = [targetResolvedJid, target].filter(Boolean);
+                    const uniqueCandidates = [...new Set(candidatesToRemove)];
+                    let success = false;
+
+                    for (const cand of uniqueCandidates) {
+                        try {
+                            const res = await currentConn.groupParticipantsUpdate(from, [cand], 'remove');
+                            const st = res?.[0]?.status;
+                            if (st === '200' || st === 200) {
+                                success = true;
+                                break;
+                            }
+                        } catch (e) {}
+                    }
+
+                    if (success) {
                         groupMetaCache.delete(from);
-                        await currentConn.sendMessage(from, { text: `👋 *تم الطرد بنجاح!* \nمع السلامة يا @${targetNum}، الجروب أنظف من غيرك. 🚪`, mentions: [target] }, { quoted: mek });
-                    } catch (e) {
-                        await currentConn.sendMessage(from, { text: '❌ تعذر طرد العضو. تأكد أن البوت مشرف بالجروب!' }, { quoted: mek });
+                        await currentConn.sendMessage(from, { text: `👋 *تم الطرد بنجاح!* \nمع السلامة يا @${targetResolvedClean || targetNum}، الجروب أنظف من غيرك. 🚪`, mentions: [targetResolvedJid || target] }, { quoted: mek });
+                    } else {
+                        await currentConn.sendMessage(from, { text: '❌ تعذر طرد العضو. تأكد أن البوت مشرف بالجروب ولديه الصلاحيات الكافية!' }, { quoted: mek });
                     }
                     return true;
                 }
