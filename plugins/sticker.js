@@ -161,6 +161,58 @@ export function convertVideoToWebp(vidBuffer) {
 }
 
 /**
+ * استخراج الصوت الأصلي من الفيديو بصيغة Ogg Opus (متوافقة مع البصمات الصوتية لواتساب)
+ */
+export function convertVideoToAudio(vidBuffer) {
+    return new Promise((resolve) => {
+        const randId = Math.random().toString(36).substring(2, 8);
+        const tmpInput = path.join(os.tmpdir(), `stk_aud_in_${Date.now()}_${randId}.mp4`);
+        const tmpOutput = path.join(os.tmpdir(), `stk_aud_out_${Date.now()}_${randId}.ogg`);
+
+        try {
+            fs.writeFileSync(tmpInput, vidBuffer);
+            const ff = spawn('ffmpeg', [
+                '-y',
+                '-threads', '1',
+                '-i', tmpInput,
+                '-t', '10',
+                '-vn',
+                '-c:a', 'libopus',
+                '-b:a', '48k',
+                '-ac', '1',
+                '-avoid_negative_ts', 'make_zero',
+                tmpOutput
+            ]);
+
+            ff.on('close', (code) => {
+                try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
+                if (code === 0 && fs.existsSync(tmpOutput)) {
+                    try {
+                        const outBuf = fs.readFileSync(tmpOutput);
+                        try { fs.unlinkSync(tmpOutput); } catch (_) {}
+                        if (outBuf && outBuf.length > 0) return resolve(outBuf);
+                    } catch (_) {}
+                }
+                try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
+                resolve(null);
+            });
+
+            ff.on('error', (err) => {
+                try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
+                try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
+                console.error('⚠️ FFmpeg error during video-to-audio:', err.message);
+                resolve(null);
+            });
+        } catch (e) {
+            try { if (fs.existsSync(tmpInput)) fs.unlinkSync(tmpInput); } catch (_) {}
+            try { if (fs.existsSync(tmpOutput)) fs.unlinkSync(tmpOutput); } catch (_) {}
+            console.error('⚠️ Exception during video-to-audio conversion:', e.message);
+            resolve(null);
+        }
+    });
+}
+
+/**
  * تنزيل ميديا من رسالة Baileys
  */
 async function downloadMedia(mediaMessage, type, targetMek = null, currentConn = null) {
@@ -209,7 +261,7 @@ async function extractMediaFromMessageOrQuoted(mek, currentConn = null) {
         const buf = await downloadMedia(msg.stickerMessage, 'sticker', mek, currentConn);
         if (buf && buf.length > 0) return { buffer: buf, type: 'sticker' };
     }
-    if (msg?.videoMessage && (msg.videoMessage.seconds || 0) <= 12) {
+    if (msg?.videoMessage && (!msg.videoMessage.seconds || msg.videoMessage.seconds <= 60)) {
         const buf = await downloadMedia(msg.videoMessage, 'video', mek, currentConn);
         if (buf && buf.length > 0) return { buffer: buf, type: 'video' };
     }
@@ -246,7 +298,7 @@ async function extractMediaFromMessageOrQuoted(mek, currentConn = null) {
             const buf = await downloadMedia(quoted.stickerMessage, 'sticker', quotedMek, currentConn);
             if (buf && buf.length > 0) return { buffer: buf, type: 'sticker' };
         }
-        if (quoted.videoMessage && (quoted.videoMessage.seconds || 0) <= 12) {
+        if (quoted.videoMessage && (!quoted.videoMessage.seconds || quoted.videoMessage.seconds <= 60)) {
             const buf = await downloadMedia(quoted.videoMessage, 'video', quotedMek, currentConn);
             if (buf && buf.length > 0) return { buffer: buf, type: 'video' };
         }
@@ -256,20 +308,115 @@ async function extractMediaFromMessageOrQuoted(mek, currentConn = null) {
 }
 
 /**
- * معالج أمر الاستيكر
+ * معالج أمر الاستيكر (العادي والاستيكر بالصوت)
  */
 export async function handleStickerCommand(mek, currentConn, rawBody) {
     try {
         const body = rawBody || '';
         const normalized = normalizeArabic(body.trim().toLowerCase());
 
-        // فحص هل النص يمثل أمر استيكر أو سرقة وتعديل حقوق
+        // فحص هل النص يمثل أمر استيكر صوت (الجديد)
+        const isSoundStickerCmd = /^(?:استيكر\s*صوت|استيكر\s*بالصوت|ستيكر\s*صوت|ستيكر\s*بالصوت|ملصق\s*صوت|ملصق\s*بالصوت|sound\s*sticker|sticker\s*sound)(\s|$)/i.test(normalized);
+
+        // فحص هل النص يمثل أمر استيكر عادي أو سرقة وتعديل حقوق
         const isStickerCmd = /^(?:استيكر|ستيكر|ملصق|sticker|s|سرق[هة]|اسرق|تعديل\s*(?:حقوق|حقيق)(?:\s*استيكر)?|استيكر\s*(?:حقوق|حقيق)|ستيكر\s*(?:حقوق|حقيق)|سرقة\s*استيكر|سرقة\s*الاستيكر|سرقه\s*استيكر|سرقه\s*الاستيكر)(\s|$)/i.test(normalized);
-        if (!isStickerCmd) return false;
+
+        if (!isSoundStickerCmd && !isStickerCmd) return false;
 
         const from = mek.key?.remoteJid || mek.chat;
         if (!from) return false;
 
+        // ══════════════════════════════════════════════════════════════════
+        // 🔊 [مسار أمر استيكر صوت - تحويل الفيديو إلى استيكر متحرك مع الصوت الأصلي]
+        // ══════════════════════════════════════════════════════════════════
+        if (isSoundStickerCmd) {
+            let customAuthor = null;
+            const matchSoundRights = body.match(/^(?:استيكر|ستيكر|ملصق)\s*(?:صوت|بالصوت)\s*(?:حقوق|حقيق|حقوقه|حقوقي|حقوقها)?\s*[:\-]?\s*(.+)$/i);
+            if (matchSoundRights && matchSoundRights[1]) {
+                const parsed = matchSoundRights[1].trim();
+                if (parsed && !/^(حقوق|حقوقه|حقوقي|صوت|بالصوت)$/i.test(parsed)) {
+                    customAuthor = parsed;
+                }
+            }
+            if (!customAuthor && normalized.includes('شادو')) {
+                customAuthor = 'شادو';
+            }
+
+            const packname = 'Shadow Bot';
+            const author = customAuthor ? customAuthor : 'Shadow Bot';
+
+            const mediaObj = await extractMediaFromMessageOrQuoted(mek, currentConn);
+
+            if (!mediaObj || !mediaObj.buffer) {
+                await delay(1500);
+                await currentConn.sendMessage(from, { react: { text: '💡', key: mek.key } }).catch(() => {});
+                await delay(1500);
+                const soundGuideMsg = `🔊 *طريقة عمل استيكر بصوت:* ✨\n\n` +
+                                     `1️⃣ ابعت مقطع فيديو قصير واكتب في الكابشن: *استيكر صوت* 🎥\n` +
+                                     `2️⃣ أو اعمل ريبلاي (رد) على أي فيديو واكتب: *استيكر صوت* 💬\n\n` +
+                                     `🏷️ *عايز تكتب اسمك في الحقوق تحت شادو بوت؟*\n` +
+                                     `اكتب: *استيكر صوت حقوق [اسمك]*\n` +
+                                     `💡 _مثال:_ *استيكر صوت حقوق شادو* 👑`;
+                await currentConn.sendMessage(from, { text: soundGuideMsg }, { quoted: mek });
+                return true;
+            }
+
+            if (mediaObj.type !== 'video') {
+                await delay(1000);
+                await currentConn.sendMessage(from, { react: { text: '⚠️', key: mek.key } }).catch(() => {});
+                await currentConn.sendMessage(from, { 
+                    text: `⚠️ *أمر استيكر صوت مخصص للفيديوهات فقط* لاستخراج الصوت منها.\n` +
+                          `💡 لتحويل الصورة أو الاستيكر العادي اكتب: *استيكر* 🖼️` 
+                }, { quoted: mek });
+                return true;
+            }
+
+            await delay(1500);
+            await currentConn.sendMessage(from, { react: { text: '⏳', key: mek.key } }).catch(() => {});
+
+            // تحويل الفيديو إلى استيكر متحرك واستخراج الصوت بالتوازي
+            const [webpBuf, audioBuf] = await Promise.all([
+                convertVideoToWebp(mediaObj.buffer),
+                convertVideoToAudio(mediaObj.buffer)
+            ]);
+
+            if (!webpBuf) {
+                await delay(1000);
+                await currentConn.sendMessage(from, { react: { text: '❌', key: mek.key } }).catch(() => {});
+                await currentConn.sendMessage(from, { text: '❌ فشل تحويل الفيديو إلى استيكر، تأكد من صحة الفيديو وحاول مرة أخرى.' }, { quoted: mek });
+                return true;
+            }
+
+            const stampedSticker = await addExif(webpBuf, packname, author);
+
+            await delay(1500);
+
+            // إرسال الستيكر
+            const sentStk = await currentConn.sendMessage(from, { sticker: stampedSticker }, { quoted: mek });
+
+            // إرسال الصوت الخاص بالفيديو مرفقاً بالستيكر فوراً
+            if (audioBuf && audioBuf.length > 0) {
+                await delay(1000);
+                await currentConn.sendMessage(from, { 
+                    audio: audioBuf, 
+                    mimetype: 'audio/ogg; codecs=opus', 
+                    ptt: true 
+                }, { quoted: sentStk || mek });
+            }
+
+            await currentConn.sendMessage(from, { react: { text: '✅', key: mek.key } }).catch(() => {});
+
+            if (mediaObj) mediaObj.buffer = null;
+            if (typeof global.gc === 'function') {
+                try { global.gc(); } catch (_) {}
+            }
+
+            return true;
+        }
+
+        // ══════════════════════════════════════════════════════════════════
+        // 📸 [مسار أمر الاستيكر العادي وتعديل وسرقة الحقوق]
+        // ══════════════════════════════════════════════════════════════════
         // استخراج حقوق مخصصة إن وُجدت
         let customAuthor = null;
         const matchRights = body.match(/^(?:استيكر|ستيكر|ملصق|sticker|s|سرق[هة]|اسرق|تعديل\s*(?:حقوق|حقيق)(?:\s*استيكر)?|سرقة\s*استيكر|سرقة\s*الاستيكر|سرقه\s*استيكر|سرقه\s*الاستيكر)\s*(?:حقوق|حقيق|حقوقه|حقوقي|حقوقها)?\s*[:\-]?\s*(.+)$/i);
@@ -297,6 +444,8 @@ export async function handleStickerCommand(mek, currentConn, rawBody) {
             const guideMsg = `📸 *طريقة تحويل صورة إلى استيكر:* ✨\n\n` +
                              `1️⃣ ابعت صورة واكتب في الوصف (الكابشن): *استيكر* 🖼️\n` +
                              `2️⃣ أو اعمل ريبلاي (رد) على أي صورة أو ستيكر واكتب: *استيكر* 💬\n\n` +
+                             `🔊 *عايز استيكر بالصوت من فيديو؟*\n` +
+                             `ابعت فيديو واكتب: *استيكر صوت* 🎥\n\n` +
                              `🏷️ *عايز تكتب اسمك في الحقوق تحت شادو بوت؟*\n` +
                              `اكتب: *استيكر حقوق [اسمك]*\n` +
                              `💡 _مثال:_ *استيكر حقوق أحمد* أو *ستيكر حقوق الملك شادو* 👑`;
