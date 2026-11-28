@@ -3481,7 +3481,7 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('اعطاء ') || normalizedBody.startsWith('اعطاء') ||
             normalizedBody.startsWith('زيد ') || normalizedBody.startsWith('زيد')
         ) {
-            const canGivePoints = isAbsoluteOwner || (currentConn.isSubBot && (isSubBotMainOwner || isSubBotHajj)) || (!currentConn.isSubBot && isMainHajj);
+            const canGivePoints = isAbsoluteOwner || (currentConn.isSubBot && (isSubBotMainOwner || isSubBotHajj));
             if (!canGivePoints) {
                 if (isRealGroup) return; // صامت في الجروب لعدم التضارب مع البوتات الأخرى
                 await respondWithStrictTiming('❌', async () => {
@@ -3583,7 +3583,7 @@ export async function handleAllMessages(mek, currentConn) {
             normalizedBody.startsWith('سحب ') || normalizedBody.startsWith('سحب') ||
             normalizedBody.startsWith('اخصم ') || normalizedBody.startsWith('اخصم')
         ) {
-            const canWithdrawPoints = isAbsoluteOwner || (currentConn.isSubBot && (isSubBotMainOwner || isSubBotHajj)) || (!currentConn.isSubBot && isMainHajj);
+            const canWithdrawPoints = isAbsoluteOwner || (currentConn.isSubBot && (isSubBotMainOwner || isSubBotHajj));
             if (!canWithdrawPoints) {
                 if (isRealGroup) return; // صامت في الجروب لعدم التضارب مع البوتات الأخرى
                 await respondWithStrictTiming('❌', async () => {

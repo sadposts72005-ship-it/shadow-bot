@@ -1404,7 +1404,7 @@ const datelsHandler = {
             let groupCreatorRaw = creatorMember ? getCleanNumber(creatorMember.id) : '';
 
             // أوامر الإشراف للمشرفين، مالك البوت، والحج الأساسي
-            const isActualRoomAdminOrOwner = isAbsoluteOwner || isMainHajj || isBotOwner || (cleanSenderNum === groupCreatorRaw) || isSenderAdmin;
+            const isActualRoomAdminOrOwner = isAbsoluteOwner || isMainHajj || isHajj || isBotOwner || (cleanSenderNum === groupCreatorRaw) || isSenderAdmin;
 
             // فحص أدمن التنبيه المعين في هذا الجروب
             const groupWarnGivers = localDB.warnGivers?.[from] || {};
@@ -2143,7 +2143,7 @@ const datelsHandler = {
             // =========================================================================
             if (isGroup) {
                 // قفل الجروب
-                if (/^(قفل|اقفل|غلق|قفل الجروب|اقفل الجروب|قفل الروم|اقفل الروم|غلق الجروب|غلق الروم)$/i.test(normalizedBody)) {
+                if (/^(قفل|اقفل|غلق)(?:\s+(?:الجروب|جروب|الروم|روم))?$/i.test(normalizedBody)) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -2166,7 +2166,7 @@ const datelsHandler = {
                 }
 
                 // فتح الجروب
-                if (/^(فتح|افتح|فتح الجروب|افتح الجروب|فتح الروم|افتح الروم)$/i.test(normalizedBody)) {
+                if (/^(فتح|افتح)(?:\s+(?:الجروب|جروب|الروم|روم))?$/i.test(normalizedBody)) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -2193,7 +2193,7 @@ const datelsHandler = {
                     : 'main_bot';
 
                 // تفعيل الترحيب
-                const isEnableWelcome = /^(?:\.|\/|!)?(?:تفعيل\s*الترحيب|تشغيل\s*الترحيب|تفعيل\s*ترحيب|تشغيل\s*ترحيب|فتح\s*الترحيب|فتح\s*ترحيب|تفعيل\s*ترحيبات|تشغيل\s*ترحيبات|فتح\s*ترحيبات|افتح\s*ترحيبات|افتح\s*الترحيب)$/i.test(normalizedBody);
+                const isEnableWelcome = /^(?:\.|\/|!)?(?:تفعيل|تشغيل|فتح|افتح)\s*(?:الترحيب|ترحيب|الترحيبات|ترحيبات)$/i.test(normalizedBody);
                 if (isEnableWelcome) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
@@ -2219,7 +2219,7 @@ const datelsHandler = {
                 }
 
                 // إلغاء / قفل الترحيب
-                const isDisableWelcome = /^(?:\.|\/|!)?(?:الغاء\s*الترحيب|إلغاء\s*الترحيب|القاء\s*الترحيب|ايقاف\s*الترحيب|إيقاف\s*الترحيب|تعطيل\s*الترحيب|قفل\s*الترحيب|تعطيل\s*ترحيب|قفل\s*ترحيب|قفل\s*ترحيبات|اقفل\s*ترحيبات|ايقاف\s*ترحيبات|إيقاف\s*ترحيبات|تعطيل\s*ترحيبات)$/i.test(normalizedBody);
+                const isDisableWelcome = /^(?:\.|\/|!)?(?:الغاء|إلغاء|القاء|ايقاف|إيقاف|تعطيل|قفل|اقفل|وقف)\s*(?:الترحيب|ترحيب|الترحيبات|ترحيبات)$/i.test(normalizedBody);
                 if (isDisableWelcome) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
@@ -2243,7 +2243,7 @@ const datelsHandler = {
                 }
 
                 // 🕌 تشغيل الأذكار والأذان (تشغيل مسلم)
-                const isEnableMuslim = /^(?:\.|\/|!)?(?:تشغيل\s*مسلم|تفعيل\s*مسلم|فتح\s*مسلم|افتح\s*مسلم|تشغيلو|تشغيله|تشغيل\s*الاذان|تفعيل\s*الاذان|تشغيل\s*الأذان|تفعيل\s*الأذان|فتح\s*الاذان|فتح\s*الأذان|افتح\s*الاذان|افتح\s*الأذان|تشغيل\s*الاذكار|تفعيل\s*الاذكار|فتح\s*الاذكار|افتح\s*الاذكار)$/i.test(normalizedBody);
+                const isEnableMuslim = /^(?:\.|\/|!)?(?:(?:تشغيل|تفعيل|فتح|افتح)\s*(?:مسلم|المسلم|الاذان|الأذان|الاذكار|الأذكار|اذان|اذكار)|تشغيلو|تشغيله|تشغيله\s*مسلم)$/i.test(normalizedBody);
                 if (isEnableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
@@ -2269,7 +2269,7 @@ const datelsHandler = {
                 }
 
                 // 🛑 إيقاف الأذكار والأذان (وقف مسلم / قفل الاذان / قفل الاذكار)
-                const isDisableMuslim = /^(?:\.|\/|!)?(?:وقف\s*مسلم|وقفو|وقفه|قفل\s*مسلم|اقفل\s*مسلم|تعطيل\s*مسلم|ايقاف\s*مسلم|إيقاف\s*مسلم|الغاء\s*مسلم|إلغاء\s*مسلم|وقف\s*الاذان|تعطيل\s*الاذان|ايقاف\s*الاذان|إيقاف\s*الاذان|قفل\s*الاذان|اقفل\s*الاذان|وقف\s*الأذان|تعطيل\s*الأذان|ايقاف\s*الأذان|إيقاف\s*الأذان|قفل\s*الأذان|اقفل\s*الأذان|قفل\s*الاذكار|اقفل\s*الاذكار|تعطيل\s*الاذكار|ايقاف\s*الاذكار|إيقاف\s*الاذكار)$/i.test(normalizedBody);
+                const isDisableMuslim = /^(?:\.|\/|!)?(?:(?:وقف|وقفو|وقفه|قفل|اقفل|تعطيل|ايقاف|إيقاف|الغاء|إلغاء)\s*(?:مسلم|المسلم|الاذان|الأذان|الاذكار|الأذكار|اذان|اذكار)?)$/i.test(normalizedBody) && (normalizedBody.includes('مسلم') || normalizedBody.includes('اذان') || normalizedBody.includes('اذكار') || normalizedBody === 'وقفو' || normalizedBody === 'وقفه');
                 if (isDisableMuslim) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
@@ -2293,7 +2293,7 @@ const datelsHandler = {
                 }
 
                 // قفل وقتي وفتح وقتي
-                if (normalizedBody.startsWith('قفل وقتي') || normalizedBody.startsWith('فتح وقتي')) {
+                if (/^(?:قفل|فتح|تشغيل|تشغيله|تشغيلو)\s*(?:وقتي|الوقتي)/i.test(normalizedBody)) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -2316,7 +2316,7 @@ const datelsHandler = {
                     if (!localDB.timedGroupControls[from]) localDB.timedGroupControls[from] = { closeTime: null, openTime: null };
 
                     await handleCommandTiming('⏱️');
-                    if (normalizedBody.startsWith('قفل وقتي')) {
+                    if (normalizedBody.startsWith('قفل')) {
                         localDB.timedGroupControls[from].closeTime = inputtedTime;
                         saveLocalDB(localDB);
                         await currentConn.sendMessage(from, { text: `⏱️ *تمت الجدولة بنجاح!* \n🔒 شادو هيقفل الجروب تلقائياً الساعة *${inputtedTime === '00:00' ? '12:00 منتصف الليل' : inputtedTime}* بتوقيت مصر.` }, { quoted: mek });
@@ -2329,7 +2329,7 @@ const datelsHandler = {
                 }
 
                 // المواعيد الوقتية
-                if (normalizedBody === 'المواعيد الوقتية' || normalizedBody === 'المواعيد الوقتيه') {
+                if (/^(?:\.|\/)?(?:المواعيد|مواعيد|الموعيد|موعيد)\s*(?:الوقتية|الوقتيه|وقتية|وقتيه)$/i.test(normalizedBody)) {
                     const config = localDB.timedGroupControls?.[from];
                     await handleCommandTiming('📋');
                     if (!config || (!config.closeTime && !config.openTime)) {
@@ -2345,7 +2345,7 @@ const datelsHandler = {
                 }
 
                 // إلغاء المواعيد الوقتية
-                if (normalizedBody === 'الغاء المواعيد الوقتية' || normalizedBody === 'الغاء المواعيد الوقتيه') {
+                if (/^(?:\.|\/)?(?:الغاء|إلغاء|حذف|مسح|تعطيل|وقف|ايقاف|إيقاف)\s*(?:المواعيد|مواعيد|الموعيد|موعيد)?\s*(?:الوقتية|الوقتيه|وقتية|وقتيه)$/i.test(normalizedBody)) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -3062,7 +3062,8 @@ const datelsHandler = {
                 }
 
                 // قبول طلبات الانضمام العامة
-                if (!isEgyptianJoinCmd && normalizedBody.startsWith('اقبل طلبات')) {
+                const isGeneralJoinCmd = !isEgyptianJoinCmd && /^(?:\.|\/)?(اقبل|قبول)\s*(?:الطلبات|طلبات)(?:\s|$|\d)/i.test(normalizedBody);
+                if (isGeneralJoinCmd) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -3109,7 +3110,8 @@ const datelsHandler = {
                 }
 
                 // إيقاف قبول الطلبات
-                if (normalizedBody === 'وقف طلبات' || normalizedBody === 'وقف الطلبات') {
+                const isStopJoinCmd = /^(?:\.|\/)?(وقف|ايقاف|إيقاف|الغاء|إلغاء)\s*(?:الطلبات|طلبات)$/i.test(normalizedBody);
+                if (isStopJoinCmd) {
                     if (!isActualRoomAdminOrOwner) {
                         await handleCommandTiming('❌');
                         await currentConn.sendMessage(from, { text: '❌ هذا الأمر مخصص لمشرفين الجروب وللحج فقط! 🛡️' }, { quoted: mek });
@@ -3451,8 +3453,7 @@ const datelsHandler = {
 
             // حظر مستخدم
             if (normalizedBody.startsWith('حظر مستخدم') || normalizedBody.startsWith('حظر عضو')) {
-                const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
-                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotAdminUser) || (!currentConn?.isSubBot && isMainHajj);
+                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotOwner);
                 if (!canBan) {
                     if (isGroup) return true;
                     await handleCommandTiming('❌');
@@ -3540,8 +3541,7 @@ const datelsHandler = {
 
             // فك حظر مستخدم
             if (normalizedBody.startsWith('فك حظر مستخدم') || normalizedBody.startsWith('فك حظر عضو') || normalizedBody.startsWith('فك حظر')) {
-                const isSubBotAdminUser = currentConn?.isSubBot && (mek.isSubBotMainOwner || mek.isSubBotAdmin || isSubBotOwner);
-                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotAdminUser) || (!currentConn?.isSubBot && isMainHajj);
+                const canBan = isAbsoluteOwner || (currentConn?.isSubBot && isSubBotOwner);
                 if (!canBan) {
                     if (isGroup) return true;
                     await handleCommandTiming('❌');
